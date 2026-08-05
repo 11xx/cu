@@ -91,9 +91,17 @@ rather than a misdirected click.
 
 A hybrid, split along the line where each mechanism is exact.
 
-**Pointer position via Hyprland IPC.** `hl.dsp.cursor.move(x, y)` is a verified
-absolute warp in logical coordinates, taking floats. It needs no calibration
-and no knowledge of output layout — Hyprland already owns that mapping.
+**Pointer position via Hyprland IPC.** `hl.dispatch(hl.dsp.cursor.move({x=…,
+y=…}))` is an absolute warp in logical coordinates, taking floats. It needs no
+calibration and no knowledge of output layout — Hyprland already owns that
+mapping.
+
+The exact call shape matters more than usual here, because four plausible
+variants of it *silently do nothing while reporting success*
+([environment.md](environment.md)). That is the failure mode this project is
+built to eliminate, appearing in its own foundations, and it is why the wrapper
+belongs in `cu` rather than in prompt guidance: a caller gets one spelling that
+works, not five that look identical at the call site.
 
 The alternative, a uinput absolute-axis pointer, would require mapping a device
 axis range onto a multi-output desktop with unequal scales. That mapping is
@@ -235,16 +243,21 @@ and keycode paths share.
 
 ## Testing without touching the user's screen
 
-`hyprctl output` can add and remove fake outputs. If it can create a headless
-output in the running session, the entire test suite can drive real
-applications on a monitor that does not physically exist — real compositor,
-real input path, real capture, zero disruption. That would be a materially
-better safety story than any amount of care taken while driving live outputs.
+**Verified.** `hyprctl output create headless` adds a real output the
+compositor treats like any other; applications launch onto it, `grim -o`
+captures rendered content from it, and removing it restores the session
+byte-identically. Details and measurements in
+[environment.md](environment.md).
 
-This is not yet verified. The probe is to add a headless output, confirm it
-appears in `hyprctl monitors -j` with the expected geometry, place a window on
-it, capture it with `grim -o`, and remove it. It runs before any test harness
-is built on the assumption.
+So the test suite drives real applications on a monitor that does not
+physically exist — real compositor, real input path, real capture, and no
+possibility of stealing focus or clicking something on a screen the user is
+looking at. That is a better safety story than any amount of care taken while
+driving live outputs, and it makes the input stage developable at all.
+
+It also lands at scale 2.00, a third distinct scale alongside the host's 1.0
+and 1.25, so coordinate math gets exercised against a case neither real output
+covers.
 
 ## Browser control
 
@@ -499,8 +512,8 @@ Each stage is independently useful, and each is a precondition for the next.
 5. **Browser and recipes** — the largest module, and the one still gated on the
    fingerprint probe.
 
-The headless-output probe belongs before stage 4, since it decides whether
-input can be developed against a screen the user is not using.
+The headless-output probe that gated stage 4 is done, and passed — input is
+developable against a screen the user is not sitting in front of.
 
 ## Open questions
 
@@ -510,8 +523,19 @@ input can be developed against a screen the user is not using.
 2. **AT-SPI coordinate space.** Whether the accessibility tree reports usable
    coordinates under Wayland with mixed output scales decides whether tier 2 is
    the backbone of the read path or a footnote.
-3. **Nested-compositor testing.** Worth also supporting a nested Hyprland
-   instance as a test target, or is a headless fake output sufficient once the
-   probe above confirms it?
-4. **Abort keybind.** Which key should the deadman switch be bound to, given
-   your existing Hyprland bindings?
+3. **Abort keybind.** Which key should the deadman switch be bound to, given
+   an already-crowded keymap?
+
+## Shelved: a Hyprland plugin
+
+A native plugin could expose exactly the primitives this needs — precise input
+injection, geometry, and event hooks — without shelling out to `hyprctl` per
+call, and without the silent-failure surface the Lua dispatchers turned out to
+have.
+
+It stays shelved deliberately. A plugin is compiled against Hyprland's internal
+ABI and breaks on compositor updates, which is a standing maintenance cost that
+the current approach does not carry. The standard routes are not exhausted yet,
+and the measured per-invocation costs are comfortable. Revisit if injection
+latency becomes the bottleneck, or if a needed primitive turns out to have no
+IPC equivalent at all.

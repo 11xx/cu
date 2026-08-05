@@ -39,9 +39,15 @@ def compositor() -> dict[str, Any]:
 
 
 def lua_api() -> dict[str, Any]:
-    """Hyprland 0.56 moved dispatchers to Lua; the old string form is a parse error."""
+    """Hyprland 0.56 moved dispatchers to Lua; the old string form is a parse error.
+
+    Both halves are checked because `hl.dsp.*` only builds a dispatcher — it is
+    `hl.dispatch` that runs it, and a missing executor would leave every action
+    silently doing nothing.
+    """
+    probe = 'return type(hl.dispatch) .. "," .. type(hl.dsp.cursor.move)'
     try:
-        kind = hypr.lua("return type(hl.dsp.cursor.move)")
+        kinds = hypr.lua(probe)
     except hypr.HyprError as exc:
         return _check(
             "lua_api",
@@ -49,14 +55,14 @@ def lua_api() -> dict[str, Any]:
             f"hyprctl repl unusable: {exc}",
             "Requires Hyprland 0.56+ with the Lua API.",
         )
-    if kind != "function":
+    if kinds != "function,function":
         return _check(
             "lua_api",
             FAIL,
-            f"hl.dsp.cursor.move is {kind!r}, expected function",
+            f"expected hl.dispatch and hl.dsp.cursor.move to be functions, got {kinds!r}",
             "The compositor API changed shape; cu needs updating.",
         )
-    return _check("lua_api", OK, "hl.dsp.cursor.move present")
+    return _check("lua_api", OK, "hl.dispatch and hl.dsp.cursor.move present")
 
 
 def event_socket() -> dict[str, Any]:

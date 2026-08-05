@@ -26,7 +26,8 @@ The interfaces this project uses:
 
 | Call | Semantics |
 | --- | --- |
-| `hl.dsp.cursor.move(x, y)` | Absolute warp, global logical coordinates, accepts floats |
+| `hl.dsp.*` | **Constructs** a dispatcher object; does not perform anything |
+| `hl.dispatch(<dispatcher>)` | Executes one |
 | `hl.get_cursor_pos()` | Returns `{x, y}` as floats in global logical coordinates |
 | `hl.get_windows()`, `hl.get_monitors()` | Structured introspection; return userdata, not plain tables |
 | `hl.dsp.send_key_state`, `hl.dsp.send_shortcut` | Keybind-oriented key injection |
@@ -34,13 +35,32 @@ The interfaces this project uses:
 Reach them with `hyprctl repl '<lua>'` (or `hyprctl eval`). Enumerate any
 namespace with `hyprctl repl 'for k,v in pairs(hl.dsp) do ... end'`.
 
-`hl.dsp.cursor.move` is **absolute**. Calling it with the cursor's own current
-position leaves the cursor where it is; a relative implementation would have
-doubled the coordinate:
+### Cursor movement, and how easily it looks like it works
 
+The working form takes a **table**, and must be dispatched:
+
+```lua
+hl.dispatch(hl.dsp.cursor.move({x = 900, y = 500}))
 ```
-before=(3057.2,863.8) ok=true err=nil after=(3057.2,863.8)
-```
+
+Every plausible variant fails *silently* — `pcall` reports success, no error is
+raised, and the cursor does not move:
+
+| Call | Result |
+| --- | --- |
+| `hl.dsp.cursor.move({x=900,y=500})` without `hl.dispatch` | constructs and discards a dispatcher |
+| `hl.dispatch(hl.dsp.cursor.move(900, 500))` | positional numbers ignored |
+| `hl.dispatch(hl.dsp.cursor.move("900 500"))` | old string form ignored |
+| `hl.dispatch(hl.dsp.cursor.move("exact 900 500"))` | ignored |
+
+So a probe must move the cursor to a coordinate it is **not already at**.
+Verifying with the cursor's own current position cannot distinguish a working
+call from a no-op, and will report success for all five forms above.
+
+Measured with the correct form: movement is absolute (`move(700,400)` twice is
+idempotent), crosses output boundaries into the neighbouring monitor's logical
+range, and preserves fractional coordinates exactly — `move(1234.5, 678.25)`
+reads back as `(1234.50, 678.25)`.
 
 The event stream lives at
 `$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock`. It is a
@@ -132,6 +152,28 @@ Present: `hyprctl`, `grim`, `slurp`, `wl-copy`/`wl-paste`, `hyprpicker`, `wev`,
 
 Absent: `wtype`, `ydotool`, `dotool`, `xdotool` — no input-injection tool is
 installed, which the direct `/dev/uinput` path makes unnecessary.
+
+## Headless outputs work, and are the safe test target
+
+`hyprctl output create headless` adds a real output the compositor treats like
+any other, and `hyprctl output remove HEADLESS-1` takes it away. Measured
+end to end:
+
+- It appears as `HEADLESS-1` at 1920x1080, **scale 2.00**, placed to the right
+  of the real outputs at logical x=4608, on its own workspace.
+- Existing outputs keep their geometry, scale, and active workspace exactly.
+- A window launched with `[workspace 11 silent]` lands on it and reports
+  logical geometry inside its 960x540 logical bounds.
+- `grim -o HEADLESS-1` captures 1920x1080 of real rendered content, and a
+  region crop of the window's logical 954x534 yields 1908x1068 physical —
+  the scale-2.0 case of the region rule above.
+- After removal, `hyprctl monitors` and `hyprctl workspaces` match their
+  pre-probe snapshots byte for byte.
+
+So the input and capture paths can be developed against a screen that does not
+physically exist, on the live compositor, without touching the user's displays.
+The scale of 2.00 is a bonus: it is a third distinct scale, so a test suite
+running there exercises coordinate math that 1.0 and 1.25 alone would not.
 
 ## Browsers
 
