@@ -401,18 +401,106 @@ which makes them a security boundary rather than a cache. They are reviewable
 before first replay, stored with a content hash, and re-reviewed when that hash
 changes. A stored recipe must never be able to change silently.
 
+## Command surface
+
+The whole contract, in one place. Everything takes `--json` and `--dry-run`.
+
+| Command | Purpose | Creates a uinput device |
+| --- | --- | --- |
+| `cu doctor` | Verify every precondition in [environment.md](environment.md) | no |
+| `cu observe` | Monitors, windows, workspaces, focus, cursor | no |
+| `cu shot` | Capture; writes a PNG and a frame descriptor | no |
+| `cu wait` | Block on a Hyprland event (`openwindow`, focus change, title match) | no |
+| `cu move` | Warp the pointer to a frame coordinate | no |
+| `cu click` | Warp, assert focus, press/release | yes |
+| `cu scroll` | Wheel events at a frame coordinate | yes |
+| `cu type` | Text entry, clipboard by default | yes |
+| `cu key` | A semantic action, or a literal chord | yes |
+| `cu browser` | Semantic browser actions, resolved per browser | yes |
+| `cu recipe` | Save, list, review, and replay a stored procedure | via replay |
+
+`observe`, `shot`, and `wait` never touch the input path at all, which is what
+makes the read-heavy loop cheap and safe.
+
+### Measured cost per invocation
+
+| Stage | Cost | Notes |
+| --- | --- | --- |
+| `uv` + interpreter start | ~28 ms | Warm cache; paid by every subcommand |
+| uinput device construction | ~100 ms | Input subcommands only |
+| Compositor enumeration | ~6 ms | Hyprland sees a new device quickly |
+| Device teardown | ~6 ms | |
+
+So a read command costs about 30 ms plus whatever `hyprctl` or `grim` takes,
+and an input command about 135 ms. That is comfortable enough that **the
+daemonless design holds** — the earlier worry that per-invocation device
+creation would force a resident process does not survive measurement.
+
+Two consequences do follow. **Batching matters**: `cu type` of a long string
+pays the ~100 ms once, whereas fifty separate `cu key` calls pay it fifty
+times, so composite operations belong inside one invocation. And the ~100 ms is
+not the kernel or the compositor — both are single-digit milliseconds — so it
+is likely a settle delay inside the input library. Worth one look during
+implementation, since removing it would cut input latency by three quarters.
+
+## Seams to resolve before building
+
+The design fixes the architecture but leaves four mechanisms unspecified. Each
+is small, and each is load-bearing enough that guessing it during
+implementation would be a rewrite.
+
+**The frame store.** `--frame f3` is state that outlives a process, and there
+is no daemon to hold it. So frames live on disk under
+`$XDG_RUNTIME_DIR/cu/frames/` — tmpfs, `0700`, cleared on reboot, which suits
+data that is worthless once the screen has changed. Still to fix: how ids are
+allocated, the staleness threshold past which a frame is refused, and when old
+frames are collected.
+
+**The exit-code taxonomy.** "Stable exit codes" is promised but never
+enumerated, and the agent's behaviour depends entirely on which refusal it got.
+A stale frame means *re-capture and retry*. A focus change means *re-establish
+context*. The user's abort means **stop, and do not retry** — an agent that
+treats that as transient defeats the safety mechanism. These must be distinct
+codes with distinct documented responses.
+
+**Configuration.** The denylist, provider profiles, browser registry, and
+keymap resolution are all described as data but have no schema or location yet.
+`$XDG_CONFIG_HOME/cu/` with defaults shipped and user overrides merged.
+
+**The abort mechanism.** The design specifies a lockfile the agent cannot
+clear, but not its path or the keybind that drops it. It needs a Hyprland
+binding chosen against an already-crowded keymap.
+
 ## Implementation
 
-Python with PEP 723 inline dependencies, run through `uv`. `uinput` is struct
-packing into a file descriptor and capture is subprocess orchestration; neither
-argues for a compiled language, and the per-action budget is dominated by
-compositor round-trips rather than our own work. `uv` is already installed, so
-there is nothing to build and nothing to install.
+Python with PEP 723 inline dependencies, run through `uv` — the measurements
+above were taken that way, so the approach is exercised rather than assumed.
+`uinput` is struct packing into a file descriptor and capture is subprocess
+orchestration; neither argues for a compiled language, and per-invocation
+overhead is ~28 ms.
 
 The tradeoff is honest: a Rust `cu` would be a single distributable artifact,
 which matters if this is ever shared. Python is a reversible choice for now
 because the CLI contract, not the language, is what the harness layer depends
 on.
+
+### Build order
+
+Each stage is independently useful, and each is a precondition for the next.
+
+1. **`doctor`** — encodes the environment checks and fails loudly when a
+   precondition drifts. Nothing else is trustworthy without it.
+2. **`observe`** — pure reads, no risk, and immediately useful to an agent on
+   its own.
+3. **`shot` plus the frame store** — establishes the contract everything else
+   references. Worth getting exactly right before anything consumes it.
+4. **Input** — `move`, `click`, `type`, `key`, with the safety interlocks
+   landing *with* the first injection rather than after it.
+5. **Browser and recipes** — the largest module, and the one still gated on the
+   fingerprint probe.
+
+The headless-output probe belongs before stage 4, since it decides whether
+input can be developed against a screen the user is not using.
 
 ## Open questions
 
