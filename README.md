@@ -10,16 +10,24 @@ initial consumers; nothing in the interface is specific to either.
 ## Usage
 
 ```sh
-bin/cu doctor     # verify every environment precondition
-bin/cu observe    # monitors, windows, focus, cursor
+bin/cu doctor                        # verify every environment precondition
+bin/cu observe                       # monitors, windows, focus, cursor
+bin/cu shot                          # capture the focused window
+bin/cu shot --output DP-2            # a whole monitor
+bin/cu shot --region '100,100 400x200'
+bin/cu shot --if-changed             # reuse the last frame if nothing moved
 ```
 
-Both accept `--json`. `bin/cu` is a plain command — it resolves `uv` itself, so
+All accept `--json`. `bin/cu` is a plain command — it resolves `uv` itself, so
 a caller needs no knowledge of the Python underneath.
+
+`shot` writes a PNG plus a **frame descriptor** recording the logical rectangle
+the image depicts and its pixel size. Later commands take coordinates as
+`--frame <id> --at x,y` in image pixels, and `cu` maps them back to the screen.
 
 ## Status
 
-`doctor` and `observe` are implemented. Capture, input, browser control, and
+`doctor`, `observe`, and `shot` are implemented. Input, browser control, and
 recipes are designed but not built — see [docs/design.md](docs/design.md) for
 the command surface and build order, and
 [docs/environment.md](docs/environment.md) for the verified host facts the

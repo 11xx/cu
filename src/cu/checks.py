@@ -154,7 +154,6 @@ def binaries() -> list[dict[str, Any]]:
     optional = {
         "wl-copy": "`cu type` falls back to keycode synthesis.",
         "wl-paste": "Clipboard restore after `cu type` is unavailable.",
-        "magick": "Captures cannot be downscaled to a token budget.",
         "slurp": "Interactive region selection is unavailable.",
     }
     out = []
