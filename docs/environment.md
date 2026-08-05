@@ -103,6 +103,27 @@ upscaled to 3200x1800 — 10.4 megapixels that carry less detail than the two
 native captures totalling 7.4. Per-output capture is therefore the primitive,
 and whole-desktop capture is never used.
 
+### Region capture speaks logical coordinates
+
+`grim -g "<x>,<y> <w>x<h>"` takes the same logical coordinates Hyprland reports
+and accepts, which makes a window's reported geometry directly usable as a
+capture argument. The resulting *pixel* dimensions are the logical size times
+the scale of the output the region lands on:
+
+| Region | Lands on | Output |
+| --- | --- | --- |
+| `0,0 100x100` | DP-2, scale 1.25 | 125x125 |
+| `2100,100 100x100` | DP-1, scale 1.00 | 100x100 |
+| `2000,100 200x100` | spans both | 250x125 |
+
+The spanning case follows the whole-desktop rule: it composites at the largest
+scale of the outputs it touches, so the DP-1 portion is upscaled. A region is
+therefore always clamped to a single output.
+
+Because pixel dimensions vary by output, they are read from the captured file
+rather than computed — which is what keeps the frame transform correct without
+the caller tracking scales.
+
 ## Available tooling
 
 Present: `hyprctl`, `grim`, `slurp`, `wl-copy`/`wl-paste`, `hyprpicker`, `wev`,

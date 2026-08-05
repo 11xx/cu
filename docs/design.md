@@ -148,6 +148,7 @@ budgeted rather than literal:
 
 - `cu shot --window active` crops to one window. Usually the right default:
   fewer tokens *and* more detail per token than a full output.
+- `cu shot --region <x>,<y> <w>x<h>` captures an arbitrary strip.
 - `cu shot --output DP-2` for a whole monitor.
 - `--for claude|openai|generic` selects a provider profile that sets the
   downscale target and format.
@@ -165,6 +166,38 @@ arithmetic about them.
 Frames are written to disk and the path is printed with the descriptor. Both
 Claude Code and Codex read image files natively, which makes the filesystem the
 provider-agnostic image channel — `cu` never talks to a model API.
+
+### Aimed capture, and its failure mode
+
+`grim -g` takes logical coordinates — the same space as `logical_rect` — so a
+frame's rect *is* its capture argument, with no conversion between requesting a
+region and describing it. An agent that knows where to look can capture a
+status bar or a single dialog line for a few dozen tokens instead of a few
+thousand, and read it at full resolution rather than downscaled.
+
+The precondition is knowing where to look, and that is what `observe` supplies:
+regions are derived from live window geometry at capture time, not from the
+model's recollection of where something was a few turns ago. A window that
+moved yields a correctly-aimed strip rather than a confidently wrong one.
+
+The failure mode is real, though, and it is worse than a wasted screenshot: a
+narrow crop aimed at the wrong place returns a perfectly sharp image of
+something irrelevant, and nothing in the picture says so. Wide captures fail
+loudly — you see the wrong screen. Narrow ones fail quietly. Three things keep
+that in check:
+
+- **Frames are self-describing.** The descriptor states which window and which
+  rectangle the image depicts, so a 200x40 strip arrives labelled as a strip of
+  a named window rather than as "the screen".
+- **Widening is the cheap move.** `--window` then `--output` are always
+  available, and the guidance for the harness layer is to widen on the first
+  surprise rather than re-aim repeatedly. Two aimed captures that disagree with
+  expectation cost more than one full-output capture.
+- **`cu` refuses degenerate aims** — regions spanning outputs (which upscale),
+  and regions falling outside any window's current geometry.
+
+Aimed capture is an optimization over a working default, not the default
+itself. `--window active` stays the recommended first call.
 
 ## Safety
 
