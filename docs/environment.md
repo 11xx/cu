@@ -143,19 +143,84 @@ Six, across both engine families:
 | Firefox | Gecko | wrapper on `PATH` | — |
 | Floorp | Gecko | `/usr/bin/floorp` | — |
 | Thorium | Chromium | `/usr/bin/thorium-browser` | — |
-| Helium | Chromium | `/opt/helium-browser-bin/helium` | `helium` |
+| Helium | Chromium | `helium-browser` → `/opt/helium-browser-bin/helium-wrapper` | `helium` |
 | Vivaldi | Chromium | `/usr/bin/vivaldi` | — |
 
 Window classes are recorded as they are observed; `zen` and `helium` are
 confirmed from `hyprctl clients -j` with both running as native Wayland clients
 (`xwayland: false`).
 
-**Executables are not reliably on `PATH`.** Helium has no `PATH` entry at all —
-it is discoverable only through `/usr/share/applications/helium.desktop`. A
-`command -v` sweep therefore under-reports what is installed, and browser
-discovery must read desktop entries as well as `PATH`.
+**Binary names do not follow the product name.** Helium is on `PATH` as
+`helium-browser`, not `helium`; Thorium likewise. Probing a guessed name and
+reading absence as "not installed" is how a browser goes missing from an
+inventory. Discovery reads the `Exec=` line of desktop entries, which is
+authoritative, and treats `PATH` name-matching as a hint only.
 
 Both running browsers were launched with no remote-debugging or automation
 flags, which is the normal case and the one the design has to accommodate.
 
-No `playwright`, `geckodriver`, or `chromedriver` is installed.
+No `playwright`, `geckodriver`, or `chromedriver` is installed. Chromium's
+bundled `chromedriver` ships inside `/opt/helium-browser-bin/`.
+
+## The keyboard is a three-stage pipeline, not a constant
+
+This desktop rebinds keys twice before an application sees them, so no default
+shortcut can be assumed.
+
+**Stage 1 — xremap.** `~/.config/xremap/browser-emacs.yaml` applies an
+Emacs-style editing layer, scoped by window class to browsers and two other
+applications:
+
+```yaml
+application:
+  only: [firefox, vivaldi-stable, thorium-browser, zen, helium, ...]
+```
+
+Floorp is absent from that list and so receives no layer. Within it, familiar
+chords mean something else entirely: `C-f` becomes `right`, `C-a` becomes
+`home`, `C-s` becomes `f3` (find-again), `C-w` becomes cut. `C-x` and `C-c` are
+prefix keys opening submaps.
+
+**Stage 2 — the browser's own bindings.** The Emacs layer deliberately targets
+unusual chords that the browser is then configured to recognize.
+`~/.zen/customKeys.json` completes the chain:
+
+| Action | Zen binding | Reached from |
+| --- | --- | --- |
+| Focus URL bar | `Ctrl+Alt+Shift+F4` | — |
+| Close tab | `Ctrl+Alt+Shift+Delete` | `C-M-k` |
+| Save page as | `Ctrl+Alt+Shift+Insert` | `C-x C-w` |
+| Close window | `Ctrl+Alt+Shift+End` | `C-x 4 0` |
+| Back / forward | `Ctrl+Alt+Shift+B` / `+F` | `C-x M-b` / `C-x M-f` |
+| **New tab** | `Ctrl+T` | — |
+
+The last row is the point: **some bindings are customized and some are not**,
+and the difference is not predictable. Of the four chords one would reflexively
+call universal, `Ctrl+T` survives, `Ctrl+L` and `Ctrl+W` do not, and `Ctrl+F`
+is consumed upstream by stage 1. Firefox carries its own `customKeys.json`;
+Vivaldi's `Preferences` has no `keyboard` key, so it is unmodified.
+
+**Stage 3 — the application acts.**
+
+### What this means for injected input
+
+Injected keys enter the pipeline *after* xremap, because xremap is bound to one
+physical device. So the correct thing to inject is the **stage-2 chord the
+browser actually listens for** — `Ctrl+Alt+Shift+F4` to focus Zen's URL bar —
+never the physical chord a human would press, and never a documented default.
+
+### The xremap fallback is a live hazard
+
+`~/.local/bin/xremap-default` degrades to running xremap with **no device
+filter** when the keyboard is absent:
+
+```sh
+notify-send ... "Device not found, running without --device filter"
+xremap ~/.config/xremap/browser-emacs.yaml
+```
+
+In that state xremap grabs every keyboard including a virtual one, and injected
+keys are silently remapped — `C-f` would arrive as `right`. The device filter
+is therefore a property of the *running process*, not of the config, so
+`cu doctor` reads `/proc/<pid>/cmdline` of the live xremap rather than trusting
+the launcher's intent.

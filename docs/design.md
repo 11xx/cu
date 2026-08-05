@@ -310,18 +310,46 @@ module uses the least conspicuous tier that answers the question.
    Also the most conspicuous, and it requires launch flags. Reserved for sites
    that do not fight automation, and never used for input.
 
-### Chrome is driven by keys, content by pixels
+### Chrome is driven by resolved actions, content by pixels
 
 Zen, Vivaldi, and Helium have heavily customized interfaces, and Vivaldi can
 run with its window decoration toggled off entirely. Pixel-hunting for a URL
 bar across six browsers with divergent and user-reconfigurable chrome is
-unwinnable.
+unwinnable, so chrome is operated by keyboard and only page content by
+coordinates.
 
-It is also unnecessary. `Ctrl+L`, `Ctrl+T`, `Ctrl+W`, `Ctrl+F` and their
-relatives are stable across all six regardless of how the interface is skinned
-or whether it is visible at all. So **browser chrome is operated by keyboard,
-and only page content is operated by coordinates.** The part that varies per
-browser is the part that never gets clicked.
+**But the keyboard is not the stable layer — on this desktop it is the most
+customized one.** Keys pass through an Emacs remapping layer and then through
+each browser's own bindings before reaching an action, and the result is not
+predictable from defaults: focusing Zen's URL bar is `Ctrl+Alt+Shift+F4`,
+closing a tab is `Ctrl+Alt+Shift+Delete`, while opening a tab is still plain
+`Ctrl+T`. Some bindings are customized, some are not, and nothing about a
+chord's ordinariness predicts which. The full pipeline is in
+[environment.md](environment.md).
+
+So the design treats **the keymap as configuration to be read, never a constant
+to be assumed**:
+
+- `cu` exposes *semantic actions*, not chords: `cu browser focus-urlbar`,
+  `cu browser close-tab`. The agent never names a key combination.
+- The registry resolves each action to a chord **per browser, from that
+  browser's own configuration** — `customKeys.json` for the Gecko family,
+  whatever the equivalent is elsewhere — and re-reads it when the file changes.
+- An action with no known mapping is **refused, not guessed**. Falling back to
+  a documented default is the failure mode this whole section exists to
+  prevent: it would silently perform some other action rather than erroring.
+- Because injected keys enter after the remapping layer, the chord `cu` emits
+  is the one the browser listens for, not the one a human presses.
+
+The chrome-versus-content split survives, then, but for an inverted reason. It
+is not that keys are stable and pixels vary. It is that the keymap is
+*knowable from configuration* while chrome layout is not — so the part that
+varies per browser is still the part that never gets clicked, and the part that
+varies per user is read from disk rather than assumed.
+
+This generalizes past browsers. Any application may rebind anything, so `cu
+key` takes semantic names wherever a mapping is known and never assumes an
+application's defaults.
 
 ### The browser registry
 
