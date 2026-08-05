@@ -1,0 +1,258 @@
+# Design
+
+## Goal
+
+Let a multimodal coding agent see and drive this desktop — pointer, keyboard,
+windows, browser — through a deterministic CLI that any harness can call as a
+shell command.
+
+Claude Code and Codex are the initial consumers. Neither ships Linux computer
+use, but both already run shell commands and read image files from disk, which
+is the entire integration surface this design needs. Nothing below depends on a
+particular harness or provider.
+
+## Shape: a binary, not a prompt
+
+Three layers, and almost all the weight sits in the first.
+
+**`cu`, a single executable.** Everything a shell genuinely cannot do
+correctly: coordinate transforms across mixed-scale outputs, `/dev/uinput`
+device lifecycle, capture with a token budget, structured observation, and the
+safety interlocks. No daemon. Subcommands, JSON on stdout, stable exit codes,
+never interactive.
+
+**A thin harness adapter.** A skill for Claude Code, an `AGENTS.md` fragment
+for Codex. It documents the loop and the vocabulary; it contains no logic. If
+this layer starts accumulating rules like "remember to divide by the scale
+factor", that rule belongs in `cu` instead.
+
+**An optional MCP server**, later, for harnesses without a shell. Not needed
+for either initial consumer.
+
+The reason to put the work in a binary rather than a prompt is that the failure
+modes here are silent. A model that mixes coordinate spaces does not error — it
+clicks confidently on the wrong pixel. Determinism is the product.
+
+## The frame contract
+
+This is the core of the design; most of the rest follows from it.
+
+Three coordinate spaces are in play, and conflating any two is *the* bug class:
+
+- **Physical pixels** — what `grim` writes. Per-output, unscaled.
+- **Logical coordinates** — what Hyprland speaks: window geometry, cursor
+  position, cursor moves. One continuous space across all outputs.
+- **Image pixels** — what the model actually sees, after cropping and
+  downscaling to fit a token budget.
+
+On this host the physical→logical ratio is 1.25 on one monitor and 1.0 on the
+other, so no global constant relates them. See [environment.md](environment.md).
+
+Every capture emits a **frame descriptor** alongside the PNG:
+
+```json
+{
+  "id": "f3",
+  "source": { "type": "output", "name": "DP-2" },
+  "logical_rect": { "x": 0, "y": 0, "w": 2048, "h": 1152 },
+  "image_size":   { "w": 1280, "h": 720 },
+  "captured_at":  "2026-08-05T12:31:07Z",
+  "cursor_logical": { "x": 173.0, "y": 627.4 }
+}
+```
+
+A frame states only which logical rectangle it depicts and how many pixels it
+depicts it with. The inverse transform is then one interpolation:
+
+```
+logical = logical_rect.origin + image_coord * (logical_rect.size / image_size)
+```
+
+Output scale, downscale ratio, crop offset, and monitor origin all collapse
+into that single ratio. The same expression is correct for a full-output frame,
+a window crop, and an arbitrary region — there is no second code path to get
+wrong.
+
+**The model only ever emits image coordinates, always paired with the frame id
+they came from:**
+
+```
+cu click --frame f3 --at 412,300
+```
+
+That pairing is what makes the whole thing safe. `cu` rejects a click against a
+frame whose window has since moved, closed, or lost focus, and against a frame
+older than a staleness threshold. The common catastrophic failure of pixel
+computer use — acting on coordinates read off a screenshot of a different
+monitor, or of a screen that has since changed — becomes a refused command
+rather than a misdirected click.
+
+## Input: Hyprland positions, uinput acts
+
+A hybrid, split along the line where each mechanism is exact.
+
+**Pointer position via Hyprland IPC.** `hl.dsp.cursor.move(x, y)` is a verified
+absolute warp in logical coordinates, taking floats. It needs no calibration
+and no knowledge of output layout — Hyprland already owns that mapping.
+
+The alternative, a uinput absolute-axis pointer, would require mapping a device
+axis range onto a multi-output desktop with unequal scales. That mapping is
+compositor policy, not something we control, and it is exactly the fragile
+surface this design is trying to eliminate.
+
+**Buttons, scroll, and keys via `/dev/uinput`.** A virtual keyboard and pointer
+created directly by the unprivileged process — no root, no `ydotoold`, verified
+writable as uid 1000. Hyprland's key dispatchers are keybind-oriented and a
+poor fit for free text.
+
+So a click is: warp through IPC, assert the expected window still has focus,
+then press and release through uinput.
+
+**Text entry defaults to the clipboard.** `wl-copy` the text, send Ctrl+V, then
+restore the previous clipboard contents. This is layout-independent and fast,
+and it sidesteps building a keycode map for the active keymap. It has two known
+failure modes — terminals with different paste bindings, and applications that
+reject synthetic paste — so `cu type --method keys` falls back to per-character
+keycode synthesis, and the type-and-verify check below catches the rest.
+
+## Observation is structural first, visual second
+
+Hyprland exposes a live window model: class, title, geometry, PID, focus,
+workspace, floating state, XWayland status. That is semantic ground truth of
+the kind that X11 and macOS computer use only get from accessibility APIs, and
+most implementations do without.
+
+`cu observe --json` returns monitors (with scale and logical rects), windows,
+workspaces, the focused window, and the cursor position. It is exact, costs a
+few hundred tokens, and answers most of what a screenshot is usually asked to
+answer — which window is focused, whether the dialog opened, where the terminal
+is.
+
+The design consequence is that **a screenshot is for reading content, not for
+locating windows.** An agent should call `observe` freely and `shot` when it
+actually needs pixels. This is the largest single lever on both token cost and
+reliability, and it exists only because the compositor is scriptable.
+
+`cu wait` subscribes to the Hyprland event socket for the same reason: waiting
+for `openwindow` beats screenshotting in a loop.
+
+## Capture and the token budget
+
+Per-output capture is the primitive; whole-desktop capture is never used
+because Hyprland composites it at the largest scale in play, upscaling the
+unscaled monitor into a larger and blurrier image.
+
+Even so, one native output is 2560x1440 — near the per-image ceiling on its
+own, and the logical desktop is nearly three times that. Capture is therefore
+budgeted rather than literal:
+
+- `cu shot --window active` crops to one window. Usually the right default:
+  fewer tokens *and* more detail per token than a full output.
+- `cu shot --output DP-2` for a whole monitor.
+- `--for claude|openai|generic` selects a provider profile that sets the
+  downscale target and format.
+- `--if-changed` hashes the region and skips re-sending an unchanged screen,
+  which is the common case in a wait loop.
+
+For the Claude profile: current models accept up to 2576px on the long edge and
+charge up to ~4784 tokens for a single image at that size, with returned
+coordinates mapping 1:1 to image pixels — so no scale-factor correction is
+needed on the model's output, only the frame transform above. 1080p is the
+recommended balance of accuracy and cost for interactive driving; 1366x768 is
+the cost-sensitive setting. The profile encodes these; the agent does not do
+arithmetic about them.
+
+Frames are written to disk and the path is printed with the descriptor. Both
+Claude Code and Codex read image files natively, which makes the filesystem the
+provider-agnostic image channel — `cu` never talks to a model API.
+
+## Safety
+
+"Whatever works here, safely" is the requirement that most shapes this design,
+because the target is a live desktop with the user sitting at it.
+
+**Focus assertion at injection time.** Every input command re-checks the
+expected window immediately before injecting, not when the action was planned.
+The dangerous race is the user alt-tabbing mid-action and receiving a password
+into the wrong application.
+
+**Denylist.** Refuse to inject into window classes matching a configurable
+list — lock screens, password managers, authentication prompts. Refuse
+entirely when the session is locked.
+
+**Guaranteed release.** Every press is paired with a release, including on
+`SIGINT`/`SIGTERM` and on panic. Destroying the uinput device releases its keys
+at the kernel level, which makes process death safe by construction, but the
+handler is explicit rather than relying on that.
+
+**A user abort the agent cannot override.** A Hyprland keybind the user presses
+to drop a lockfile; `cu` checks it before every injection and refuses while it
+exists. The agent has no way to clear it.
+
+**Human-presence detection.** After warping, `cu` re-reads the cursor position;
+a mismatch means the user is moving the physical mouse. Yield rather than
+fight for the pointer.
+
+**Append-only action log**, with `--dry-run` producing the same log without
+injecting.
+
+**Verify what was typed.** After a text entry into a field whose contents can
+be read back, compare. Silent partial input is the failure mode that clipboard
+and keycode paths share.
+
+## Testing without touching the user's screen
+
+`hyprctl output` can add and remove fake outputs. If it can create a headless
+output in the running session, the entire test suite can drive real
+applications on a monitor that does not physically exist — real compositor,
+real input path, real capture, zero disruption. That would be a materially
+better safety story than any amount of care taken while driving live outputs.
+
+This is not yet verified. The probe is to add a headless output, confirm it
+appears in `hyprctl monitors -j` with the expected geometry, place a window on
+it, capture it with `grim -o`, and remove it. It runs before any test harness
+is built on the assumption.
+
+## Browser control
+
+Two tiers, and only the lower one works on this host today.
+
+**Pixel tier** — screenshots and clicks, works with any browser, no setup. It
+is also unreliable in the ordinary way: no element identity, no way to wait on
+a real load event, brittle across window sizes.
+
+**Semantic tier** — a real automation channel giving the DOM, the accessibility
+tree, and exact element coordinates. This is a large reliability gain, and it
+is what makes "browser use" more than a demo.
+
+Firefox is the only browser installed, and nothing exposing an automation
+protocol is present — no `geckodriver`, no Chromium, no Playwright. So the
+semantic tier needs something installed, and which thing is a real choice with
+different costs. I've left it as an open question below rather than picking for
+you. `cu browser` is designed to use a semantic channel when one is configured
+and degrade to the pixel tier when not.
+
+## Implementation
+
+Python with PEP 723 inline dependencies, run through `uv`. `uinput` is struct
+packing into a file descriptor and capture is subprocess orchestration; neither
+argues for a compiled language, and the per-action budget is dominated by
+compositor round-trips rather than our own work. `uv` is already installed, so
+there is nothing to build and nothing to install.
+
+The tradeoff is honest: a Rust `cu` would be a single distributable artifact,
+which matters if this is ever shared. Python is a reversible choice for now
+because the CLI contract, not the language, is what the harness layer depends
+on.
+
+## Open questions
+
+1. **Browser semantic tier.** Install Chromium and speak CDP (best tooling and
+   accessibility-tree access, another browser on the system), add `geckodriver`
+   to the existing Firefox (no new browser, thinner protocol), or stay
+   pixel-only for now?
+2. **Nested-compositor testing.** Worth also supporting a nested Hyprland
+   instance as a test target, or is a headless fake output sufficient once the
+   probe above confirms it?
+3. **Abort keybind.** Which key should the deadman switch be bound to, given
+   your existing Hyprland bindings?
