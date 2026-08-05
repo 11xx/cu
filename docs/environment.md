@@ -133,6 +133,29 @@ Present: `hyprctl`, `grim`, `slurp`, `wl-copy`/`wl-paste`, `hyprpicker`, `wev`,
 Absent: `wtype`, `ydotool`, `dotool`, `xdotool` — no input-injection tool is
 installed, which the direct `/dev/uinput` path makes unnecessary.
 
-Browsers: Firefox only. No Chromium, Chrome, or Brave; no `playwright`,
-`geckodriver`, or `chromedriver`. Nothing on this host currently exposes a
-browser automation protocol, so browser control begins at the pixel tier.
+## Browsers
+
+Six, across both engine families:
+
+| Browser | Family | Executable | Window class |
+| --- | --- | --- | --- |
+| Zen | Gecko | `/opt/zen-browser-bin/zen-bin` (wrapper on `PATH` as `zen-browser`) | `zen` |
+| Firefox | Gecko | wrapper on `PATH` | — |
+| Floorp | Gecko | `/usr/bin/floorp` | — |
+| Thorium | Chromium | `/usr/bin/thorium-browser` | — |
+| Helium | Chromium | `/opt/helium-browser-bin/helium` | `helium` |
+| Vivaldi | Chromium | `/usr/bin/vivaldi` | — |
+
+Window classes are recorded as they are observed; `zen` and `helium` are
+confirmed from `hyprctl clients -j` with both running as native Wayland clients
+(`xwayland: false`).
+
+**Executables are not reliably on `PATH`.** Helium has no `PATH` entry at all —
+it is discoverable only through `/usr/share/applications/helium.desktop`. A
+`command -v` sweep therefore under-reports what is installed, and browser
+discovery must read desktop entries as well as `PATH`.
+
+Both running browsers were launched with no remote-debugging or automation
+flags, which is the normal case and the one the design has to accommodate.
+
+No `playwright`, `geckodriver`, or `chromedriver` is installed.

@@ -248,22 +248,130 @@ is built on the assumption.
 
 ## Browser control
 
-Two tiers, and only the lower one works on this host today.
+The largest module, and the one whose shape is dictated by a constraint rather
+than a preference.
 
-**Pixel tier** — screenshots and clicks, works with any browser, no setup. It
-is also unreliable in the ordinary way: no element identity, no way to wait on
-a real load event, brittle across window sizes.
+### The constraint is automation detection, not authentication
 
-**Semantic tier** — a real automation channel giving the DOM, the accessibility
-tree, and exact element coordinates. This is a large reliability gain, and it
-is what makes "browser use" more than a demo.
+A logged-in session on a driver-controlled browser gets challenged anyway:
+correct credentials, correct 2FA, no VPN, and Cloudflare still captchas every
+page. Authenticating harder does not help, because what is detected is the
+automation, not the identity.
 
-Firefox is the only browser installed, and nothing exposing an automation
-protocol is present — no `geckodriver`, no Chromium, no Playwright. So the
-semantic tier needs something installed, and which thing is a real choice with
-different costs. I've left it as an open question below rather than picking for
-you. `cu browser` is designed to use a semantic channel when one is configured
-and degrade to the pixel tier when not.
+Two consequences follow, and they set the whole design:
+
+- **Driving a separate automation browser is the wrong default.** It is the
+  configuration that gets blocked, *and* it strands the user's real session —
+  asking someone to log in again, in a browser they don't use, to let an agent
+  change a setting in an account they are already signed into, is a bad trade
+  even when it works.
+- **The real browser, with the real profile, is the target.** Real cookies,
+  real profile, real fingerprint, launched the ordinary way.
+
+### Act with real input, read with a side channel
+
+The split that satisfies both goals:
+
+**Acting is always synthesized input** — the uinput device and cursor warp
+already built for the rest of the system, aimed at the user's normally-launched
+browser. These are kernel-level input events travelling the ordinary path
+through libinput and the compositor, so at the browser they are genuine events
+rather than protocol-injected ones. There is no automation protocol in the
+acting path at all.
+
+**Reading is a side channel** used only to *locate* things — element boxes,
+text, state — so the real input can be aimed. The read channel never performs
+the action.
+
+This inverts the usual driver design, where the protocol both finds the button
+and clicks it. Here it only finds it.
+
+Behavioral fingerprinting is a separate axis and is not solved by this: warping
+instantly between coordinates is itself a signal. Interpolated movement with
+plausible timing is a `cu` option rather than a browser-module concern, since
+it belongs to the input layer.
+
+### Read tiers, ordered by footprint
+
+Each tier is more informative and more conspicuous than the one above it. The
+module uses the least conspicuous tier that answers the question.
+
+1. **Pixels only.** Screenshot plus the model's own vision. Zero footprint,
+   works in every browser, needs no flags and no launch changes. Always
+   available as the floor.
+2. **Accessibility tree (AT-SPI).** Both engine families expose roles, names,
+   and element bounding boxes to assistive technology over D-Bus. This is not
+   an automation protocol — it is the interface screen readers use, so its
+   presence is an ordinary property of a real user's desktop rather than a bot
+   signal. If the coordinates it reports can be mapped into logical space, this
+   is the highest-value tier for this design, and it would upgrade every GUI
+   application, not only browsers.
+3. **CDP or WebDriver BiDi.** Richest: DOM, precise geometry, real load events.
+   Also the most conspicuous, and it requires launch flags. Reserved for sites
+   that do not fight automation, and never used for input.
+
+### Chrome is driven by keys, content by pixels
+
+Zen, Vivaldi, and Helium have heavily customized interfaces, and Vivaldi can
+run with its window decoration toggled off entirely. Pixel-hunting for a URL
+bar across six browsers with divergent and user-reconfigurable chrome is
+unwinnable.
+
+It is also unnecessary. `Ctrl+L`, `Ctrl+T`, `Ctrl+W`, `Ctrl+F` and their
+relatives are stable across all six regardless of how the interface is skinned
+or whether it is visible at all. So **browser chrome is operated by keyboard,
+and only page content is operated by coordinates.** The part that varies per
+browser is the part that never gets clicked.
+
+### The browser registry
+
+Per-browser facts, discovered rather than assumed: executable path (resolved
+through desktop entries as well as `PATH`, since Helium has no `PATH` entry),
+engine family, window class for focus assertion, which read tiers are available
+and how to enable them, and quirks such as Vivaldi's optional decoration.
+
+### What has to be measured before it is trusted
+
+The stealth claims above are hypotheses with a known counter-example — driver
+automation on this host demonstrably got blocked — so they get tested rather
+than asserted. The probe is to load a site known to challenge automation under
+four configurations and compare outcomes: the real browser untouched; the real
+browser with a debug port open; the real browser driven by synthesized input;
+and a driver-launched browser as the known-bad control.
+
+Two specific unknowns feed into it. Recent Chromium versions restrict remote
+debugging against the default profile directory, which may make tier 3
+incompatible with using the user's real Chromium profile at all. And enabling
+the Gecko remote agent may set the `navigator.webdriver` flag, which is the
+single strongest tell there is. Both are cheap to check and both would change
+which tiers are viable per family.
+
+## Recipes: turning a successful run into a repeatable one
+
+Driving a site well once is worth keeping. The natural requests are "you did
+that well, make it something you can repeat" and "you got that wrong last time,
+do it differently" — and both need memory that outlives the session.
+
+The append-only action log the safety design already keeps is the raw material:
+a successful run is a sequence of `cu` commands that worked, and promoting it
+to a named recipe is mostly a matter of parameterizing it and recording what it
+was for.
+
+**Storage is user-global, not per-project.** These are facts about a website,
+not about a repository — the same login flow is worth reusing from any project.
+The arc journal is deliberately per-project and is the wrong home. Recipes live
+under `$XDG_DATA_HOME/ai-computer-use/recipes/`, keyed by site and task.
+
+A recipe records its steps, its preconditions, a verification step that decides
+whether a replay actually worked, and a revision history carrying outcomes.
+That history is what makes the second request answerable: "do it differently"
+resolves to a superseded revision plus the recorded failure, so the next
+attempt starts from what went wrong rather than from nothing.
+
+**Recipes are generated code that runs against a real authenticated browser**,
+which makes them a security boundary rather than a cache. They are reviewable
+before first replay, stored with a content hash, and re-reviewed when that hash
+changes. A stored recipe must never be able to change silently.
 
 ## Implementation
 
@@ -280,12 +388,14 @@ on.
 
 ## Open questions
 
-1. **Browser semantic tier.** Install Chromium and speak CDP (best tooling and
-   accessibility-tree access, another browser on the system), add `geckodriver`
-   to the existing Firefox (no new browser, thinner protocol), or stay
-   pixel-only for now?
-2. **Nested-compositor testing.** Worth also supporting a nested Hyprland
+1. **Fingerprint probe.** The four-configuration test above settles which read
+   tiers are viable per engine family. It needs a site that reliably challenges
+   automation and a willingness to burn a few challenges on the account used.
+2. **AT-SPI coordinate space.** Whether the accessibility tree reports usable
+   coordinates under Wayland with mixed output scales decides whether tier 2 is
+   the backbone of the read path or a footnote.
+3. **Nested-compositor testing.** Worth also supporting a nested Hyprland
    instance as a test target, or is a headless fake output sufficient once the
    probe above confirms it?
-3. **Abort keybind.** Which key should the deadman switch be bound to, given
+4. **Abort keybind.** Which key should the deadman switch be bound to, given
    your existing Hyprland bindings?
