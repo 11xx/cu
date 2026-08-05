@@ -1,0 +1,10 @@
+# Captured frames and session artifacts are runtime state, never source.
+/frames/
+/sessions/
+*.png
+*.ppm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
