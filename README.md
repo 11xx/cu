@@ -24,6 +24,8 @@ bin/cu click --frame f3 --at 412,300 # warp, check the target, press and release
 bin/cu scroll --dy -3                # wheel where the pointer already is
 bin/cu type 'hello'                  # clipboard by default, --method keys to synthesize
 bin/cu key --action paste            # a semantic action, resolved per application
+bin/cu browser list                  # installed browsers and what each resolves
+bin/cu browser focus-urlbar          # a semantic browser action, never a chord
 ```
 
 Every injecting command takes `--dry-run`, which runs every interlock and
@@ -40,7 +42,7 @@ the image depicts and its pixel size. Later commands take coordinates as
 
 `doctor`, `observe`, `shot`, `focus`, and the input commands — `move`, `click`,
 `scroll`, `type`, `key` — are implemented, with the safety interlocks, as is
-`wait`. Browser control and recipes are designed but not built — see
+`wait` and `browser`. Recipes are designed but not built — see
 [docs/design.md](docs/design.md) for the command surface and build order, and
 [docs/environment.md](docs/environment.md) for the verified host facts the
 design rests on.

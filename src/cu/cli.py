@@ -12,7 +12,10 @@ import json
 import sys
 from typing import Any
 
-from . import actions, capture, checks, config, exits, frames, observe, uinput, wait
+from . import (
+    actions, browser, capture, checks, config, exits, frames, observe, uinput, wait,
+)
+from .browser import BrowserError
 from .capture import CaptureError
 from .config import ConfigError
 from .frames import FrameError
@@ -263,6 +266,95 @@ def _render_action(result: dict[str, Any]) -> None:
     print(f"{mark}{result['action']} {detail}  [{where}]")
 
 
+def cmd_browser(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    browsers = browser.discover()
+
+    if args.action == "list":
+        def render(data: Any) -> None:
+            for b in data["browsers"]:
+                installed = "" if b["resolved"] else "  (not installed)"
+                print(
+                    f"{b['name']:<20} {b['family']:<9} "
+                    f"class {str(b['window_class'] or '?'):<16} "
+                    f"{len(b['actions'])} actions{installed}"
+                )
+        payload = {
+            "browsers": [{**b, "actions": sorted(browser.keymap_for(b))} for b in browsers]
+        }
+        _emit(payload, args.json, render)
+        return exits.OK
+
+    # Which browser is being driven: the one named, or the one holding focus.
+    snap = observe.snapshot()
+    focused = snap["focused"]
+    if args.browser:
+        target = browser.find(args.browser, browsers)
+        window = None
+    else:
+        if focused is None:
+            print("cu: no window is focused; name a browser with --browser", file=sys.stderr)
+            return exits.TARGET_NOT_FOUND
+        target = browser.for_window_class(focused["class"], browsers)
+        window = focused
+        if target is None:
+            print(
+                f"cu: the focused window ({focused['class']}) is not a known browser",
+                file=sys.stderr,
+            )
+            return exits.TARGET_NOT_FOUND
+
+    if args.action == "actions":
+        keymap = browser.keymap_for(target)
+        payload = {"browser": target["name"], "family": target["family"], "actions": keymap}
+
+        def render(data: Any) -> None:
+            print(f"{data['browser']} ({data['family']})")
+            if not data["actions"]:
+                print("  no actions resolvable — this browser keeps no readable keymap;")
+                print("  state them under [keys] in cu's config to drive it")
+            for action, chord in sorted(data["actions"].items()):
+                print(f"  {action:<18} {chord}")
+
+        _emit(payload, args.json, render)
+        return exits.OK
+
+    chord, source = browser.resolve(target, args.action, cfg)
+    if chord is None:
+        known = sorted(browser.keymap_for(target)) or ["none"]
+        print(
+            f"cu: {target['name']} has no binding for {args.action!r}. "
+            f"Known: {', '.join(known)}.",
+            file=sys.stderr,
+        )
+        print(f"cu: {exits.RESPONSE[exits.NOT_MAPPED]}", file=sys.stderr)
+        return exits.NOT_MAPPED
+
+    if window is None:
+        print(
+            f"cu: --browser names a browser but no window of it holds focus; "
+            f"focus one first",
+            file=sys.stderr,
+        )
+        return exits.TARGET_NOT_FOUND
+
+    result = actions.key(
+        cfg, action=None, chord=chord, backend=args.backend, dry_run=args.dry_run
+    )
+    result["browser"] = target["name"]
+    result["semantic"] = args.action
+    result["resolved_from"] = source
+    _emit(
+        result,
+        args.json,
+        lambda r: print(
+            f"{'would send' if r['dry_run'] else 'sent'} {r['semantic']} → "
+            f"{r['chord']}  [{r['browser']}, via {r['resolved_from']}]"
+        ),
+    )
+    return exits.OK
+
+
 def cmd_wait(args: argparse.Namespace) -> int:
     try:
         result = wait.until(
@@ -490,6 +582,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="compositor injection leaves sleeping monitors asleep",
     )
 
+    browsing = add_injecting(
+        "browser", "a semantic browser action, resolved per browser", cmd_browser
+    )
+    browsing.add_argument(
+        "action",
+        help="an action such as focus-urlbar or close-tab; "
+        "'list' shows installed browsers and 'actions' shows what one resolves",
+    )
+    browsing.add_argument(
+        "--browser", metavar="NAME", help="which browser (default: the focused window's)"
+    )
+    browsing.add_argument(
+        "--backend",
+        choices=("uinput", "compositor"),
+        help="compositor injection leaves sleeping monitors asleep",
+    )
+
     return parser
 
 
@@ -504,6 +613,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cu: refused: {exc.reason}", file=sys.stderr)
         print(f"cu: {exits.RESPONSE[exc.code]}", file=sys.stderr)
         return exc.code
+    except BrowserError as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        return exits.TARGET_NOT_FOUND
     except UinputError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.PRECONDITION_FAILED
