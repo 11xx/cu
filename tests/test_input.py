@@ -232,3 +232,26 @@ def test_both_backends_reject_the_same_bad_chord():
     """Backends must not disagree about what a valid chord is."""
     with pytest.raises(uinput.ChordError):
         compositor.split_chord("ctrl+nosuchkey")
+
+
+# --- flag placement -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--json", "observe"],
+        ["observe", "--json"],
+        ["--json", "recipe", "list"],
+        ["recipe", "list", "--json"],
+        ["recipe", "replay", "x", "--dry-run"],
+        ["browser", "list", "--json"],
+    ],
+)
+def test_global_flags_are_accepted_on_either_side_of_a_subcommand(argv):
+    """`cu recipe list --json` is the form an agent writes, and argparse honours
+    a flag only on the parser that declares it — so every level repeats them."""
+    from cu import cli
+
+    args = cli.build_parser().parse_args(argv)
+    assert getattr(args, "json", False) or getattr(args, "dry_run", False)

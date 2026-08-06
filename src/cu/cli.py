@@ -729,8 +729,17 @@ def build_parser() -> argparse.ArgumentParser:
     recipe = add_injecting("recipe", "save, review, and replay a procedure", cmd_recipe)
     rsub = recipe.add_subparsers(dest="subcommand", required=True)
 
-    rlist = rsub.add_parser("list", help="every stored recipe and whether it is reviewed")
-    rsave = rsub.add_parser("save", help="promote recent actions from the log")
+    def add_recipe(name: str, help_text: str) -> argparse.ArgumentParser:
+        """Nested subcommands repeat the global flags for the same reason the
+        top level does: `cu recipe list --json` is the form an agent writes,
+        and argparse accepts a flag only on the parser that declares it."""
+        p = rsub.add_parser(name, help=help_text)
+        p.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+        p.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS)
+        return p
+
+    rlist = add_recipe("list", "every stored recipe and whether it is reviewed")
+    rsave = add_recipe("save", "promote recent actions from the log")
     rsave.add_argument("name", help="lowercase name; it becomes the filename")
     rsave.add_argument("--last", type=int, default=20, help="how many log entries to promote")
     rsave.add_argument("--site", help="what site this is for")
@@ -740,7 +749,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("review", "read the steps, and approve them with --approve"),
         ("replay", "run a reviewed recipe"),
     ):
-        sub_parser = rsub.add_parser(name, help=help_text)
+        sub_parser = add_recipe(name, help_text)
         sub_parser.add_argument("name")
         if name == "review":
             sub_parser.add_argument(
