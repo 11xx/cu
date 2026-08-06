@@ -53,6 +53,10 @@ def aim(frame: dict[str, Any], x: float, y: float, snap: dict[str, Any]) -> dict
     under = observe.window_at(lx, ly, snap["windows"])
     return {
         "logical": {"x": lx, "y": ly},
+        # Where the point sits inside its window, as a fraction. Absolute
+        # coordinates describe one moment; a fraction survives the window being
+        # moved or resized, and is the only form of a click worth replaying.
+        "relative": _relative_to(under, lx, ly),
         # A window frame asserts its own window; anything else takes whatever
         # is under the point.
         "window": (
@@ -131,6 +135,7 @@ def move(cfg: dict[str, Any], frame_id: str, at: tuple[float, float], *, dry_run
         "at": {"x": at[0], "y": at[1]},
         "logical": point,
         "cursor": landed,
+        "relative": aimed["relative"],
         "window": _describe(aimed["window_under_point"]),
         "dry_run": dry_run,
     }
@@ -172,6 +177,7 @@ def click(
         "at": {"x": at[0], "y": at[1]},
         "logical": point,
         "cursor": landed,
+        "relative": aimed["relative"],
         "button": button,
         "count": count,
         "window": _describe(under),
@@ -340,6 +346,39 @@ def type_text(
     return result
 
 
+def browser_action(
+    cfg: dict[str, Any],
+    target: dict[str, Any],
+    action: str,
+    *,
+    backend: str | None = None,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Send a semantic browser action, logged by its name rather than its chord.
+
+    Which matters for what happens later: a recipe built from this log must
+    replay the *action*, so that re-resolving it picks up a keymap the user has
+    since changed. A recorded chord would keep firing the old binding, which by
+    then belongs to some other command.
+    """
+    from . import browser as browser_module
+
+    chord, source = browser_module.resolve(target, action, cfg)
+    if chord is None:
+        raise Refused(
+            exits.NOT_MAPPED,
+            f"{target['name']} has no binding for {action!r}; "
+            "add one under [keys] rather than guessing a chord",
+        )
+    result = key(cfg, action=None, chord=chord, backend=backend, dry_run=dry_run, record=False)
+    result.update(
+        {"action": "browser", "semantic": action, "browser": target["name"],
+         "resolved_from": source}
+    )
+    safety.record(cfg, result)
+    return result
+
+
 def key(
     cfg: dict[str, Any],
     *,
@@ -347,6 +386,7 @@ def key(
     chord: str | None,
     repeat: int = 1,
     backend: str | None = None,
+    record: bool = True,
     dry_run: bool,
 ) -> dict[str, Any]:
     """Send a semantic action, or a literal chord when the caller insists.
@@ -388,8 +428,20 @@ def key(
         "window": _describe(window),
         "dry_run": dry_run,
     }
-    safety.record(cfg, result)
+    if record:
+        safety.record(cfg, result)
     return result
+
+
+def _relative_to(
+    window: dict[str, Any] | None, x: float, y: float
+) -> dict[str, float] | None:
+    if window is None:
+        return None
+    rect = window["logical_rect"]
+    if rect["w"] <= 0 or rect["h"] <= 0:
+        return None
+    return {"x": (x - rect["x"]) / rect["w"], "y": (y - rect["y"]) / rect["h"]}
 
 
 def _describe(window: dict[str, Any] | None) -> dict[str, Any] | None:

@@ -1,0 +1,401 @@
+"""Recipes: a successful run, kept and made repeatable.
+
+Driving a site well once is worth keeping, and the append-only action log is
+already the raw material — a successful run is a sequence of commands that
+worked. Promoting one to a recipe is mostly parameterizing it and recording
+what it was for.
+
+**Storage is user-global.** These are facts about a website, not about a
+repository; the same login flow is worth reusing from any project, so a
+per-project journal is the wrong home.
+
+**A recipe is a security boundary, not a cache.** It is generated code that
+runs against a real, possibly authenticated browser, so it is reviewable before
+its first replay, stored with a content hash, and re-reviewed when that hash
+changes. A stored recipe must never be able to change silently.
+
+**Pointer steps are stored window-relative.** An absolute coordinate describes
+one arrangement of one desktop at one moment; a fraction of the window survives
+that window being moved or resized, which is the difference between a recipe
+and a screenshot.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import time
+from pathlib import Path
+from typing import Any
+
+#: Steps a recipe may contain. Anything else in the log — a refused command, a
+#: dry run — is history rather than procedure.
+REPLAYABLE = {"focus", "click", "move", "scroll", "type", "key", "browser", "wait"}
+
+NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+class RecipeError(RuntimeError):
+    pass
+
+
+def store_dir() -> Path:
+    base = os.environ.get("XDG_DATA_HOME") or "~/.local/share"
+    path = Path(base).expanduser() / "ai-computer-use" / "recipes"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def validate_name(name: str) -> str:
+    """Names become filenames, so they are constrained rather than sanitised.
+
+    Rewriting a bad name into a usable one would let two different recipes
+    collide on one file, which for something replayed against a live browser is
+    worse than a refusal.
+    """
+    if not NAME_PATTERN.match(name):
+        raise RecipeError(
+            f"{name!r} is not a usable recipe name; use lowercase letters, "
+            "digits, dot, dash, and underscore"
+        )
+    return name
+
+
+def path_for(name: str) -> Path:
+    return store_dir() / f"{validate_name(name)}.json"
+
+
+def content_hash(recipe: dict[str, Any]) -> str:
+    """A digest of what the recipe *does*, ignoring what it has been through.
+
+    Review history and outcomes are excluded deliberately: recording that a
+    replay failed must not invalidate the review of steps nobody edited.
+    """
+    body = {key: recipe[key] for key in ("name", "site", "task", "steps", "preconditions", "verify")}
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+
+
+def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
+    """One log entry as a replayable step, or None if it is not one.
+
+    A pointer step keeps its window-relative position and the class it was
+    aimed at, and deliberately drops the frame id: frames live in tmpfs and are
+    worthless by the time a recipe is replayed.
+    """
+    action = entry.get("action")
+    if action not in REPLAYABLE or entry.get("dry_run"):
+        return None
+    window = entry.get("window") or {}
+    step: dict[str, Any] = {"action": action}
+    if action in {"click", "move"}:
+        if not entry.get("relative"):
+            return None  # nothing that would survive the window moving
+        step["relative"] = entry["relative"]
+        step["window_class"] = window.get("class")
+        if action == "click":
+            step["button"] = entry.get("button", "left")
+            step["count"] = entry.get("count", 1)
+    elif action == "scroll":
+        step["dy"] = entry.get("dy", 0)
+        step["dx"] = entry.get("dx", 0)
+    elif action == "type":
+        # The text itself is not in the log and must not be: the log records
+        # that typing happened and how much, never what was typed. So a typing
+        # step replays as a parameter the caller must supply, which is also
+        # what makes one recipe usable for more than one input.
+        step["param"] = None  # assigned when the recipe is assembled
+        step["length"] = entry.get("length")
+        step["method"] = entry.get("method", "clipboard")
+    elif action == "key":
+        step["chord"] = entry.get("chord")
+        step["semantic"] = entry.get("semantic")
+    elif action == "browser":
+        # The action, deliberately not the chord it resolved to this time. A
+        # keymap the user changes between recording and replay should move the
+        # recipe with it; a frozen chord would keep firing the old binding,
+        # which by then belongs to some other command.
+        step["semantic"] = entry.get("semantic")
+        step["browser"] = entry.get("browser")
+    elif action == "focus":
+        step["window_class"] = window.get("class")
+    return step
+
+
+def from_log(
+    entries: list[dict[str, Any]], name: str, site: str, task: str
+) -> dict[str, Any]:
+    steps = [s for s in (step_from_log(e) for e in entries) if s]
+    if not steps:
+        raise RecipeError("no replayable actions in that slice of the log")
+    typed = 0
+    for step in steps:
+        if step["action"] == "type":
+            typed += 1
+            step["param"] = f"text{typed}"
+    return {
+        "name": validate_name(name),
+        "site": site,
+        "task": task,
+        "created_at": time.time(),
+        "revision": 1,
+        "preconditions": [],
+        "steps": steps,
+        # A recipe without a check cannot tell a working replay from a replay
+        # that clicked into empty space, so the field is always present and
+        # unset rather than absent and forgotten.
+        "verify": None,
+        "history": [],
+        "reviewed_hash": None,
+    }
+
+
+def save(recipe: dict[str, Any]) -> Path:
+    """Write a recipe, carrying its previous approval forward untouched.
+
+    Approval attaches to a specific set of steps, and the stored hash is what
+    says which. Carrying it forward rather than clearing it means the refusal
+    can distinguish "never reviewed" from "reviewed, but not these steps" — and
+    a recipe whose steps are unchanged keeps its approval, however many times
+    it is re-saved.
+    """
+    path = path_for(recipe["name"])
+    if path.exists():
+        previous = load(recipe["name"])
+        recipe["revision"] = previous["revision"] + 1
+        recipe["history"] = previous.get("history", [])
+        recipe["reviewed_hash"] = previous.get("reviewed_hash")
+    path.write_text(json.dumps(recipe, indent=2))
+    return path
+
+
+def load(name: str) -> dict[str, Any]:
+    path = path_for(name)
+    if not path.is_file():
+        raise RecipeError(f"no recipe named {name!r}")
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RecipeError(f"{path}: {exc}") from exc
+
+
+def listing() -> list[dict[str, Any]]:
+    out = []
+    for path in sorted(store_dir().glob("*.json")):
+        try:
+            recipe = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        out.append(
+            {
+                "name": recipe.get("name", path.stem),
+                "site": recipe.get("site", ""),
+                "task": recipe.get("task", ""),
+                "revision": recipe.get("revision", 1),
+                "steps": len(recipe.get("steps", [])),
+                "reviewed": is_reviewed(recipe),
+            }
+        )
+    return out
+
+
+def is_reviewed(recipe: dict[str, Any]) -> bool:
+    return bool(recipe.get("reviewed_hash")) and recipe["reviewed_hash"] == content_hash(recipe)
+
+
+def approve(name: str) -> dict[str, Any]:
+    recipe = load(name)
+    recipe["reviewed_hash"] = content_hash(recipe)
+    path_for(name).write_text(json.dumps(recipe, indent=2))
+    return recipe
+
+
+def record_outcome(name: str, outcome: str, note: str = "") -> dict[str, Any]:
+    """Append what happened to a replay.
+
+    This history is what makes "you got that wrong last time, do it
+    differently" answerable: the next attempt starts from the recorded failure
+    rather than from nothing.
+    """
+    recipe = load(name)
+    recipe.setdefault("history", []).append(
+        {"at": time.time(), "revision": recipe["revision"], "outcome": outcome, "note": note}
+    )
+    path_for(name).write_text(json.dumps(recipe, indent=2))
+    return recipe
+
+
+def unreviewed_reason(recipe: dict[str, Any]) -> str | None:
+    """Why this recipe may not be replayed, or None if it may."""
+    if not recipe.get("reviewed_hash"):
+        return "it has never been reviewed"
+    if recipe["reviewed_hash"] != content_hash(recipe):
+        return "its steps changed since the review that approved them"
+    return None
+
+
+def _window_by_class(window_class: str, snap: dict[str, Any]) -> dict[str, Any]:
+    matches = [w for w in snap["windows"] if w["class"].lower() == (window_class or "").lower()]
+    if not matches:
+        raise RecipeError(f"no window of class {window_class!r} is open")
+    # Ties go to the most recently focused, which is the window a person
+    # replaying this would mean.
+    return min(matches, key=lambda w: w["focus_order"])
+
+
+def replay(
+    name: str,
+    cfg: dict[str, Any],
+    params: dict[str, str],
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Run a stored procedure, refusing anything unreviewed.
+
+    Pointer steps re-enter through the ordinary frame contract: a fresh capture
+    of the target window, then a click against that frame. Reusing the contract
+    rather than computing coordinates directly means a replay inherits every
+    staleness and denylist refusal instead of needing its own.
+    """
+    from . import actions, capture, frames, observe
+
+    recipe = load(name)
+    blocked = unreviewed_reason(recipe)
+    if blocked and not dry_run:
+        raise RecipeError(
+            f"refusing to replay {name!r}: {blocked}. "
+            f"Read it with `cu recipe show {name}` and approve with `cu recipe review {name}`."
+        )
+
+    performed = []
+    for index, step in enumerate(recipe["steps"], start=1):
+        action = step["action"]
+        if action == "focus":
+            snap = observe.snapshot()
+            window = _window_by_class(step["window_class"], snap)
+            performed.append(actions.focus(cfg, window, dry_run=dry_run))
+        elif action in {"click", "move"}:
+            snap = observe.snapshot()
+            window = _window_by_class(step["window_class"], snap)
+            frame = _capture_window(window, cfg)
+            image = frame["image_size"]
+            at = (step["relative"]["x"] * image["w"], step["relative"]["y"] * image["h"])
+            if action == "click":
+                performed.append(
+                    actions.click(
+                        cfg, frame["id"], at,
+                        button=step.get("button", "left"),
+                        count=step.get("count", 1),
+                        dry_run=dry_run,
+                    )
+                )
+            else:
+                performed.append(actions.move(cfg, frame["id"], at, dry_run=dry_run))
+        elif action == "scroll":
+            performed.append(
+                actions.scroll(
+                    cfg, dy=step.get("dy", 0), dx=step.get("dx", 0),
+                    frame_id=None, at=None, dry_run=dry_run,
+                )
+            )
+        elif action == "type":
+            param = step.get("param")
+            if param not in params:
+                raise RecipeError(
+                    f"step {index} types the parameter {param!r}, which was not "
+                    f"supplied; pass --param {param}=..."
+                )
+            performed.append(
+                actions.type_text(
+                    cfg, params[param], method=step.get("method", "clipboard"),
+                    dry_run=dry_run,
+                )
+            )
+        elif action == "key":
+            performed.append(
+                actions.key(
+                    cfg, action=step.get("semantic"), chord=step.get("chord"),
+                    dry_run=dry_run,
+                )
+            )
+        elif action == "browser":
+            from . import browser as browser_module
+
+            snap = observe.snapshot()
+            focused = snap["focused"]
+            if focused is None:
+                raise RecipeError(f"step {index} drives a browser, but nothing holds focus")
+            target = browser_module.for_window_class(focused["class"])
+            if target is None:
+                raise RecipeError(
+                    f"step {index} drives a browser, but the focused window "
+                    f"({focused['class']}) is not one"
+                )
+            performed.append(
+                actions.browser_action(cfg, target, step["semantic"], dry_run=dry_run)
+            )
+        else:
+            raise RecipeError(f"step {index} has unknown action {action!r}")
+
+    verified = check(recipe.get("verify"))
+    return {
+        "recipe": name,
+        "revision": recipe["revision"],
+        "steps": len(performed),
+        "verified": verified,
+        "dry_run": dry_run,
+    }
+
+
+def _capture_window(window: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    from . import capture, frames, observe
+
+    monitors = observe.monitors()
+    rect = capture.clamp(
+        window["logical_rect"], capture.sole_monitor(window["logical_rect"], monitors)["logical_rect"]
+    )
+    monitor = capture.sole_monitor(rect, monitors)
+    scratch = frames.store_dir() / ".pending.png"
+    scale = capture.scale_for(rect, monitor["scale"], capture.PROFILES["claude"]["max_long_edge"])
+    capture.grab_region(rect, scratch, scale)
+    frame = frames.new(
+        source={"type": "window", "name": window["class"]},
+        logical_rect=rect,
+        image_size=capture.size_of(scratch),
+        image_path=scratch,
+        monitor={"name": monitor["name"], "scale": monitor["scale"]},
+        window={
+            "address": window["address"],
+            "class": window["class"],
+            "title": window["title"],
+            "logical_rect": window["logical_rect"],
+        },
+    )
+    final = frames.path_for(frame["id"], ".png")
+    scratch.replace(final)
+    frame["path"] = str(final)
+    frames.save(frame)
+    return frame
+
+
+def check(verify: dict[str, Any] | None) -> bool | None:
+    """Decide whether a replay actually worked.
+
+    None means the recipe states no check, which is not the same as success —
+    a replay that clicked into empty space looks identical to one that worked
+    unless something says otherwise.
+    """
+    if not verify:
+        return None
+    from . import observe
+
+    snap = observe.snapshot()
+    kind = verify.get("kind")
+    if kind == "window-title":
+        needle = verify.get("contains", "").lower()
+        return any(needle in w["title"].lower() for w in snap["windows"])
+    if kind == "window-class":
+        needle = verify.get("contains", "").lower()
+        return any(needle in w["class"].lower() for w in snap["windows"])
+    raise RecipeError(f"unknown verification kind {kind!r}")

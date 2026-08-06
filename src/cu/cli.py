@@ -13,12 +13,14 @@ import sys
 from typing import Any
 
 from . import (
-    actions, browser, capture, checks, config, exits, frames, observe, uinput, wait,
+    actions, browser, capture, checks, config, exits, frames, observe, recipes,
+    uinput, wait,
 )
 from .browser import BrowserError
 from .capture import CaptureError
 from .config import ConfigError
 from .frames import FrameError
+from .recipes import RecipeError
 from .hypr import HyprError
 from .safety import Refused
 from .uinput import UinputError
@@ -266,6 +268,129 @@ def _render_action(result: dict[str, Any]) -> None:
     print(f"{mark}{result['action']} {detail}  [{where}]")
 
 
+def _read_log(cfg: dict[str, Any], count: int) -> list[dict[str, Any]]:
+    path = config.log_path(cfg)
+    if not path.is_file():
+        raise LookupError(f"no action log at {path}; nothing to promote")
+    entries = []
+    for line in path.read_text().splitlines():
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return entries[-count:]
+
+
+def cmd_recipe(args: argparse.Namespace) -> int:
+    cfg = config.load()
+
+    if args.subcommand == "list":
+        rows = recipes.listing()
+
+        def render(data: Any) -> None:
+            if not data["recipes"]:
+                print("no recipes stored")
+            for r in data["recipes"]:
+                mark = "reviewed" if r["reviewed"] else "UNREVIEWED"
+                print(f"{r['name']:<24} r{r['revision']:<3} {r['steps']:>2} steps  "
+                      f"{mark:<11} {r['site']} — {r['task']}")
+
+        _emit({"recipes": rows}, args.json, render)
+        return exits.OK
+
+    if args.subcommand == "save":
+        entries = _read_log(cfg, args.last)
+        recipe = recipes.from_log(entries, args.name, args.site or "", args.task or "")
+        path = recipes.save(recipe)
+        _emit(
+            recipe,
+            args.json,
+            lambda r: print(
+                f"saved {r['name']} r{r['revision']} — {len(r['steps'])} steps → {path}\n"
+                f"It is UNREVIEWED and will not replay until you read it "
+                f"(`cu recipe show {r['name']}`) and approve it."
+            ),
+        )
+        return exits.OK
+
+    recipe = recipes.load(args.name)
+
+    if args.subcommand == "show":
+        def render(r: Any) -> None:
+            state = "reviewed" if recipes.is_reviewed(r) else "UNREVIEWED"
+            print(f"{r['name']}  r{r['revision']}  [{state}]")
+            print(f"  site {r['site']!r}  task {r['task']!r}")
+            for index, step in enumerate(r["steps"], start=1):
+                print(f"  {index:>2}. {_describe_step(step)}")
+            if r.get("verify"):
+                print(f"  verify: {r['verify']}")
+            else:
+                print("  verify: none — a replay cannot report whether it worked")
+            for event in r.get("history", []):
+                print(f"  history: r{event['revision']} {event['outcome']} {event.get('note','')}")
+
+        _emit(recipe, args.json, render)
+        return exits.OK
+
+    if args.subcommand == "review":
+        blocked = recipes.unreviewed_reason(recipe)
+        if not args.approve:
+            print(f"{recipe['name']} r{recipe['revision']}: "
+                  f"{blocked or 'reviewed and replayable'}")
+            for index, step in enumerate(recipe["steps"], start=1):
+                print(f"  {index:>2}. {_describe_step(step)}")
+            if blocked:
+                print("\nRe-run with --approve once you have read every step above.")
+            return exits.OK
+        recipes.approve(args.name)
+        print(f"approved {recipe['name']} r{recipe['revision']}")
+        return exits.OK
+
+    if args.subcommand == "replay":
+        params = {}
+        for item in args.param or []:
+            key, _, value = item.partition("=")
+            if not _:
+                print(f"cu: --param takes name=value, got {item!r}", file=sys.stderr)
+                return exits.USAGE
+            params[key] = value
+        result = recipes.replay(args.name, cfg, params, dry_run=args.dry_run)
+        if not args.dry_run:
+            outcome = {True: "verified", False: "failed", None: "unverified"}[result["verified"]]
+            recipes.record_outcome(args.name, outcome)
+        _emit(
+            result,
+            args.json,
+            lambda r: print(
+                f"{'would replay' if r['dry_run'] else 'replayed'} {r['recipe']} "
+                f"r{r['revision']}: {r['steps']} steps, "
+                f"verification {'passed' if r['verified'] else 'failed' if r['verified'] is False else 'not stated'}"
+            ),
+        )
+        return exits.OK
+
+    return exits.USAGE
+
+
+def _describe_step(step: dict[str, Any]) -> str:
+    action = step["action"]
+    if action in {"click", "move"}:
+        rel = step["relative"]
+        return (f"{action} {step.get('button','')}{'' if action=='move' else 'x'+str(step.get('count',1))} "
+                f"at {rel['x']:.3f},{rel['y']:.3f} of {step['window_class']}").replace("  ", " ")
+    if action == "scroll":
+        return f"scroll dy {step.get('dy',0)} dx {step.get('dx',0)}"
+    if action == "type":
+        return f"type parameter {step.get('param')!r} ({step.get('length')} chars via {step.get('method')})"
+    if action == "key":
+        return f"key {step.get('semantic') or 'chord'} → {step.get('chord')}"
+    if action == "browser":
+        return f"browser action {step.get('semantic')!r} (re-resolved at replay)"
+    if action == "focus":
+        return f"focus a {step['window_class']} window"
+    return action
+
+
 def cmd_browser(args: argparse.Namespace) -> int:
     cfg = config.load()
     browsers = browser.discover()
@@ -338,12 +463,9 @@ def cmd_browser(args: argparse.Namespace) -> int:
         )
         return exits.TARGET_NOT_FOUND
 
-    result = actions.key(
-        cfg, action=None, chord=chord, backend=args.backend, dry_run=args.dry_run
+    result = actions.browser_action(
+        cfg, target, args.action, backend=args.backend, dry_run=args.dry_run
     )
-    result["browser"] = target["name"]
-    result["semantic"] = args.action
-    result["resolved_from"] = source
     _emit(
         result,
         args.json,
@@ -582,6 +704,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="compositor injection leaves sleeping monitors asleep",
     )
 
+    recipe = add_injecting("recipe", "save, review, and replay a procedure", cmd_recipe)
+    rsub = recipe.add_subparsers(dest="subcommand", required=True)
+
+    rlist = rsub.add_parser("list", help="every stored recipe and whether it is reviewed")
+    rsave = rsub.add_parser("save", help="promote recent actions from the log")
+    rsave.add_argument("name", help="lowercase name; it becomes the filename")
+    rsave.add_argument("--last", type=int, default=20, help="how many log entries to promote")
+    rsave.add_argument("--site", help="what site this is for")
+    rsave.add_argument("--task", help="what it accomplishes")
+    for name, help_text in (
+        ("show", "print every step"),
+        ("review", "read the steps, and approve them with --approve"),
+        ("replay", "run a reviewed recipe"),
+    ):
+        sub_parser = rsub.add_parser(name, help=help_text)
+        sub_parser.add_argument("name")
+        if name == "review":
+            sub_parser.add_argument(
+                "--approve", action="store_true", help="record that you have read every step"
+            )
+        if name == "replay":
+            sub_parser.add_argument(
+                "--param", action="append", metavar="NAME=VALUE",
+                help="supply a typed value; recipes never store the text itself",
+            )
+
     browsing = add_injecting(
         "browser", "a semantic browser action, resolved per browser", cmd_browser
     )
@@ -613,6 +761,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cu: refused: {exc.reason}", file=sys.stderr)
         print(f"cu: {exits.RESPONSE[exc.code]}", file=sys.stderr)
         return exc.code
+    except RecipeError as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        return exits.DENIED_BY_POLICY
     except BrowserError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.TARGET_NOT_FOUND
