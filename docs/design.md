@@ -518,8 +518,22 @@ enumerated rather than guessed at.
 **The abort mechanism.** The lockfile is `$XDG_RUNTIME_DIR/cu/abort` — session
 state that must not survive a reboot. `cu` only ever tests for it and never
 removes it; clearing it is a physical act by the user, which is what makes it a
-deadman switch rather than a suggestion. The keybind that drops it is still
-unchosen, against an already-crowded keymap.
+deadman switch rather than a suggestion.
+
+`escape` carries no binding at all in this session's keymap, so the abort takes
+the modifier shape already used for display control:
+
+```lua
+bind("SUPER + ALT + escape", hl.dsp.exec_cmd("touch $XDG_RUNTIME_DIR/cu/abort"),
+     { locked = true })
+bind("SUPER + CTRL + ALT + escape", hl.dsp.exec_cmd("rm -f $XDG_RUNTIME_DIR/cu/abort"),
+     { locked = true })
+```
+
+Two properties matter. `locked = true` keeps the abort reachable while the
+session is locked, which is when an unattended agent is least supervised. And
+clearing it is a *different chord* rather than a toggle: a toggle pressed twice
+in a panic would re-enable the thing being stopped.
 
 ## Implementation
 
@@ -560,8 +574,9 @@ developable against a screen the user is not sitting in front of.
 2. **AT-SPI coordinate space.** Whether the accessibility tree reports usable
    coordinates under Wayland with mixed output scales decides whether tier 2 is
    the backbone of the read path or a footnote.
-3. **Abort keybind.** Which key should the deadman switch be bound to, given
-   an already-crowded keymap?
+3. **Behavioral fingerprinting.** Instant warps between coordinates are a
+   signal in their own right. Interpolated movement with plausible timing
+   belongs to the input layer rather than the browser module, and is unbuilt.
 
 ## Shelved: a Hyprland plugin
 

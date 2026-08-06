@@ -22,6 +22,7 @@ from .config import ConfigError
 from .frames import FrameError
 from .recipes import RecipeError
 from .hypr import HyprError
+from . import safety
 from .safety import Refused
 from .uinput import UinputError
 
@@ -376,8 +377,8 @@ def _describe_step(step: dict[str, Any]) -> str:
     action = step["action"]
     if action in {"click", "move"}:
         rel = step["relative"]
-        return (f"{action} {step.get('button','')}{'' if action=='move' else 'x'+str(step.get('count',1))} "
-                f"at {rel['x']:.3f},{rel['y']:.3f} of {step['window_class']}").replace("  ", " ")
+        how = action if action == "move" else f"{step.get('button', 'left')} x{step.get('count', 1)}"
+        return f"{how} at {rel['x']:.3f},{rel['y']:.3f} of {step['window_class']}"
     if action == "scroll":
         return f"scroll dy {step.get('dy',0)} dx {step.get('dx',0)}"
     if action == "type":
@@ -388,6 +389,12 @@ def _describe_step(step: dict[str, Any]) -> str:
         return f"browser action {step.get('semantic')!r} (re-resolved at replay)"
     if action == "focus":
         return f"focus a {step['window_class']} window"
+    if action == "wait":
+        filters = " ".join(
+            f"{k} {v!r}" for k, v in (("class", step.get("class")), ("title", step.get("title")))
+            if v
+        )
+        return f"wait for {step['condition']} {filters} (up to {step.get('timeout', 30):g}s)"
     return action
 
 
@@ -478,6 +485,18 @@ def cmd_browser(args: argparse.Namespace) -> int:
 
 
 def cmd_wait(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    # Waiting is logged even though it injects nothing: a procedure that does
+    # not wait for the page it just asked for is the commonest way a replay
+    # acts on a screen that has not caught up yet.
+    record = {
+        "action": "wait",
+        "condition": args.condition,
+        "class": getattr(args, "class"),
+        "title": args.title,
+        "timeout": args.timeout,
+        "dry_run": False,
+    }
     try:
         result = wait.until(
             args.condition,
@@ -486,9 +505,12 @@ def cmd_wait(args: argparse.Namespace) -> int:
             timeout=args.timeout,
         )
     except wait.WaitTimeout as exc:
+        safety.record(cfg, {**record, "outcome": "timeout"})
         print(f"cu: {exc}", file=sys.stderr)
         print(f"cu: {exits.RESPONSE[exits.TIMED_OUT]}", file=sys.stderr)
         return exits.TIMED_OUT
+
+    safety.record(cfg, {**record, "outcome": "matched", "waited": result["waited"]})
 
     def render(r: Any) -> None:
         matched = r["matched"]

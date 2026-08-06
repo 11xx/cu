@@ -149,6 +149,49 @@ def session_unlocked() -> dict[str, Any]:
     return _check("session_unlocked", OK, "no lock screen running")
 
 
+def abort_flag() -> dict[str, Any]:
+    """A set abort flag refuses every injection, and is otherwise invisible.
+
+    Without this check the symptom is every input command failing with the same
+    code and no indication why — which is exactly the state a user leaves
+    behind after aborting an agent and walking away.
+    """
+    from . import config
+
+    try:
+        path = config.abort_path()
+    except config.ConfigError as exc:
+        return _check("abort_flag", FAIL, str(exc))
+    if path.exists():
+        return _check(
+            "abort_flag",
+            WARN,
+            f"set at {path}; every input command will refuse",
+            "The user clears it; cu never does.",
+        )
+    return _check("abort_flag", OK, "clear")
+
+
+def key_dispatcher() -> dict[str, Any]:
+    """The compositor keyboard backend, which drives a sleeping desktop.
+
+    Optional rather than required: without it uinput still works, and only the
+    quiet path is unavailable.
+    """
+    try:
+        kind = hypr.lua("return type(hl.dsp.send_key_state)")
+    except hypr.HyprError as exc:
+        return _check("key_dispatcher", WARN, str(exc), "`--backend compositor` unavailable.")
+    if kind != "function":
+        return _check(
+            "key_dispatcher",
+            WARN,
+            f"hl.dsp.send_key_state is {kind!r}",
+            "`--backend compositor` unavailable; uinput still works.",
+        )
+    return _check("key_dispatcher", OK, "hl.dsp.send_key_state present")
+
+
 def binaries() -> list[dict[str, Any]]:
     required = {"grim": "Screen capture is impossible without it."}
     optional = {
@@ -185,8 +228,8 @@ def runtime_dir() -> dict[str, Any]:
 def run_all() -> list[dict[str, Any]]:
     results = [compositor()]
     if results[0]["status"] != FAIL:
-        results += [lua_api(), event_socket()]
-    results += [runtime_dir(), uinput(), xremap_filter(), session_unlocked()]
+        results += [lua_api(), key_dispatcher(), event_socket()]
+    results += [runtime_dir(), uinput(), xremap_filter(), session_unlocked(), abort_flag()]
     results += binaries()
     return results
 

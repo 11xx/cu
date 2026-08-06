@@ -120,6 +120,13 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
         step["browser"] = entry.get("browser")
     elif action == "focus":
         step["window_class"] = window.get("class")
+    elif action == "wait":
+        if entry.get("outcome") == "timeout":
+            return None  # a wait that never matched is not part of a working run
+        step["condition"] = entry.get("condition")
+        step["class"] = entry.get("class")
+        step["title"] = entry.get("title")
+        step["timeout"] = entry.get("timeout", 30.0)
     return step
 
 
@@ -258,7 +265,7 @@ def replay(
     rather than computing coordinates directly means a replay inherits every
     staleness and denylist refusal instead of needing its own.
     """
-    from . import actions, capture, frames, observe
+    from . import actions, observe
 
     recipe = load(name)
     blocked = unreviewed_reason(recipe)
@@ -335,6 +342,21 @@ def replay(
             performed.append(
                 actions.browser_action(cfg, target, step["semantic"], dry_run=dry_run)
             )
+        elif action == "wait":
+            from . import wait as wait_module
+
+            if dry_run:
+                performed.append({"action": "wait", "dry_run": True})
+            else:
+                try:
+                    performed.append(
+                        wait_module.until(
+                            step["condition"], cls=step.get("class"),
+                            title=step.get("title"), timeout=step.get("timeout", 30.0),
+                        )
+                    )
+                except wait_module.WaitTimeout as exc:
+                    raise RecipeError(f"step {index}: {exc}") from exc
         else:
             raise RecipeError(f"step {index} has unknown action {action!r}")
 
