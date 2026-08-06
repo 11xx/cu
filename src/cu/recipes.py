@@ -373,6 +373,9 @@ def replay(
 def _capture_window(window: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
     from . import capture, frames, observe
 
+    # Replays capture per pointer step, so without this the store grows for the
+    # length of the replay and is only ever trimmed by the next `cu shot`.
+    frames.collect()
     monitors = observe.monitors()
     rect = capture.clamp(
         window["logical_rect"], capture.sole_monitor(window["logical_rect"], monitors)["logical_rect"]

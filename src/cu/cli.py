@@ -464,8 +464,8 @@ def cmd_browser(args: argparse.Namespace) -> int:
 
     if window is None:
         print(
-            f"cu: --browser names a browser but no window of it holds focus; "
-            f"focus one first",
+            "cu: --browser names a browser but no window of it holds focus; "
+            "focus one first",
             file=sys.stderr,
         )
         return exits.TARGET_NOT_FOUND
@@ -738,7 +738,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS)
         return p
 
-    rlist = add_recipe("list", "every stored recipe and whether it is reviewed")
+    add_recipe("list", "every stored recipe and whether it is reviewed")
     rsave = add_recipe("save", "promote recent actions from the log")
     rsave.add_argument("name", help="lowercase name; it becomes the filename")
     rsave.add_argument("--last", type=int, default=20, help="how many log entries to promote")
