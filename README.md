@@ -23,6 +23,7 @@ bin/cu move  --frame f3 --at 412,300 # warp the pointer to a frame coordinate
 bin/cu click --frame f3 --at 412,300 # warp, check the target, press and release
 bin/cu scroll --dy -3                # wheel where the pointer already is
 bin/cu type 'hello'                  # clipboard by default, --method keys to synthesize
+bin/cu type 'hello' --verify         # read the field back and confirm it arrived
 bin/cu key --action paste            # a semantic action, resolved per application
 bin/cu browser list                  # installed browsers and what each resolves
 bin/cu browser focus-urlbar          # a semantic browser action, never a chord

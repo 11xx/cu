@@ -17,6 +17,7 @@ FOCUS_CHANGED = 21
 TARGET_NOT_FOUND = 22
 DEGENERATE_AIM = 23
 TIMED_OUT = 24
+VERIFY_FAILED = 25
 DENIED_BY_POLICY = 30
 ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
@@ -34,6 +35,7 @@ RESPONSE = {
     TARGET_NOT_FOUND: "The named window, output, or element is gone. Re-observe.",
     DEGENERATE_AIM: "The region spans outputs or falls outside any window. Widen to --window or --output.",
     TIMED_OUT: "The awaited event did not arrive in time. Re-observe: it may have happened before the wait started, or not at all.",
+    VERIFY_FAILED: "The text sent did not arrive intact. Read the field before retyping; retyping blindly can duplicate what did land.",
     DENIED_BY_POLICY: "Refused by the denylist or a locked session. Do not retry; tell the user.",
     ABORTED_BY_USER: "The user aborted. Stop. Do not retry, and do not attempt to clear the abort.",
     HUMAN_ACTIVE: "The user is moving the physical mouse. Yield; wait for them to stop before retrying.",

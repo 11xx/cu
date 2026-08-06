@@ -59,6 +59,7 @@ Read them; they say what to do next, and the response differs per code.
 | 22 | Window, output, or browser is gone | Re-observe |
 | 23 | Region spans outputs or is off-screen | Widen to `--window` or `--output` |
 | 24 | Awaited event never arrived | Re-observe; it may have happened first |
+| 25 | Typed text did not arrive intact | Read the field; do **not** blindly retype |
 | 30 | Denylist, locked session, or unreviewed recipe | Do not retry; tell the user |
 | **40** | **The user aborted** | **Stop. Do not retry. Do not try to clear it.** |
 | 41 | The user is moving the mouse | Yield; wait before retrying |
@@ -74,10 +75,16 @@ flag or retry past it defeats the only interlock they hold.
 
 ```sh
 cu type 'some text'            # clipboard by default; restores what was there
+cu type 'some text' --verify   # read the field back and confirm it arrived
 cu type 'x' --method keys      # per-character, for apps that reject paste
 cu key --action paste          # semantic, resolved for the focused application
 cu key --chord ctrl+alt+shift+f4
 ```
+
+Use `--verify` for anything that matters. Without it, a paste an application
+silently rejects is indistinguishable from success. It answers `ok`,
+`unverified` (the field could not be read back — not the same as success), or
+exit 25.
 
 **Do not assume a chord means what it does elsewhere.** On this desktop keys
 pass through a remapping layer and then each application's own bindings.

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from cu import compositor, config, exits, observe, safety, uinput
+from cu import actions, compositor, config, exits, observe, safety, uinput
 from cu.safety import Refused
 
 CFG = config.DEFAULTS
@@ -255,3 +255,40 @@ def test_global_flags_are_accepted_on_either_side_of_a_subcommand(argv):
 
     args = cli.build_parser().parse_args(argv)
     assert getattr(args, "json", False) or getattr(args, "dry_run", False)
+
+
+# --- reading typed text back ----------------------------------------------
+
+
+def test_text_that_arrived_intact_verifies():
+    assert actions.compare_text("hello", "hello")["status"] == "ok"
+
+
+def test_a_field_that_already_held_text_still_verifies():
+    """select-all returns the whole field, so containment is the right test."""
+    assert actions.compare_text("hello", "say hello there")["status"] == "ok"
+
+
+def test_dropped_leading_characters_are_a_mismatch():
+    """The failure the settle delay causes: the beginning is eaten and the
+    rest lands, which looks like success at the call site."""
+    result = actions.compare_text("hello", "llo")
+    assert result["status"] == "mismatch"
+    assert "agree for the first 0" in result["detail"]
+
+
+def test_a_truncated_tail_reports_how_far_they_agreed():
+    result = actions.compare_text("hello world", "hello")
+    assert result["status"] == "mismatch"
+    assert "agree for the first 5" in result["detail"]
+
+
+def test_an_empty_read_back_is_unverified_not_a_failure():
+    """A field that cannot be read back must not be reported as verified, and
+    must not be reported as a failure either."""
+    assert actions.compare_text("hello", "")["status"] == "unverified"
+
+
+def test_verification_failure_is_not_retryable():
+    """Retyping blindly can duplicate whatever did land."""
+    assert exits.VERIFY_FAILED not in exits.RETRYABLE

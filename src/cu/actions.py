@@ -275,6 +275,7 @@ def type_text(
     method: str = "clipboard",
     restore_clipboard: bool = True,
     backend: str | None = None,
+    verify: bool = False,
     dry_run: bool,
 ) -> dict[str, Any]:
     """Enter text into whatever holds focus.
@@ -325,6 +326,8 @@ def type_text(
             # The paste has to be consumed before the clipboard reverts;
             # restoring too eagerly pastes the *previous* contents.
             time.sleep(0.12)
+            if verify:
+                result["verified"] = read_back(cfg, window, text, backend)
         finally:
             if previous is not None:
                 _clipboard_write(previous)
@@ -341,9 +344,85 @@ def type_text(
              for name, shifted in (uinput.char_to_key(c) for c in text)],
             backend,
         )
+        if verify:
+            previous = _clipboard_read() if restore_clipboard else None
+            try:
+                result["verified"] = read_back(cfg, window, text, backend)
+            finally:
+                if previous is not None:
+                    _clipboard_write(previous)
 
     safety.record(cfg, result)
+    if verify and result.get("verified", {}).get("status") == "mismatch":
+        raise Refused(
+            exits.VERIFY_FAILED,
+            f"{result['verified']['detail']}. The text was sent but did not "
+            "arrive intact; read the field before retyping.",
+        )
     return result
+
+
+def read_back(
+    cfg: dict[str, Any],
+    window: dict[str, Any],
+    expected: str,
+    backend: str | None,
+) -> dict[str, Any]:
+    """Read a field's contents back and compare them to what was sent.
+
+    Silent partial input is the failure both text methods share: a paste an
+    application rejects, or a synthesized run whose leading characters were
+    dropped, look exactly like success at the call site. Reading the field back
+    is the only thing that distinguishes them.
+
+    The comparison is containment rather than equality, because select-all
+    returns whatever else the field already held. And a field that cannot be
+    read back reports `unverified` rather than `ok` — claiming verification
+    that did not happen would be worse than not offering it.
+    """
+    select = config.chord_for(cfg, window["class"], "select-all")
+    copy = config.chord_for(cfg, window["class"], "copy")
+    if not select or not copy:
+        return {
+            "status": "unverified",
+            "detail": f"no select-all or copy binding known for {window['class']}",
+        }
+    _clipboard_write(b"")
+    send_chords(cfg, [select, copy], backend)
+    time.sleep(0.12)
+    got = (_clipboard_read() or b"").decode(errors="replace")
+    return compare_text(expected, got)
+
+
+def compare_text(expected: str, got: str) -> dict[str, Any]:
+    """Judge a read-back against what was sent.
+
+    Containment rather than equality, because select-all returns whatever else
+    the field already held — a URL bar with existing text is not a failure. The
+    count of leading characters that agree is reported because it distinguishes
+    the two ways this goes wrong: nothing arrived, or the beginning was eaten
+    while the rest landed.
+    """
+    if not got:
+        return {
+            "status": "unverified",
+            "detail": "the field returned nothing; it may not support select-all",
+        }
+    if expected in got:
+        return {"status": "ok", "detail": f"field contains all {len(expected)} characters"}
+    shared = 0
+    for sent, arrived in zip(expected, got):
+        if sent != arrived:
+            break
+        shared += 1
+    return {
+        "status": "mismatch",
+        "detail": (
+            f"sent {len(expected)} characters, field holds {len(got)}; "
+            f"they agree for the first {shared}"
+        ),
+        "got_length": len(got),
+    }
 
 
 def browser_action(

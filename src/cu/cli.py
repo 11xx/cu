@@ -138,14 +138,17 @@ def cmd_shot(args: argparse.Namespace) -> int:
     source: dict[str, Any]
     window = None
 
-    if args.output:
+    if args.landmark and (args.output or args.region):
+        raise ValueError("--landmark aims within a window; it cannot combine with --output or --region")
+
+    if args.output and not args.landmark:
         monitor = next((m for m in monitors if m["name"] == args.output), None)
         if monitor is None:
             print(f"cu: no such output: {args.output}", file=sys.stderr)
             return exits.TARGET_NOT_FOUND
         rect = monitor["logical_rect"]
         source = {"type": "output", "name": monitor["name"]}
-    elif args.region:
+    elif args.region and not args.landmark:
         rect = _parse_region(args.region)
         monitor = capture.sole_monitor(rect, monitors)
         rect = capture.clamp(rect, monitor["logical_rect"])
@@ -288,6 +291,9 @@ def _render_action(result: dict[str, Any]) -> None:
         if result["chord"]:
             detail += f" ({result['chord']})"
         detail += f" [{result['backend']}]"
+        checked = result.get("verified")
+        if checked:
+            detail += f" — {checked['status']}: {checked['detail']}"
     else:
         detail = f"{result['semantic'] or 'chord'} → {result['chord']}"
         if result["repeat"] > 1:
@@ -749,6 +755,7 @@ def cmd_type(args: argparse.Namespace) -> int:
         method=args.method,
         restore_clipboard=not args.no_restore,
         backend=args.backend,
+        verify=args.verify,
         dry_run=args.dry_run,
     )
     _emit(result, args.json, _render_action)
@@ -797,7 +804,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     target.add_argument("--output", metavar="NAME", help="a whole monitor")
     target.add_argument("--region", metavar="'x,y wxh'", help="an arbitrary strip")
-    target.add_argument(
+    # --landmark is deliberately outside the mutually exclusive group: it names
+    # *what region* while --window names *which window*, so they compose. With
+    # several windows of one class open, that pairing is the only way to say
+    # which one the landmark applies to.
+    shot.add_argument(
         "--landmark",
         metavar="APP/NAME",
         help="a remembered region of a window; aims the capture, never a click",
@@ -912,6 +923,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("clipboard", "keys"),
         default="clipboard",
         help="clipboard is layout-independent; keys synthesizes each character",
+    )
+    typing.add_argument(
+        "--verify",
+        action="store_true",
+        help="read the field back and confirm the text arrived intact",
     )
     typing.add_argument(
         "--backend",

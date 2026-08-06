@@ -279,9 +279,18 @@ fight for the pointer.
 **Append-only action log**, with `--dry-run` producing the same log without
 injecting.
 
-**Verify what was typed.** After a text entry into a field whose contents can
-be read back, compare. Silent partial input is the failure mode that clipboard
-and keycode paths share.
+**Verify what was typed.** `cu type --verify` selects all, copies, and compares
+the field against what was sent. Silent partial input is the failure mode that
+the clipboard and keycode paths share: a paste an application rejects and a
+synthesized run whose leading characters were dropped both look exactly like
+success at the call site.
+
+Three outcomes, and the third is why this is worth having. The comparison is
+containment rather than equality, since select-all returns whatever else the
+field held. A field that cannot be read back reports **unverified** rather than
+ok — claiming a verification that did not happen would be worse than not
+offering one. A genuine disagreement is `VERIFY_FAILED`, which is deliberately
+*not* retryable: retyping blindly duplicates whatever did land.
 
 ## Testing without touching the user's screen
 
