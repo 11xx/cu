@@ -478,11 +478,29 @@ daemonless design holds** — the earlier worry that per-invocation device
 creation would force a resident process does not survive measurement.
 
 Two consequences do follow. **Batching matters**: `cu type` of a long string
-pays the ~100 ms once, whereas fifty separate `cu key` calls pay it fifty
-times, so composite operations belong inside one invocation. And the ~100 ms is
-not the kernel or the compositor — both are single-digit milliseconds — so it
-is likely a settle delay inside the input library. Worth one look during
-implementation, since removing it would cut input latency by three quarters.
+pays the device cost once, whereas fifty separate `cu key` calls pay it fifty
+times, so composite operations belong inside one invocation.
+
+And the settle delay turned out to be **load-bearing rather than removable**.
+Building the device costs about 30 ms of ioctls; the rest is a deliberate pause
+before the first event, and cutting it silently loses the *leading* keystrokes
+of every command. Typing a marker immediately after construction, four trials
+per setting:
+
+| Settle | Markers arriving intact |
+| --- | --- |
+| 0 ms | 0 of 4 |
+| 5 ms | 0 of 4 |
+| 10 ms | 2 of 4 |
+| 20 ms | 3 of 4 |
+| 40 ms | 4 of 4 |
+
+The kernel accepts those events and the compositor discards them, because it
+has not finished enumerating the device — so the failure is silent, partial,
+and looks like an application ignoring input. 40 ms is the first value with no
+losses and is the shipped default, tunable as `input.settle_ms`. This is the
+single clearest argument against shaving per-invocation cost by reflex: the
+100 ms was doing something.
 
 ## Seams to resolve before building
 

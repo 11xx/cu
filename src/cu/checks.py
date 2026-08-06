@@ -8,6 +8,7 @@ releases.
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 from pathlib import Path
@@ -96,8 +97,16 @@ def uinput() -> dict[str, Any]:
     return _check("uinput", OK, f"writable as uid {os.getuid()}, no root needed")
 
 
+@functools.cache
 def _processes() -> list[tuple[int, list[str]]]:
-    """Every readable process as (pid, argv). Ignores races against exiting pids."""
+    """Every readable process as (pid, argv). Ignores races against exiting pids.
+
+    Cached because `cu` is a one-shot process and two guards need this on every
+    injection — the remapper filter and the lock-screen check. Scanning /proc
+    twice cost about half the latency of a dry-run command, and re-reading it
+    would not be more correct: both guards are meant to describe the same
+    instant, and a second scan could report a different one.
+    """
     found = []
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
