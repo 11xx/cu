@@ -28,10 +28,19 @@ bin/cu browser list                  # installed browsers and what each resolves
 bin/cu browser focus-urlbar          # a semantic browser action, never a chord
 bin/cu recipe save open-url --last 4 # promote a successful run from the log
 bin/cu recipe replay open-url --param text1=example.com
+
+bin/cu know set zen urlbar --rect 0.1,0.02,0.6,0.04   # remember where to look
+bin/cu shot --landmark zen/urlbar    # aim a capture by what a past run learned
+bin/cu sandbox create                # a headless output, when you want one
 ```
 
 Every injecting command takes `--dry-run`, which runs every interlock and
 writes the same log entry without emitting a single event.
+
+`cu` acts on the **visible desktop** by default — a bare `cu shot` captures the
+focused window on a real monitor, and nothing selects a headless output on its
+own. Being watchable is a safety property: `cu sandbox` exists so that working
+where nobody can see is a deliberate, named act.
 
 All accept `--json`. `bin/cu` is a plain command — it resolves `uv` itself, so
 a caller needs no knowledge of the Python underneath.
@@ -44,7 +53,8 @@ the image depicts and its pixel size. Later commands take coordinates as
 
 `doctor`, `observe`, `shot`, `focus`, and the input commands — `move`, `click`,
 `scroll`, `type`, `key` — are implemented, with the safety interlocks, as is
-`wait`, `browser`, and `recipe`. Every command in the design is now built — see
+`wait`, `browser`, `recipe`, `know`, and `sandbox`. Every command in the design
+is built — see
 [docs/design.md](docs/design.md) for the command surface and build order, and
 [docs/environment.md](docs/environment.md) for the verified host facts the
 design rests on.

@@ -35,5 +35,15 @@ and then each application's bindings. Prefer `--action`. A code 50 means the
 binding is genuinely unknown, and guessing a default would silently perform a
 different command.
 
+`cu know` carries what earlier runs learned about an application, and
+`cu shot --landmark app/name` aims a capture from it. A landmark says where to
+look, never where to click: read the pixels and act through the frame. Record
+landmarks and notes as you discover them, and `cu know confirm`/`miss` after
+using one.
+
+`cu` aims at the visible desktop, which is what lets the user watch and stop
+you. `cu sandbox create` is the explicit way to work on a headless output; say
+so when you do, and remove it afterwards.
+
 Every injecting command takes `--dry-run`. Recipes do not replay until a human
 has read and approved them; never approve on the user's behalf.

@@ -222,6 +222,24 @@ itself. `--window active` stays the recommended first call.
 "Whatever works here, safely" is the requirement that most shapes this design,
 because the target is a live desktop with the user sitting at it.
 
+**Visible by default, and never headless by accident.** Every command aims at
+the screen the user is looking at: a bare `cu shot` captures the focused window
+on a real monitor, and nothing selects a headless output on its own. This is a
+safety property, not an implementation detail — a person watching an agent
+drive their desktop can see it going wrong and stop it, which is the cheapest
+and fastest interlock in the system, and the only one that needs no code to
+work. Somewhere invisible is where an agent's mistakes get expensive.
+
+Headless outputs remain the right place to *develop* the input path, so they
+are reachable through `cu sandbox create` — a command that names what it is
+doing — rather than by improvising `hyprctl output` calls. `cu sandbox remove`
+refuses anything but a headless output, because the compositor's own command
+would take away a physical monitor and blank the desk.
+
+The same reasoning bounds the compositor keyboard backend. Working while the
+displays sleep is useful and it is also, by construction, working where nobody
+can see; that is why it is opt-in per command and never the default.
+
 **Assertion at injection time, on whichever question the command depends on.**
 Every input command re-checks the world immediately before injecting rather
 than when the action was planned, but the two kinds of command depend on
@@ -438,6 +456,36 @@ which makes them a security boundary rather than a cache. They are reviewable
 before first replay, stored with a content hash, and re-reviewed when that hash
 changes. A stored recipe must never be able to change silently.
 
+## Learned knowledge: cutting the second visit down
+
+Finding a control costs a full-window capture, a model's attention, and often
+several attempts. Keeping that is worth as much as keeping a successful run:
+the second visit to a site should start from "the search box is about here"
+rather than from nothing.
+
+This is a different thing from a recipe, and the difference is what makes it
+safe. A recipe is a whole procedure, human-reviewed, replayed as a unit.
+Knowledge is a *fact* about an application — where a control sits, which chord
+an action needs, that a dialog must be dismissed before anything else responds
+— written automatically by whatever ran last, with nobody reviewing it.
+
+**So a landmark says where to look, never where to click.** It resolves to a
+capture, not to a coordinate an injection may use. `cu shot --landmark
+zen/urlbar` derives a region from the window's geometry *now* and the model
+reads those pixels before anything acts on them. Knowledge collapses the
+search; the frame contract still decides the coordinate.
+
+That boundary is the entire argument. An ungated store that could aim a click
+would reintroduce precisely the failure this project exists to prevent — a
+remembered position whose control has moved, clicked confidently, landing on
+something and reporting success.
+
+Positions are stored window-relative for the same reason recipes store them
+that way, and each landmark carries how often it was confirmed or missed. A
+landmark that keeps missing belongs to an application that changed, and the
+counters make that visible rather than letting it quietly cost an extra capture
+on every run.
+
 ## Command surface
 
 The whole contract, in one place. Everything takes `--json` and `--dry-run`.
@@ -456,6 +504,8 @@ The whole contract, in one place. Everything takes `--json` and `--dry-run`.
 | `cu key` | A semantic action, or a literal chord | yes |
 | `cu browser` | Semantic browser actions, resolved per browser | yes |
 | `cu recipe` | Save, list, review, and replay a stored procedure | via replay |
+| `cu know` | What past runs learned about an application; aims captures only | no |
+| `cu sandbox` | Create and remove headless outputs, explicitly | no |
 
 `observe`, `shot`, `wait`, and `focus` never touch the input path at all, which
 is what makes the read-heavy loop cheap and safe. `focus` earns its place there

@@ -13,14 +13,16 @@ import sys
 from typing import Any
 
 from . import (
-    actions, browser, capture, checks, config, exits, frames, observe, recipes,
-    uinput, wait,
+    actions, browser, capture, checks, config, exits, frames, knowledge, observe,
+    recipes, sandbox, uinput, wait,
 )
 from .browser import BrowserError
 from .capture import CaptureError
 from .config import ConfigError
 from .frames import FrameError
+from .knowledge import KnowledgeError
 from .recipes import RecipeError
+from .sandbox import SandboxError
 from .hypr import HyprError
 from . import safety
 from .safety import Refused
@@ -148,6 +150,30 @@ def cmd_shot(args: argparse.Namespace) -> int:
         monitor = capture.sole_monitor(rect, monitors)
         rect = capture.clamp(rect, monitor["logical_rect"])
         source = {"type": "region", "name": monitor["name"]}
+    elif args.landmark:
+        # A landmark aims the capture and nothing else. It resolves against the
+        # window's geometry *now*, so a moved window yields a correctly-aimed
+        # strip rather than a confidently wrong one, and the model still reads
+        # the pixels before anything acts on them.
+        app, _, name = args.landmark.partition("/")
+        if not name:
+            raise ValueError("--landmark takes 'app/name', e.g. 'zen/urlbar'")
+        # With several windows of one application open, the one being worked
+        # in is the one that holds focus — so an unqualified landmark means
+        # "this window", not "some window of this class", which would be
+        # ambiguous exactly when it matters.
+        focused = snap["focused"]
+        if args.window:
+            window = _resolve_window(args.window, snap)
+        elif focused and focused["class"].lower() == app.lower():
+            window = _resolve_window(focused["address"], snap)
+        else:
+            window = _resolve_window(app, snap)
+        mark = knowledge.get_landmark(app, name, args.context)
+        rect = knowledge.to_logical(mark, window)
+        monitor = capture.sole_monitor(rect, monitors)
+        rect = capture.clamp(rect, monitor["logical_rect"])
+        source = {"type": "landmark", "name": f"{app}/{name}"}
     else:
         window = _resolve_window(args.window or "active", snap)
         rect = window["logical_rect"]
@@ -398,6 +424,143 @@ def _describe_step(step: dict[str, Any]) -> str:
     return action
 
 
+def cmd_sandbox(args: argparse.Namespace) -> int:
+    """Headless outputs, created and removed explicitly.
+
+    `cu` works on the visible desktop by default and this is the only way to
+    ask for anywhere else, which keeps "nobody can see this" a deliberate act
+    rather than something an agent drifts into.
+    """
+    if args.subcommand == "create":
+        monitor = sandbox.create()
+        _emit(
+            monitor,
+            args.json,
+            lambda m: print(
+                f"{m['name']}  scale {m['scale']}  logical "
+                f"{fmt_rect(m['logical_rect'])}  workspace {m['active_workspace']}\n"
+                f"  Nothing on this output is visible to the user. Remove it when done."
+            ),
+        )
+        return exits.OK
+
+    if args.subcommand == "list":
+        found = sandbox.existing()
+        _emit(
+            {"headless": found},
+            args.json,
+            lambda d: print(
+                "\n".join(
+                    f"{m['name']}  scale {m['scale']}  logical {fmt_rect(m['logical_rect'])}"
+                    for m in d["headless"]
+                )
+                or "no headless outputs"
+            ),
+        )
+        return exits.OK
+
+    removed = sandbox.remove_all() if args.all else [args.name] if args.name else []
+    if not removed and not args.all:
+        print("cu: name an output to remove, or pass --all", file=sys.stderr)
+        return exits.USAGE
+    if args.name and not args.all:
+        sandbox.remove(args.name)
+    _emit(
+        {"removed": removed},
+        args.json,
+        lambda d: print(f"removed {', '.join(d['removed']) or 'nothing'}"),
+    )
+    return exits.OK
+
+
+def cmd_know(args: argparse.Namespace) -> int:
+    if args.subcommand == "list":
+        rows = knowledge.listing()
+        _emit(
+            {"applications": rows},
+            args.json,
+            lambda d: print(
+                "\n".join(
+                    f"{r['app']:<24} {r['landmarks']:>3} landmarks  {r['notes']:>3} notes"
+                    for r in d["applications"]
+                )
+                or "nothing learned yet"
+            ),
+        )
+        return exits.OK
+
+    if args.subcommand == "show":
+        record = knowledge.load(args.app)
+
+        def render(r: Any) -> None:
+            print(f"{r['app']}")
+            for key, mark in sorted(r.get("landmarks", {}).items()):
+                rect = mark["rect"]
+                seen = f"{mark.get('confirmed', 0)}✓/{mark.get('missed', 0)}✗"
+                print(
+                    f"  {key:<28} {rect['x']:.3f},{rect['y']:.3f} "
+                    f"{rect['w']:.3f}x{rect['h']:.3f}  {seen:<8} {mark.get('note', '')}"
+                )
+            for note in r.get("notes", []):
+                scope = f"[{note['context']}] " if note.get("context") else ""
+                print(f"  note: {scope}{note['text']}")
+
+        _emit(record, args.json, render)
+        return exits.OK
+
+    if args.subcommand == "set":
+        rect = _parse_landmark_rect(args.rect)
+        mark = knowledge.set_landmark(
+            args.app, args.name, rect, context=args.context, note=args.note or ""
+        )
+        _emit(
+            mark,
+            args.json,
+            lambda m: print(f"learned {args.app}/{args.name}: {m['rect']}"),
+        )
+        return exits.OK
+
+    if args.subcommand == "note":
+        entry = knowledge.add_note(args.app, args.text, context=args.context)
+        _emit(entry, args.json, lambda e: print(f"noted for {args.app}: {e['text']}"))
+        return exits.OK
+
+    if args.subcommand in {"confirm", "miss"}:
+        mark = knowledge.score(
+            args.app, args.name, args.subcommand == "confirm", context=args.context
+        )
+        _emit(
+            mark,
+            args.json,
+            lambda m: print(
+                f"{args.app}/{args.name}: {m.get('confirmed', 0)} confirmed, "
+                f"{m.get('missed', 0)} missed"
+            ),
+        )
+        return exits.OK
+
+    if args.subcommand == "forget":
+        message = knowledge.forget(args.app, args.name, context=args.context)
+        _emit({"message": message}, args.json, lambda d: print(d["message"]))
+        return exits.OK
+
+    return exits.USAGE
+
+
+def _parse_landmark_rect(text: str) -> dict[str, float]:
+    """Accept a point or a box, both as fractions of the window."""
+    parts = [float(p) for p in text.replace(",", " ").split() if p]
+    if len(parts) == 2:
+        # A point becomes a small box, because a capture needs an area and a
+        # landmark is a place to look rather than a pixel to hit.
+        x, y = parts
+        return {"x": max(x - 0.06, 0.0), "y": max(y - 0.03, 0.0), "w": 0.12, "h": 0.06}
+    if len(parts) == 4:
+        x, y, w, h = parts
+        return {"x": x, "y": y, "w": w, "h": h}
+    raise ValueError(f"--rect takes 'x,y' or 'x,y,w,h' as fractions, got {text!r}")
+
+
 def cmd_browser(args: argparse.Namespace) -> int:
     cfg = config.load()
     browsers = browser.discover()
@@ -634,6 +797,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     target.add_argument("--output", metavar="NAME", help="a whole monitor")
     target.add_argument("--region", metavar="'x,y wxh'", help="an arbitrary strip")
+    target.add_argument(
+        "--landmark",
+        metavar="APP/NAME",
+        help="a remembered region of a window; aims the capture, never a click",
+    )
+    shot.add_argument("--context", metavar="NAME", help="scope a landmark, e.g. a site")
     shot.add_argument(
         "--for",
         dest="profile",
@@ -646,6 +815,46 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="reuse the previous frame when the pixels are identical",
     )
+
+    sbox = add("sandbox", "create and remove headless outputs, explicitly", cmd_sandbox)
+    ssub = sbox.add_subparsers(dest="subcommand", required=True)
+    for name, help_text in (
+        ("create", "add a headless output nobody can see"),
+        ("list", "headless outputs that exist"),
+        ("remove", "take one away; refuses anything but a headless output"),
+    ):
+        sp = ssub.add_parser(name, help=help_text)
+        sp.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+        if name == "remove":
+            sp.add_argument("name", nargs="?", help="which output")
+            sp.add_argument("--all", action="store_true", help="every headless output")
+
+    know = add("know", "what past runs learned about an application", cmd_know)
+    ksub = know.add_subparsers(dest="subcommand", required=True)
+    for name, help_text in (
+        ("list", "applications with stored knowledge"),
+        ("show", "landmarks and notes for one application"),
+        ("set", "record where something is, as a fraction of the window"),
+        ("note", "record a fact that has no coordinate"),
+        ("confirm", "the landmark pointed at the right thing"),
+        ("miss", "it did not"),
+        ("forget", "drop a landmark, or everything for an application"),
+    ):
+        kp = ksub.add_parser(name, help=help_text)
+        kp.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+        if name != "list":
+            kp.add_argument("app", help="window class, or any name you key it by")
+        if name in {"set", "confirm", "miss"}:
+            kp.add_argument("name", help="what the landmark is called")
+        if name == "forget":
+            kp.add_argument("name", nargs="?", help="omit to forget the application")
+        if name == "set":
+            kp.add_argument("--rect", required=True, metavar="X,Y[,W,H]",
+                            help="fractions of the window")
+            kp.add_argument("--note", help="what it is")
+        if name == "note":
+            kp.add_argument("text", help="the fact worth keeping")
+        kp.add_argument("--context", metavar="NAME", help="scope, e.g. a site")
 
     waiting = add("wait", "block until a compositor event happens", cmd_wait)
     waiting.add_argument(
@@ -792,6 +1001,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cu: refused: {exc.reason}", file=sys.stderr)
         print(f"cu: {exits.RESPONSE[exc.code]}", file=sys.stderr)
         return exc.code
+    except (KnowledgeError, SandboxError) as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        return exits.TARGET_NOT_FOUND
     except RecipeError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.DENIED_BY_POLICY

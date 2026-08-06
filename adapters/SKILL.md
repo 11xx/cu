@@ -100,6 +100,32 @@ Actions resolve from each browser's own configuration. A Chromium-family
 browser resolves nothing until the user configures it — that is honest, not
 broken.
 
+## Reuse what earlier runs learned
+
+```sh
+cu know show zen                   # landmarks and notes for an application
+cu shot --landmark zen/urlbar      # aim a capture by a remembered position
+cu know set zen urlbar --rect 0.1,0.02,0.6,0.04 --note 'the address field'
+cu know note zen 'the cookie banner must be dismissed first'
+cu know confirm zen urlbar         # or `miss`, when it pointed at the wrong thing
+```
+
+A landmark says **where to look, never where to click.** It aims a capture,
+derived from the window's geometry now; read those pixels and act through the
+frame, exactly as you would without it. Never turn a remembered position into a
+click coordinate — a control that has moved would be clicked confidently and
+the click would land on something.
+
+Record what you learn as you go, and score a landmark after using it. That is
+what makes the next run cheaper.
+
+## Working where the user cannot see
+
+`cu` aims at the visible desktop, and that is a safety property: the user can
+watch and stop you. `cu sandbox create` makes a headless output when you
+genuinely need one — for testing input without touching their screen — and it
+should be a deliberate choice you mention, not a default. Remove it when done.
+
 ## Safety, and what to tell the user
 
 - Every injecting command takes `--dry-run`, which runs every check and logs
