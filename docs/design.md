@@ -212,10 +212,24 @@ itself. `--window active` stays the recommended first call.
 "Whatever works here, safely" is the requirement that most shapes this design,
 because the target is a live desktop with the user sitting at it.
 
-**Focus assertion at injection time.** Every input command re-checks the
-expected window immediately before injecting, not when the action was planned.
-The dangerous race is the user alt-tabbing mid-action and receiving a password
-into the wrong application.
+**Assertion at injection time, on whichever question the command depends on.**
+Every input command re-checks the world immediately before injecting rather
+than when the action was planned, but the two kinds of command depend on
+different facts and asserting the wrong one forbids ordinary work.
+
+- **Keyboard commands assert focus.** `type` and `key` go wherever focus
+  happens to be, so the window holding it must be the one the agent expected.
+  The dangerous race is the user alt-tabbing mid-action and receiving a
+  password into the wrong application.
+- **Pointer commands assert the target.** A click is aimed by coordinates, and
+  demanding its target already hold focus would forbid clicking a window *to*
+  focus it — which is most of what clicking is for. What a frame guarantees
+  instead is that the window under the point is still the one it depicted, so
+  a window that opened over the target since capture refuses the click rather
+  than swallowing it.
+
+Both refusals report `FOCUS_CHANGED`, because the caller's response is the
+same: re-observe, then decide again.
 
 **Denylist.** Refuse to inject into window classes matching a configurable
 list — lock screens, password managers, authentication prompts. Refuse
@@ -424,6 +438,7 @@ The whole contract, in one place. Everything takes `--json` and `--dry-run`.
 | `cu observe` | Monitors, windows, workspaces, focus, cursor | no |
 | `cu shot` | Capture; writes a PNG and a frame descriptor | no |
 | `cu wait` | Block on a Hyprland event (`openwindow`, focus change, title match) | no |
+| `cu focus` | Give a window keyboard focus | no |
 | `cu move` | Warp the pointer to a frame coordinate | no |
 | `cu click` | Warp, assert focus, press/release | yes |
 | `cu scroll` | Wheel events at a frame coordinate | yes |
@@ -432,8 +447,11 @@ The whole contract, in one place. Everything takes `--json` and `--dry-run`.
 | `cu browser` | Semantic browser actions, resolved per browser | yes |
 | `cu recipe` | Save, list, review, and replay a stored procedure | via replay |
 
-`observe`, `shot`, and `wait` never touch the input path at all, which is what
-makes the read-heavy loop cheap and safe.
+`observe`, `shot`, `wait`, and `focus` never touch the input path at all, which
+is what makes the read-heavy loop cheap and safe. `focus` earns its place there
+because `type` and `key` act on whatever holds focus, and without it an agent's
+only way to redirect them would be a click — which needs a frame and moves the
+pointer as a side effect.
 
 ### Measured cost per invocation
 
@@ -476,13 +494,22 @@ context*. The user's abort means **stop, and do not retry** — an agent that
 treats that as transient defeats the safety mechanism. These must be distinct
 codes with distinct documented responses.
 
-**Configuration.** The denylist, provider profiles, browser registry, and
-keymap resolution are all described as data but have no schema or location yet.
-`$XDG_CONFIG_HOME/cu/` with defaults shipped and user overrides merged.
+**Configuration.** Settled: `$XDG_CONFIG_HOME/cu/config.toml`, defaults shipped
+in code so a host with no file still behaves correctly, user tables merged over
+them. Tables are merged recursively but lists are replaced wholesale — a user
+who shortens the denylist means it, and a merge that silently re-added entries
+would be impossible to reason about.
 
-**The abort mechanism.** The design specifies a lockfile the agent cannot
-clear, but not its path or the keybind that drops it. It needs a Hyprland
-binding chosen against an already-crowded keymap.
+The keymap lives there too, keyed by window class with `*` as the fallback
+entry. Only bindings that are genuinely near-universal belong under `*`: paste
+qualifies, and terminals are its known exception, which is why they are
+enumerated rather than guessed at.
+
+**The abort mechanism.** The lockfile is `$XDG_RUNTIME_DIR/cu/abort` — session
+state that must not survive a reboot. `cu` only ever tests for it and never
+removes it; clearing it is a physical act by the user, which is what makes it a
+deadman switch rather than a suggestion. The keybind that drops it is still
+unchosen, against an already-crowded keymap.
 
 ## Implementation
 

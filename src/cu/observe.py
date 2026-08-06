@@ -42,7 +42,15 @@ def monitors() -> list[dict[str, Any]]:
     return out
 
 
-def windows() -> list[dict[str, Any]]:
+def windows(mons: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Mapped windows, with the monitor named rather than indexed.
+
+    Hyprland reports `monitor` as a position in its own output list, which is
+    not stable across hotplug and means nothing to a caller holding an output
+    name. Resolving it here keeps every rectangle in this module addressable by
+    the same names `shot --output` accepts.
+    """
+    by_index = {i: m["name"] for i, m in enumerate(mons or monitors())}
     out = []
     for c in hypr.query("clients"):
         if not c.get("mapped", True):
@@ -57,12 +65,36 @@ def windows() -> list[dict[str, Any]]:
                 "xwayland": c["xwayland"],
                 "floating": c["floating"],
                 "hidden": c.get("hidden", False),
+                "visible": c.get("visible", True),
+                # Lower means more recently focused, which is the closest thing
+                # Hyprland exposes to a stacking order.
+                "focus_order": c.get("focusHistoryID", 1 << 30),
                 "workspace": c["workspace"]["name"],
-                "monitor": c["monitor"],
+                "monitor": by_index.get(c["monitor"], str(c["monitor"])),
                 "logical_rect": _rect(at[0], at[1], size[0], size[1]),
             }
         )
     return out
+
+
+def contains(rect: dict[str, float], x: float, y: float) -> bool:
+    return rect["x"] <= x < rect["x"] + rect["w"] and rect["y"] <= y < rect["y"] + rect["h"]
+
+
+def window_at(x: float, y: float, wins: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The window a click at this logical point would land in.
+
+    Only visible windows are considered, and ties go to the most recently
+    focused, which is the best available stand-in for what is actually on top.
+    An answer here is what lets the denylist apply to a point on a full-output
+    frame rather than only to a window the caller named.
+    """
+    covering = [
+        w for w in wins if w["visible"] and not w["hidden"] and contains(w["logical_rect"], x, y)
+    ]
+    if not covering:
+        return None
+    return min(covering, key=lambda w: w["focus_order"])
 
 
 def focused() -> dict[str, Any] | None:
@@ -97,7 +129,7 @@ def desktop_bounds(mons: list[dict[str, Any]]) -> dict[str, float]:
 def snapshot() -> dict[str, Any]:
     mons = monitors()
     focus = focused()
-    wins = windows()
+    wins = windows(mons)
     for w in wins:
         w["focused"] = focus is not None and w["address"] == focus["address"]
     return {

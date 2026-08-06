@@ -18,6 +18,7 @@ TARGET_NOT_FOUND = 22
 DEGENERATE_AIM = 23
 DENIED_BY_POLICY = 30
 ABORTED_BY_USER = 40
+HUMAN_ACTIVE = 41
 NOT_MAPPED = 50
 
 #: What a caller should do on each code. Shipped in `cu doctor --json` and in
@@ -33,11 +34,14 @@ RESPONSE = {
     DEGENERATE_AIM: "The region spans outputs or falls outside any window. Widen to --window or --output.",
     DENIED_BY_POLICY: "Refused by the denylist or a locked session. Do not retry; tell the user.",
     ABORTED_BY_USER: "The user aborted. Stop. Do not retry, and do not attempt to clear the abort.",
+    HUMAN_ACTIVE: "The user is moving the physical mouse. Yield; wait for them to stop before retrying.",
     NOT_MAPPED: "No known binding for this action in this application. Do not guess a default chord.",
 }
 
 #: Codes where retrying the same command can succeed once the world changes.
-RETRYABLE = frozenset({STALE_FRAME, FOCUS_CHANGED, TARGET_NOT_FOUND})
+#: ABORTED_BY_USER is excluded deliberately: an agent that retries it has
+#: defeated the one interlock the user holds and the agent cannot clear.
+RETRYABLE = frozenset({STALE_FRAME, FOCUS_CHANGED, TARGET_NOT_FOUND, HUMAN_ACTIVE})
 
 
 def name(code: int) -> str:

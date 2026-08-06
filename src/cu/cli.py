@@ -12,10 +12,13 @@ import json
 import sys
 from typing import Any
 
-from . import capture, checks, exits, frames, observe
+from . import actions, capture, checks, config, exits, frames, observe, uinput
 from .capture import CaptureError
+from .config import ConfigError
 from .frames import FrameError
 from .hypr import HyprError
+from .safety import Refused
+from .uinput import UinputError
 
 STATUS_MARK = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL"}
 
@@ -94,13 +97,19 @@ def _resolve_window(selector: str, snap: dict[str, Any]) -> dict[str, Any]:
     exact = [w for w in windows if w["address"] == selector]
     if exact:
         return exact[0]
-    loose = [w for w in windows if selector.lower() in w["class"].lower()]
-    if not loose:
-        raise LookupError(f"no window matches {selector!r}")
-    if len(loose) > 1:
-        names = ", ".join(f"{w['class']}({w['address']})" for w in loose[:5])
-        raise LookupError(f"{selector!r} matches several windows: {names}")
-    return loose[0]
+    # Class first, then title. Several windows of one application share a
+    # class, so the title is often the only thing that separates them.
+    for field in ("class", "title"):
+        loose = [w for w in windows if selector.lower() in w[field].lower()]
+        if len(loose) == 1:
+            return loose[0]
+        if len(loose) > 1:
+            names = ", ".join(f"{w['class']}:{w['title'][:24]!r}" for w in loose[:5])
+            raise LookupError(
+                f"{selector!r} matches several windows by {field}: {names}. "
+                "Use an address, or a fragment that appears in only one title."
+            )
+    raise LookupError(f"no window matches {selector!r}")
 
 
 def _parse_region(text: str) -> dict[str, float]:
@@ -223,6 +232,117 @@ def _last_frame_like(
     return newest
 
 
+def _parse_at(text: str) -> tuple[float, float]:
+    parts = [p for p in text.replace(",", " ").split() if p]
+    if len(parts) != 2:
+        raise ValueError(f"--at takes 'x,y' in image pixels, got {text!r}")
+    return (float(parts[0]), float(parts[1]))
+
+
+def _render_action(result: dict[str, Any]) -> None:
+    mark = "would " if result["dry_run"] else ""
+    window = result.get("window")
+    where = f"{window['class']}" if window else "no window"
+    if result["action"] in {"move", "click"}:
+        point = result["logical"]
+        detail = f"at image {result['at']['x']:g},{result['at']['y']:g} "
+        detail += f"→ logical {point['x']:.0f},{point['y']:.0f}"
+        if result["action"] == "click":
+            detail = f"{result['button']}x{result['count']} {detail}"
+    elif result["action"] == "scroll":
+        detail = f"dy {result['dy']} dx {result['dx']}"
+    elif result["action"] == "type":
+        detail = f"{result['length']} chars via {result['method']}"
+        if result["chord"]:
+            detail += f" ({result['chord']})"
+    else:
+        detail = f"{result['semantic'] or 'chord'} → {result['chord']}"
+        if result["repeat"] > 1:
+            detail += f" x{result['repeat']}"
+    print(f"{mark}{result['action']} {detail}  [{where}]")
+
+
+def cmd_focus(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    snap = observe.snapshot()
+    window = _resolve_window(args.selector, snap)
+    result = actions.focus(cfg, window, dry_run=args.dry_run)
+    _emit(
+        result,
+        args.json,
+        lambda r: print(
+            f"{'would focus' if r['dry_run'] else 'focused'} "
+            f"{r['window']['class']}  {r['window']['title'][:60]}"
+        ),
+    )
+    return exits.OK
+
+
+def cmd_move(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    result = actions.move(cfg, args.frame, _parse_at(args.at), dry_run=args.dry_run)
+    _emit(result, args.json, _render_action)
+    return exits.OK
+
+
+def cmd_click(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    result = actions.click(
+        cfg,
+        args.frame,
+        _parse_at(args.at),
+        button=args.button,
+        count=args.count,
+        dry_run=args.dry_run,
+    )
+    _emit(result, args.json, _render_action)
+    return exits.OK
+
+
+def cmd_scroll(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    if (args.frame is None) != (args.at is None):
+        print("cu: --frame and --at are given together or not at all", file=sys.stderr)
+        return exits.USAGE
+    result = actions.scroll(
+        cfg,
+        dy=args.dy,
+        dx=args.dx,
+        frame_id=args.frame,
+        at=_parse_at(args.at) if args.at else None,
+        dry_run=args.dry_run,
+    )
+    _emit(result, args.json, _render_action)
+    return exits.OK
+
+
+def cmd_type(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    text = sys.stdin.read() if args.text == "-" else args.text
+    result = actions.type_text(
+        cfg,
+        text,
+        method=args.method,
+        restore_clipboard=not args.no_restore,
+        dry_run=args.dry_run,
+    )
+    _emit(result, args.json, _render_action)
+    return exits.OK
+
+
+def cmd_key(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    result = actions.key(
+        cfg,
+        action=args.action,
+        chord=args.chord,
+        repeat=args.repeat,
+        dry_run=args.dry_run,
+    )
+    _emit(result, args.json, _render_action)
+    return exits.OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cu", description="Computer use for Hyprland.")
     parser.add_argument("--json", action="store_true", help="emit JSON on stdout")
@@ -263,6 +383,64 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="reuse the previous frame when the pixels are identical",
     )
+
+    # Everything below injects. --dry-run runs every interlock and writes the
+    # same log entry without emitting a single event, which is what makes an
+    # agent's plan inspectable before it reaches the desktop.
+    def add_injecting(name: str, help: str, run) -> argparse.ArgumentParser:
+        p = add(name, help, run)
+        p.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="check and log the action without injecting it",
+        )
+        return p
+
+    def add_aim(p: argparse.ArgumentParser, required: bool) -> None:
+        p.add_argument("--frame", metavar="ID", required=required, help="frame the coordinate came from")
+        p.add_argument("--at", metavar="X,Y", required=required, help="coordinate in image pixels")
+
+    focus = add_injecting("focus", "give a window keyboard focus", cmd_focus)
+    focus.add_argument(
+        "selector",
+        help="'active', a window address, or a class substring",
+    )
+
+    move = add_injecting("move", "warp the pointer to a frame coordinate", cmd_move)
+    add_aim(move, required=True)
+
+    click = add_injecting("click", "warp, assert focus, press and release", cmd_click)
+    add_aim(click, required=True)
+    click.add_argument(
+        "--button", choices=sorted(uinput.BUTTONS), default="left", help="which button"
+    )
+    click.add_argument("--count", type=int, default=1, help="click count (2 for double)")
+
+    scroll = add_injecting("scroll", "wheel events, optionally aimed first", cmd_scroll)
+    add_aim(scroll, required=False)
+    scroll.add_argument("--dy", type=int, default=0, help="vertical detents, negative scrolls down")
+    scroll.add_argument("--dx", type=int, default=0, help="horizontal detents")
+
+    typing = add_injecting("type", "enter text into the focused window", cmd_type)
+    typing.add_argument("text", help="the text, or '-' to read stdin")
+    typing.add_argument(
+        "--method",
+        choices=("clipboard", "keys"),
+        default="clipboard",
+        help="clipboard is layout-independent; keys synthesizes each character",
+    )
+    typing.add_argument(
+        "--no-restore",
+        action="store_true",
+        help="leave the text on the clipboard instead of restoring what was there",
+    )
+
+    key = add_injecting("key", "a semantic action, or a literal chord", cmd_key)
+    target = key.add_mutually_exclusive_group(required=True)
+    target.add_argument("--action", metavar="NAME", help="a semantic action, resolved per application")
+    target.add_argument("--chord", metavar="CHORD", help="a literal chord such as 'ctrl+alt+shift+f4'")
+    key.add_argument("--repeat", type=int, default=1, help="how many times to send it")
+
     return parser
 
 
@@ -271,6 +449,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.run(args)
+    except Refused as exc:
+        # An interlock, not a fault. The code is what the caller acts on, so
+        # the response the taxonomy prescribes is printed alongside it.
+        print(f"cu: refused: {exc.reason}", file=sys.stderr)
+        print(f"cu: {exits.RESPONSE[exc.code]}", file=sys.stderr)
+        return exc.code
+    except UinputError as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        return exits.PRECONDITION_FAILED
+    except ConfigError as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        return exits.PRECONDITION_FAILED
     except HyprError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.PRECONDITION_FAILED

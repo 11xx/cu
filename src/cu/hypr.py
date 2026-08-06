@@ -71,6 +71,18 @@ def lua(code: str) -> str:
     return out
 
 
+def move_cursor(x: float, y: float) -> None:
+    """Warp the pointer to an absolute position in global logical coordinates.
+
+    One spelling, because four plausible variants of this call return success
+    and move nothing: positional arguments, the old `"x y"` string, its
+    `"exact x y"` form, and constructing the dispatcher without dispatching it.
+    Wrapping it here is the whole reason this layer exists — a caller gets the
+    form that works rather than five that look alike at the call site.
+    """
+    lua(f"hl.dispatch(hl.dsp.cursor.move({{x = {x:.4f}, y = {y:.4f}}}))")
+
+
 def version() -> str:
     """The release only. The full first line carries branch, commit, and date."""
     if not available():
