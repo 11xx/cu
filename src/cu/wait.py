@@ -1,0 +1,163 @@
+"""Blocking on a compositor event instead of screenshotting in a loop.
+
+Hyprland publishes a line per state change, so "wait until the dialog opens" is
+a read on a socket rather than a capture every half second. That is the
+difference between a few bytes and a few thousand tokens per attempt.
+
+The stream is `event>>arg,arg,arg`. Addresses arrive there **without** the `0x`
+prefix that `hyprctl clients` reports, so the two forms are normalised before
+any comparison — left alone they simply never match, and the wait would run to
+its timeout while the thing it waited for sat on screen.
+"""
+
+from __future__ import annotations
+
+import selectors
+import socket
+import time
+from typing import Any, Iterator
+
+from . import hypr, observe
+
+#: Which Hyprland events answer each condition `cu wait` accepts. The v2 forms
+#: carry addresses rather than names and are preferred where both exist.
+EVENTS = {
+    "window-open": ("openwindow",),
+    "window-close": ("closewindow",),
+    "focus": ("activewindow", "activewindowv2"),
+    "title": ("windowtitlev2", "activewindow"),
+    "workspace": ("workspace", "workspacev2"),
+}
+
+
+class WaitTimeout(RuntimeError):
+    pass
+
+
+def normalise_address(value: str) -> str:
+    """One spelling for an address, whichever side it came from."""
+    return value[2:].lower() if value.startswith("0x") else value.lower()
+
+
+def stream(deadline: float) -> Iterator[tuple[str, list[str]]]:
+    """Yield `(event, args)` until the deadline passes.
+
+    A partial line is held rather than parsed: the socket delivers bytes, and a
+    line split across two reads would otherwise surface as two malformed events.
+    """
+    path = hypr.event_socket()
+    if path is None or not path.is_socket():
+        raise hypr.HyprError("the Hyprland event socket is unavailable")
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    conn.connect(str(path))
+    selector = selectors.DefaultSelector()
+    selector.register(conn, selectors.EVENT_READ)
+    buffered = ""
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            if not selector.select(timeout=remaining):
+                return
+            chunk = conn.recv(8192)
+            if not chunk:
+                return
+            buffered += chunk.decode(errors="replace")
+            while "\n" in buffered:
+                line, buffered = buffered.split("\n", 1)
+                if ">>" not in line:
+                    continue
+                name, _, rest = line.partition(">>")
+                yield name, rest.split(",")
+    finally:
+        selector.close()
+        conn.close()
+
+
+def _window_matches(window: dict[str, Any], cls: str | None, title: str | None) -> bool:
+    if cls and cls.lower() not in window["class"].lower():
+        return False
+    if title and title.lower() not in window["title"].lower():
+        return False
+    return True
+
+
+def already_true(
+    condition: str, cls: str | None, title: str | None
+) -> dict[str, Any] | None:
+    """Whether the thing being waited for has already happened.
+
+    Checked before the socket is even opened. A wait for a window that is
+    already open would otherwise block until its timeout, which reads to an
+    agent as "it never opened" — the most confusing possible answer, since the
+    window is right there.
+    """
+    snap = observe.snapshot()
+    if condition in {"window-open", "title"}:
+        match = next(
+            (w for w in snap["windows"] if _window_matches(w, cls, title)), None
+        )
+        return match
+    if condition == "focus":
+        focus = snap["focused"]
+        if focus and _window_matches(focus, cls, title):
+            return focus
+    return None
+
+
+def _resolve(args: list[str], snap_windows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The window an event refers to, found by address wherever one is given."""
+    for arg in args:
+        address = normalise_address(arg.strip())
+        match = next(
+            (w for w in snap_windows if normalise_address(w["address"]) == address), None
+        )
+        if match:
+            return match
+    return None
+
+
+def until(
+    condition: str,
+    *,
+    cls: str | None = None,
+    title: str | None = None,
+    timeout: float = 30.0,
+    settle: float = 0.05,
+) -> dict[str, Any]:
+    """Block until the condition holds, and return what satisfied it."""
+    if condition not in EVENTS:
+        raise ValueError(f"unknown condition {condition!r}; expected one of {sorted(EVENTS)}")
+
+    existing = already_true(condition, cls, title)
+    if existing is not None:
+        return {"condition": condition, "matched": existing, "waited": False}
+
+    deadline = time.monotonic() + timeout
+    wanted = EVENTS[condition]
+    for name, args in stream(deadline):
+        if name not in wanted:
+            continue
+        if condition == "window-close":
+            # There is nothing left to inspect, so the event itself is the
+            # answer and the caller only ever asked whether it happened.
+            return {"condition": condition, "matched": {"address": args[0]}, "waited": True}
+        # The event names a window; its geometry and title come from a fresh
+        # snapshot, because the event carries neither and an agent's next move
+        # needs both.
+        time.sleep(settle)  # a window is mapped a moment after it is announced
+        snap = observe.snapshot()
+        match = _resolve(args, snap["windows"])
+        if match is None and condition == "focus":
+            # The non-v2 focus event carries a class and title rather than an
+            # address, so fall back to whatever now holds focus.
+            match = next((w for w in snap["windows"] if w["focused"]), None)
+        if match and _window_matches(match, cls, title):
+            return {"condition": condition, "matched": match, "waited": True}
+
+    raise WaitTimeout(
+        f"no {condition} event matching "
+        f"{'class ' + cls if cls else ''}{' title ' + repr(title) if title else ''}"
+        f" within {timeout:g}s"
+    )

@@ -12,7 +12,7 @@ import json
 import sys
 from typing import Any
 
-from . import actions, capture, checks, config, exits, frames, observe, uinput
+from . import actions, capture, checks, config, exits, frames, observe, uinput, wait
 from .capture import CaptureError
 from .config import ConfigError
 from .frames import FrameError
@@ -262,6 +262,30 @@ def _render_action(result: dict[str, Any]) -> None:
     print(f"{mark}{result['action']} {detail}  [{where}]")
 
 
+def cmd_wait(args: argparse.Namespace) -> int:
+    try:
+        result = wait.until(
+            args.condition,
+            cls=getattr(args, "class"),
+            title=args.title,
+            timeout=args.timeout,
+        )
+    except wait.WaitTimeout as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        print(f"cu: {exits.RESPONSE[exits.TIMED_OUT]}", file=sys.stderr)
+        return exits.TIMED_OUT
+
+    def render(r: Any) -> None:
+        matched = r["matched"]
+        how = "waited for" if r["waited"] else "already true:"
+        described = matched.get("class", "?")
+        title = matched.get("title", "")
+        print(f"{how} {r['condition']}  {described}  {title[:56]}")
+
+    _emit(result, args.json, render)
+    return exits.OK
+
+
 def cmd_focus(args: argparse.Namespace) -> int:
     cfg = config.load()
     snap = observe.snapshot()
@@ -382,6 +406,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--if-changed",
         action="store_true",
         help="reuse the previous frame when the pixels are identical",
+    )
+
+    waiting = add("wait", "block until a compositor event happens", cmd_wait)
+    waiting.add_argument(
+        "condition",
+        choices=sorted(wait.EVENTS),
+        help="what to wait for; checked once against the current state first",
+    )
+    waiting.add_argument("--class", metavar="SUBSTRING", help="restrict to a window class")
+    waiting.add_argument("--title", metavar="SUBSTRING", help="restrict to a window title")
+    waiting.add_argument(
+        "--timeout", type=float, default=30.0, help="seconds before giving up (default: 30)"
     )
 
     # Everything below injects. --dry-run runs every interlock and writes the

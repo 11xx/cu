@@ -17,6 +17,7 @@ bin/cu shot --output DP-2            # a whole monitor
 bin/cu shot --region '100,100 400x200'
 bin/cu shot --if-changed             # reuse the last frame if nothing moved
 
+bin/cu wait window-open --class zen  # block on a compositor event
 bin/cu focus zen                     # give a window keyboard focus
 bin/cu move  --frame f3 --at 412,300 # warp the pointer to a frame coordinate
 bin/cu click --frame f3 --at 412,300 # warp, check the target, press and release
@@ -38,8 +39,8 @@ the image depicts and its pixel size. Later commands take coordinates as
 ## Status
 
 `doctor`, `observe`, `shot`, `focus`, and the input commands — `move`, `click`,
-`scroll`, `type`, `key` — are implemented, with the safety interlocks. `wait`,
-browser control, and recipes are designed but not built — see
+`scroll`, `type`, `key` — are implemented, with the safety interlocks, as is
+`wait`. Browser control and recipes are designed but not built — see
 [docs/design.md](docs/design.md) for the command surface and build order, and
 [docs/environment.md](docs/environment.md) for the verified host facts the
 design rests on.
