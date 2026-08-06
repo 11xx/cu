@@ -61,6 +61,14 @@ DEFAULTS: dict[str, Any] = {
         # the first event is written. Events emitted before enumeration are
         # accepted by the kernel and dropped by the compositor.
         "settle_ms": 40,
+        # Which path keystrokes take. "uinput" produces genuine libinput
+        # events, which is what makes them indistinguishable from a human, and
+        # is the right default. "compositor" injects through Hyprland instead:
+        # it does not count as user activity, so it leaves sleeping monitors
+        # asleep, at the cost of presenting no input device to the client.
+        # Pointer actions ignore this — there is no compositor button
+        # dispatcher, so they always take the uinput path.
+        "key_backend": "uinput",
     },
     # Semantic action -> chord, per window class, with "*" as the entry for
     # applications that have no table of their own. `cu key --action` resolves

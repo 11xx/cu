@@ -19,8 +19,26 @@ import subprocess
 import time
 from typing import Any
 
-from . import config, exits, frames, hypr, observe, safety, uinput
+from . import compositor, config, exits, frames, hypr, observe, safety, uinput
 from .safety import Refused
+
+
+def send_chords(cfg: dict[str, Any], chords: list[str], backend: str) -> None:
+    """Emit each chord through the selected backend.
+
+    The uinput device is built once for the whole sequence: constructing it
+    costs about 100 ms, which is most of the price of an input command, and
+    paying that per keystroke is what makes a batched command worth having.
+    """
+    if backend == "compositor":
+        for chord in chords:
+            compositor.send_chord(chord)
+        return
+    with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
+        for index, chord in enumerate(chords):
+            if index:
+                time.sleep(cfg["input"]["gap_ms"] / 1000)
+            device.chord(chord, cfg["input"]["press_ms"])
 
 
 def aim(frame: dict[str, Any], x: float, y: float, snap: dict[str, Any]) -> dict[str, Any]:
@@ -250,6 +268,7 @@ def type_text(
     *,
     method: str = "clipboard",
     restore_clipboard: bool = True,
+    backend: str | None = None,
     dry_run: bool,
 ) -> dict[str, Any]:
     """Enter text into whatever holds focus.
@@ -260,6 +279,7 @@ def type_text(
     has rebound — so `--method keys` exists, and the resolved chord comes from
     configuration rather than from a universal assumption.
     """
+    backend = backend or cfg["input"]["key_backend"]
     snap = observe.snapshot()
     focus = snap["focused"]
     window = next((w for w in snap["windows"] if focus and w["address"] == focus["address"]), None)
@@ -282,6 +302,7 @@ def type_text(
         "method": method,
         "length": len(text),
         "chord": chord,
+        "backend": backend,
         "window": _describe(window),
         "dry_run": dry_run,
     }
@@ -294,11 +315,10 @@ def type_text(
         previous = _clipboard_read() if restore_clipboard else None
         _clipboard_write(text.encode())
         try:
-            with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
-                device.chord(chord, cfg["input"]["press_ms"])
-                # The paste has to be consumed before the clipboard reverts;
-                # restoring too eagerly pastes the *previous* contents.
-                time.sleep(0.12)
+            send_chords(cfg, [chord], backend)
+            # The paste has to be consumed before the clipboard reverts;
+            # restoring too eagerly pastes the *previous* contents.
+            time.sleep(0.12)
         finally:
             if previous is not None:
                 _clipboard_write(previous)
@@ -309,16 +329,12 @@ def type_text(
                 exits.NOT_MAPPED,
                 f"cannot synthesize {unmapped[0]!r} on a US layout; use --method clipboard",
             )
-        with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
-            for char in text:
-                name, shifted = uinput.char_to_key(char)
-                code = uinput.KEYS[name]
-                if shifted:
-                    device.key_down(uinput.MODIFIERS["shift"])
-                device.tap(code, cfg["input"]["press_ms"])
-                if shifted:
-                    device.key_up(uinput.MODIFIERS["shift"])
-                time.sleep(cfg["input"]["gap_ms"] / 1000)
+        send_chords(
+            cfg,
+            [f"shift+{name}" if shifted else name
+             for name, shifted in (uinput.char_to_key(c) for c in text)],
+            backend,
+        )
 
     safety.record(cfg, result)
     return result
@@ -330,6 +346,7 @@ def key(
     action: str | None,
     chord: str | None,
     repeat: int = 1,
+    backend: str | None = None,
     dry_run: bool,
 ) -> dict[str, Any]:
     """Send a semantic action, or a literal chord when the caller insists.
@@ -338,6 +355,7 @@ def key(
     back to a documented default is the failure this project exists to
     prevent: the keystroke would arrive, and would do something else.
     """
+    backend = backend or cfg["input"]["key_backend"]
     snap = observe.snapshot()
     focus = snap["focused"]
     window = next((w for w in snap["windows"] if focus and w["address"] == focus["address"]), None)
@@ -359,17 +377,14 @@ def key(
 
     uinput.parse_chord(resolved)  # fail before the device exists, not after
     if not dry_run:
-        with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
-            for index in range(repeat):
-                if index:
-                    time.sleep(cfg["input"]["gap_ms"] / 1000)
-                device.chord(resolved, cfg["input"]["press_ms"])
+        send_chords(cfg, [resolved] * repeat, backend)
 
     result = {
         "action": "key",
         "semantic": action,
         "chord": resolved,
         "repeat": repeat,
+        "backend": backend,
         "window": _describe(window),
         "dry_run": dry_run,
     }

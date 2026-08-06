@@ -175,6 +175,54 @@ physically exist, on the live compositor, without touching the user's displays.
 The scale of 2.00 is a bonus: it is a third distinct scale, so a test suite
 running there exercises coordinate math that 1.0 and 1.25 alone would not.
 
+## Sleeping monitors: what still works, and what wakes them
+
+`hypridle` powers the displays down after 5.5 minutes idle and restores them on
+activity. Whether an agent can work against a dark desktop depends on which of
+its actions count as activity, and the answer splits cleanly. Measured by
+disabling DPMS, performing one action, and re-reading `dpmsStatus`:
+
+| Action | Wakes the monitors | Works while asleep |
+| --- | --- | --- |
+| `hyprctl` queries — `observe` | no | yes |
+| Cursor warp — `hl.dsp.cursor.move` | no | yes |
+| Keys via `hl.dsp.send_key_state` | **no** | yes |
+| `grim -o` on a **physical** output | no | **no — fails** |
+| `grim -o` on a **headless** output | no | yes |
+| Any `/dev/uinput` event | **yes** | yes |
+
+The dividing line is libinput. A uinput device produces genuine kernel input
+events, which is exactly what makes them indistinguishable from a human — and
+is also why they reset the session idle timer and turn every panel back on. The
+compositor's own dispatchers never enter that path, so they leave a sleeping
+desktop asleep.
+
+Capture is the other half. A physical output that is powered down is not
+rendering, and `grim -o` on it fails outright rather than returning a black
+image — a loud failure, which is the good kind. A headless output has no panel
+to power down and keeps rendering regardless, so it captures normally.
+
+So a **keyboard-driven agent can run entirely against sleeping displays**:
+observe, warp, capture from a headless output, and inject keys through
+`--backend compositor`. What cannot join it is the pointer. The compositor
+exposes no button or wheel dispatcher, so clicks and scrolls must use uinput
+and will always wake the screen.
+
+### The dispatcher's argument shapes, both of which fail silently
+
+```lua
+hl.dispatch(hl.dsp.send_key_state({mods = "CTRL SHIFT", key = "v", state = "down"}))
+```
+
+- **`mods` is a name, not a bitmask.** `mods = 4` is accepted and produces an
+  *unmodified* keystroke. Several names separate with a space, `+`, or `,` —
+  all three were verified to work.
+- **`key` is an X11 keysym name** (`"a"`, `"Return"`, `"F4"`) **or an xkb
+  keycode**, which is the evdev code plus 8 — so `key = 30` types `u`, not `a`.
+  A kernel constant such as `"KEY_A"` is accepted and does nothing.
+- **`state` must be `"down"`, `"up"`, or `"repeat"`.** Unlike the other two, a
+  wrong value here is a real error rather than a silent no-op.
+
 ## Browsers
 
 Six, across both engine families:

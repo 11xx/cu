@@ -113,8 +113,18 @@ created directly by the unprivileged process — no root, no `ydotoold`, verifie
 writable as uid 1000. Hyprland's key dispatchers are keybind-oriented and a
 poor fit for free text.
 
-So a click is: warp through IPC, assert the expected window still has focus,
-then press and release through uinput.
+So a click is: warp through IPC, assert the expected window is still under the
+point, then press and release through uinput.
+
+**A second keyboard path exists, for a sleeping desktop.** Genuine libinput
+events are what make uinput injection indistinguishable from a human, and are
+also why each one resets the idle timer and wakes every monitor. Hyprland's own
+key dispatcher does not travel that path, so `--backend compositor` drives a
+keyboard while the displays stay powered down. It is not the default: it
+presents no input device to the client, and it cannot press a button or turn a
+wheel, because the compositor exposes no dispatcher for either. Pointer actions
+therefore stay on uinput and stay loud. Details and the measurements are in
+[environment.md](environment.md).
 
 **Text entry defaults to the clipboard.** `wl-copy` the text, send Ctrl+V, then
 restore the previous clipboard contents. This is layout-independent and fast,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from cu import config, exits, observe, safety, uinput
+from cu import compositor, config, exits, observe, safety, uinput
 from cu.safety import Refused
 
 CFG = config.DEFAULTS
@@ -205,3 +205,30 @@ def test_no_runtime_dir_reads_as_aborted(monkeypatch):
     """No session is itself a reason not to inject."""
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     assert config.aborted() is True
+
+
+# --- the compositor keyboard backend --------------------------------------
+
+
+def test_chords_translate_to_the_dispatcher_spelling():
+    assert compositor.split_chord("ctrl+shift+v") == ("CTRL SHIFT", "v")
+    assert compositor.split_chord("ctrl+alt+shift+f4") == ("CTRL ALT SHIFT", "F4")
+
+
+def test_keysyms_differ_from_the_names_a_chord_uses():
+    """`enter` is Return and `pagedown` is Next; sending the cu name would be
+    accepted and do nothing."""
+    assert compositor.keysym_for("enter") == "Return"
+    assert compositor.keysym_for("pagedown") == "Next"
+    assert compositor.keysym_for("dot") == "period"
+
+
+def test_a_key_with_no_keysym_says_so_rather_than_guessing():
+    with pytest.raises(compositor.QuietError):
+        compositor.keysym_for("volumeup")
+
+
+def test_both_backends_reject_the_same_bad_chord():
+    """Backends must not disagree about what a valid chord is."""
+    with pytest.raises(uinput.ChordError):
+        compositor.split_chord("ctrl+nosuchkey")

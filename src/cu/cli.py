@@ -255,6 +255,7 @@ def _render_action(result: dict[str, Any]) -> None:
         detail = f"{result['length']} chars via {result['method']}"
         if result["chord"]:
             detail += f" ({result['chord']})"
+        detail += f" [{result['backend']}]"
     else:
         detail = f"{result['semantic'] or 'chord'} → {result['chord']}"
         if result["repeat"] > 1:
@@ -348,6 +349,7 @@ def cmd_type(args: argparse.Namespace) -> int:
         text,
         method=args.method,
         restore_clipboard=not args.no_restore,
+        backend=args.backend,
         dry_run=args.dry_run,
     )
     _emit(result, args.json, _render_action)
@@ -361,6 +363,7 @@ def cmd_key(args: argparse.Namespace) -> int:
         action=args.action,
         chord=args.chord,
         repeat=args.repeat,
+        backend=args.backend,
         dry_run=args.dry_run,
     )
     _emit(result, args.json, _render_action)
@@ -466,6 +469,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="clipboard is layout-independent; keys synthesizes each character",
     )
     typing.add_argument(
+        "--backend",
+        choices=("uinput", "compositor"),
+        help="compositor injection leaves sleeping monitors asleep",
+    )
+    typing.add_argument(
         "--no-restore",
         action="store_true",
         help="leave the text on the clipboard instead of restoring what was there",
@@ -476,6 +484,11 @@ def build_parser() -> argparse.ArgumentParser:
     target.add_argument("--action", metavar="NAME", help="a semantic action, resolved per application")
     target.add_argument("--chord", metavar="CHORD", help="a literal chord such as 'ctrl+alt+shift+f4'")
     key.add_argument("--repeat", type=int, default=1, help="how many times to send it")
+    key.add_argument(
+        "--backend",
+        choices=("uinput", "compositor"),
+        help="compositor injection leaves sleeping monitors asleep",
+    )
 
     return parser
 
