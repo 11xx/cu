@@ -40,6 +40,20 @@ TERMINALS = (
     "XTerm",
 )
 
+#: Emacs shares none of the wildcard's chords, and every one of them does
+#: something there: ctrl+v scrolls a page, ctrl+c is a prefix key that leaves
+#: the editor waiting for a second keystroke, ctrl+a goes to the start of the
+#: line, and ctrl+z suspends the frame. Its yank and kill-ring-save read and
+#: write the system clipboard, so `cu type` works through them unchanged.
+#: Select-all is `C-x h`, a two-key sequence and not a chord, so it is unmapped
+#: rather than approximated.
+EMACS_KEYS = {
+    "paste": "ctrl+y",
+    "copy": "alt+w",
+    "undo": "ctrl+/",
+    "select-all": "",
+}
+
 DEFAULTS: dict[str, Any] = {
     "safety": {
         # Classes that must never receive synthetic input. Matched
@@ -108,6 +122,7 @@ DEFAULTS: dict[str, Any] = {
             "undo": "ctrl+z",
         },
         **{name: dict(TERMINAL_KEYS) for name in TERMINALS},
+        "emacs": dict(EMACS_KEYS),
     },
 }
 

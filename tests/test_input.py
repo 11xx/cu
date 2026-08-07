@@ -134,6 +134,30 @@ def test_a_terminal_does_not_inherit_the_wildcard_it_would_misread():
     assert config.chord_for(CFG, "zen", "select-all") == "ctrl+a"
 
 
+def test_emacs_uses_its_own_bindings_for_all_four_wildcard_actions():
+    """Every wildcard chord does something else in Emacs: ctrl+v scrolls,
+    ctrl+c waits for a second key, ctrl+a goes to the line start, and ctrl+z
+    suspends the frame. None of them would report having done so."""
+    assert config.chord_for(CFG, "emacs", "paste") == "ctrl+y"
+    assert config.chord_for(CFG, "emacs", "copy") == "alt+w"
+    assert config.chord_for(CFG, "emacs", "undo") == "ctrl+/"
+
+
+def test_emacs_select_all_is_unmapped_because_it_is_not_a_chord():
+    """`C-x h` is a two-key sequence, so there is nothing to approximate it
+    with; verification reports unverified rather than comparing garbage."""
+    assert config.chord_for(CFG, "emacs", "select-all") is None
+
+
+def test_every_bound_default_chord_parses():
+    """A chord in the shipped keymap that cannot be parsed would fail at the
+    moment of injection, which is the worst place to discover it."""
+    for window_class, table in config.DEFAULTS["keys"].items():
+        for action, chord in table.items():
+            if chord:
+                assert uinput.parse_chord(chord), f"{window_class}.{action}"
+
+
 def test_an_empty_chord_in_a_user_table_unmaps_the_wildcard(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text('[keys.zen]\nundo = ""\n')
