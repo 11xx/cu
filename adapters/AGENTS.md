@@ -48,7 +48,8 @@ so when you do, and remove it afterwards.
 `cu type --verify` reads the field back and confirms the text arrived; use it
 for anything that matters, since a silently rejected paste otherwise looks
 exactly like success. Exit 25 means it did not arrive — read the field rather
-than retyping, which can duplicate whatever did land.
+than retyping, which can duplicate whatever did land. Verifying leaves the
+field selected, so submit next, or re-aim before typing again.
 
 Every injecting command takes `--dry-run`. Recipes do not replay until a human
 has read and approved them; never approve on the user's behalf.

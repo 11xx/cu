@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from typing import Any
@@ -60,6 +61,10 @@ def _emit(data: Any, as_json: bool, render) -> None:
         sys.stdout.write("\n")
     else:
         render(data)
+    # Flushed here so that a reader who has gone away — `cu observe | head` —
+    # fails inside the handler below rather than during interpreter shutdown,
+    # where the only possible report is a message onto stderr.
+    sys.stdout.flush()
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -500,12 +505,19 @@ def cmd_sandbox(args: argparse.Namespace) -> int:
         )
         return exits.OK
 
-    removed = sandbox.remove_all() if args.all else [args.name] if args.name else []
-    if not removed and not args.all:
+    # Reported after the fact, never before it: `sandbox.remove` refuses
+    # anything that is not a headless output, and a list printed ahead of that
+    # refusal would claim a removal that never happened.
+    if args.all:
+        if args.name:
+            raise ValueError(f"--all removes every headless output; drop {args.name!r}")
+        removed = sandbox.remove_all()
+    elif args.name:
+        sandbox.remove(args.name)
+        removed = [args.name]
+    else:
         print("cu: name an output to remove, or pass --all", file=sys.stderr)
         return exits.USAGE
-    if args.name and not args.all:
-        sandbox.remove(args.name)
     _emit(
         {"removed": removed},
         args.json,
@@ -1096,6 +1108,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.USAGE
     except BrokenPipeError:
+        # The reader is gone and that is not an error. Python flushes stdout
+        # once more on the way out, so it is given a sink to flush into.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         return exits.OK
     except KeyboardInterrupt:
         return exits.ERROR

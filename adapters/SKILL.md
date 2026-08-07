@@ -84,7 +84,8 @@ cu key --chord ctrl+alt+shift+f4
 Use `--verify` for anything that matters. Without it, a paste an application
 silently rejects is indistinguishable from success. It answers `ok`,
 `unverified` (the field could not be read back — not the same as success), or
-exit 25.
+exit 25. It leaves the field selected, so submit next, or re-aim before typing
+again: the next keystroke would replace what is there.
 
 **Do not assume a chord means what it does elsewhere.** On this desktop keys
 pass through a remapping layer and then each application's own bindings.

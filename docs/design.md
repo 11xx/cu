@@ -307,6 +307,13 @@ ok — claiming a verification that did not happen would be worse than not
 offering one. A genuine disagreement is `VERIFY_FAILED`, which is deliberately
 *not* retryable: retyping blindly duplicates whatever did land.
 
+Verifying is not free of consequence: it leaves the field's contents selected,
+so the next keystroke replaces them rather than appending. `cu` does not
+collapse the selection afterwards, because the key that would do it means
+something different in every widget and injecting an unasked-for keystroke to
+tidy up is the guess this project refuses everywhere else. Submit after
+verifying, or re-aim before typing again.
+
 ## Testing without touching the user's screen
 
 **Verified.** `hyprctl output create headless` adds a real output the

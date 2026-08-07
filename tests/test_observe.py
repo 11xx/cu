@@ -200,3 +200,36 @@ def test_a_declared_error_becomes_an_exit_code(where, monkeypatch, capsys):
     assert code != 0
     assert code in exits.RESPONSE
     assert "boom" in capsys.readouterr().err
+
+
+# --- a reader that goes away ------------------------------------------------
+
+
+def test_output_is_flushed_where_a_dead_pipe_can_still_be_handled(monkeypatch):
+    """`cu observe | head`. Left to interpreter shutdown, the failed flush has
+    nowhere to report but stderr, which is noise the caller did not ask for."""
+    import io
+
+    from cu import cli
+
+    class DeadPipe(io.StringIO):
+        def flush(self):
+            raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(cli.sys, "stdout", DeadPipe())
+    with pytest.raises(BrokenPipeError):
+        cli._emit({"monitors": []}, True, print)
+
+
+def test_a_dead_reader_is_success_and_the_last_flush_gets_a_sink(monkeypatch):
+    from cu import cli
+
+    redirected = []
+    monkeypatch.setattr(cli.os, "dup2", lambda *fds: redirected.append(fds))
+
+    def explode(_args):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(cli, "cmd_observe", explode)
+    assert cli.main(["observe"]) == exits.OK
+    assert redirected, "the flush python runs on the way out needs somewhere to go"
