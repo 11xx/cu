@@ -105,6 +105,41 @@ def test_an_unmapped_action_resolves_to_nothing():
     assert config.chord_for(CFG, "zen", "focus-urlbar") is None
 
 
+def test_a_terminal_does_not_inherit_the_wildcard_it_would_misread():
+    """ctrl+a is a shell's beginning-of-line and ctrl+z suspends the job.
+
+    Inheriting either from the wildcard is the failure this whole module
+    exists to prevent: the keystroke arrives and does something else.
+    """
+    assert config.chord_for(CFG, "Alacritty", "select-all") is None
+    assert config.chord_for(CFG, "Alacritty", "undo") is None
+    assert config.chord_for(CFG, "zen", "select-all") == "ctrl+a"
+
+
+def test_an_empty_chord_in_a_user_table_unmaps_the_wildcard(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[keys.zen]\nundo = ""\n')
+    cfg = config.load(path)
+    assert config.chord_for(cfg, "zen", "undo") is None
+    assert config.chord_for(cfg, "zen", "paste") == "ctrl+v"
+
+
+def test_a_field_cu_cannot_select_reports_unverified(monkeypatch):
+    """No select-all means no read-back, which is not the same as a mismatch:
+    reporting failure would send an agent to retype text that did arrive.
+
+    Nothing may be injected or written to the clipboard on the way to that
+    answer — the user's selection belongs to them.
+    """
+    touched = []
+    monkeypatch.setattr(actions, "send_chords", lambda *a, **k: touched.append("keys"))
+    monkeypatch.setattr(actions, "_clipboard_write", lambda data: touched.append("copy"))
+    monkeypatch.setattr(actions, "_clipboard_read", lambda: touched.append("paste"))
+    result = actions.read_back(CFG, window(cls="Alacritty"), "hello", "uinput")
+    assert result["status"] == "unverified"
+    assert touched == []
+
+
 # --- the denylist ---------------------------------------------------------
 
 

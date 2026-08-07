@@ -607,6 +607,13 @@ entry. Only bindings that are genuinely near-universal belong under `*`: paste
 qualifies, and terminals are its known exception, which is why they are
 enumerated rather than guessed at.
 
+An application's table can also state that it has *no* binding for an action,
+by giving it an empty chord. That stops the fallback rather than falling
+through it, and the distinction matters: a terminal that named only its paste
+and copy chords would inherit `ctrl+a` and `ctrl+z` from `*`, where they are a
+shell's beginning-of-line and a suspend signal. An unmapped action refuses; an
+inherited one performs something else and reports success.
+
 **The abort mechanism.** The lockfile is `$XDG_RUNTIME_DIR/cu/abort` — session
 state that must not survive a reboot. `cu` only ever tests for it and never
 removes it; clearing it is a physical act by the user, which is what makes it a

@@ -18,6 +18,28 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+#: What a terminal listens for. The two empty chords are unmappings rather
+#: than omissions: an absent action falls through to the wildcard, and there
+#: the chords mean something else entirely — ctrl+a is a shell's
+#: beginning-of-line or a multiplexer's prefix, and ctrl+z suspends whatever is
+#: running. Stating them empty is how a terminal refuses instead of acting.
+TERMINAL_KEYS = {
+    "paste": "ctrl+shift+v",
+    "copy": "ctrl+shift+c",
+    "select-all": "",
+    "undo": "",
+}
+
+TERMINALS = (
+    "Alacritty",
+    "kitty",
+    "foot",
+    "org.wezfurlong.wezterm",
+    "konsole",
+    "org.gnome.Terminal",
+    "XTerm",
+)
+
 DEFAULTS: dict[str, Any] = {
     "safety": {
         # Classes that must never receive synthetic input. Matched
@@ -85,15 +107,10 @@ DEFAULTS: dict[str, Any] = {
             "select-all": "ctrl+a",
             "undo": "ctrl+z",
         },
-        "Alacritty": {"paste": "ctrl+shift+v", "copy": "ctrl+shift+c"},
-        "kitty": {"paste": "ctrl+shift+v", "copy": "ctrl+shift+c"},
-        "foot": {"paste": "ctrl+shift+v", "copy": "ctrl+shift+c"},
-        "org.wezfurlong.wezterm": {"paste": "ctrl+shift+v", "copy": "ctrl+shift+c"},
-        "konsole": {"paste": "ctrl+shift+v", "copy": "ctrl+shift+c"},
-        "org.gnome.Terminal": {"paste": "ctrl+shift+v", "copy": "ctrl+shift+c"},
-        "XTerm": {"paste": "ctrl+shift+v", "copy": "ctrl+shift+c"},
+        **{name: dict(TERMINAL_KEYS) for name in TERMINALS},
     },
 }
+
 
 #: Where an abort flag lives. Deliberately under XDG_RUNTIME_DIR: it is
 #: session state, it must not survive a reboot, and it is the one interlock the
@@ -164,10 +181,15 @@ def chord_for(cfg: dict[str, Any], window_class: str, action: str) -> str | None
     """The chord a given application listens for, or None if unknown.
 
     None is a refusal, not an invitation to substitute a default.
+
+    An empty chord means the application is known *not* to have this action,
+    which is a different fact from having no table entry: it stops the `*`
+    fallback rather than falling through to it. Without that distinction an
+    application listed for one action inherits the wildcard for every other,
+    which is how a chord ends up performing something else entirely.
     """
     table = cfg.get("keys", {})
     for name, actions in table.items():
         if name.lower() == window_class.lower() and action in actions:
-            return actions[action]
-    fallback = table.get("*", {})
-    return fallback.get(action)
+            return actions[action] or None
+    return table.get("*", {}).get(action) or None
