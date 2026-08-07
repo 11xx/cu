@@ -51,6 +51,24 @@ def test_unknown_key_is_refused_rather_than_approximated():
         uinput.parse_chord("ctrl+nosuchkey")
 
 
+def test_a_punctuation_key_may_be_written_as_itself():
+    """`ctrl+-` is a browser's zoom out, and it must not read as a bare Ctrl:
+    the kernel would accept that and the application would report nothing."""
+    assert uinput.parse_chord("ctrl+-") == uinput.parse_chord("ctrl+minus")
+    assert uinput.parse_chord("ctrl+/") == uinput.parse_chord("ctrl+slash")
+
+
+def test_a_shifted_character_carries_its_own_shift():
+    assert uinput.parse_chord("ctrl+?") == uinput.parse_chord("ctrl+shift+slash")
+
+
+def test_an_empty_part_is_refused_rather_than_dropped():
+    """Dropping it silently shortens the chord into a different command."""
+    for chord in ("ctrl++", "ctrl+", "", "+"):
+        with pytest.raises(uinput.ChordError):
+            uinput.parse_chord(chord)
+
+
 def test_a_modifier_in_the_final_position_is_still_a_key():
     _, final = uinput.parse_chord("ctrl")
     assert final == uinput.KEYS["ctrl"]

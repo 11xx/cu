@@ -139,17 +139,34 @@ def parse_chord(chord: str) -> tuple[list[int], int]:
     Raises on an unknown name. A chord that cannot be parsed must never be
     approximated: the nearest chord is a different command.
     """
-    parts = [p.strip().lower() for p in chord.replace("-", "+").split("+") if p.strip()]
-    if not parts:
-        raise ChordError(f"empty chord: {chord!r}")
+    parts = [p.strip().lower() for p in chord.split("+")]
+    # `Ctrl-Alt-F4` is the other spelling in circulation, and it is tried only
+    # when `+` found no separator at all. Splitting on both would read `ctrl+-`
+    # — a browser's zoom out — as a bare Ctrl press, which is not an error the
+    # kernel or the application would report.
+    if len(parts) == 1 and "-" in parts[0][1:]:
+        dashed = [p.strip().lower() for p in parts[0].split("-")]
+        if all(dashed):
+            parts = dashed
+    if not all(parts):
+        raise ChordError(f"{chord!r} has an empty part; name every key it holds")
+
     *held, final = parts
     codes = []
     for name in held:
         if name not in MODIFIERS:
             raise ChordError(f"{name!r} is not a modifier (in chord {chord!r})")
         codes.append(MODIFIERS[name])
+
     if final not in KEYS:
-        raise ChordError(f"unknown key {final!r} (in chord {chord!r})")
+        # A caller who writes the character rather than the kernel's name for
+        # it means the key that produces it, and a shifted character says so.
+        typed = char_to_key(final) if len(final) == 1 else None
+        if typed is None:
+            raise ChordError(f"unknown key {final!r} (in chord {chord!r})")
+        final, shifted = typed
+        if shifted and MODIFIERS["shift"] not in codes:
+            codes.append(MODIFIERS["shift"])
     return codes, KEYS[final]
 
 
