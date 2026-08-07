@@ -384,14 +384,21 @@ def _capture_window(window: dict[str, Any], cfg: dict[str, Any]) -> dict[str, An
     )
     monitor = capture.sole_monitor(rect, monitors)
     scratch = frames.store_dir() / ".pending.png"
-    scale = capture.scale_for(rect, monitor["scale"], capture.PROFILES["claude"]["max_long_edge"])
+    profile = capture.PROFILES["claude"]
+    scale = capture.scale_for(rect, monitor["scale"], profile["max_long_edge"])
     capture.grab_region(rect, scratch, scale)
-    frame = frames.new(
+    return frames.new(
         source={"type": "window", "name": window["class"]},
         logical_rect=rect,
         image_size=capture.size_of(scratch),
-        image_path=scratch,
+        scratch=scratch,
+        native_size={
+            "w": round(rect["w"] * monitor["scale"]),
+            "h": round(rect["h"] * monitor["scale"]),
+        },
+        digest_native=capture.digest(scratch),
         monitor={"name": monitor["name"], "scale": monitor["scale"]},
+        profile="claude",
         window={
             "address": window["address"],
             "class": window["class"],
@@ -399,11 +406,6 @@ def _capture_window(window: dict[str, Any], cfg: dict[str, Any]) -> dict[str, An
             "logical_rect": window["logical_rect"],
         },
     )
-    final = frames.path_for(frame["id"], ".png")
-    scratch.replace(final)
-    frame["path"] = str(final)
-    frames.save(frame)
-    return frame
 
 
 def check(verify: dict[str, Any] | None) -> bool | None:

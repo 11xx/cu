@@ -81,16 +81,26 @@ def new(
     source: dict[str, Any],
     logical_rect: dict[str, float],
     image_size: dict[str, int],
-    image_path: Path,
+    scratch: Path,
     **extra: Any,
 ) -> dict[str, Any]:
+    """Name a freshly captured image and record what it depicts.
+
+    The image is captured to a scratch path because its id does not exist
+    until here, and moving it is part of allocating that id rather than
+    something each caller repeats — a descriptor whose `path` disagrees with
+    where the PNG landed would resolve to some other capture entirely.
+    """
+    frame_id = _next_id()
+    final = path_for(frame_id, ".png")
+    scratch.replace(final)
     return save(
         {
-            "id": _next_id(),
+            "id": frame_id,
             "source": source,
             "logical_rect": logical_rect,
             "image_size": image_size,
-            "path": str(image_path),
+            "path": str(final),
             "captured_at": time.time(),
             **extra,
         }

@@ -241,7 +241,7 @@ def cmd_shot(args: argparse.Namespace) -> int:
         source=source,
         logical_rect=rect,
         image_size=image_size,
-        image_path=scratch,  # replaced below once the id exists
+        scratch=scratch,
         native_size=native,
         digest_native=digest,
         monitor={"name": monitor["name"], "scale": monitor["scale"]},
@@ -258,10 +258,6 @@ def cmd_shot(args: argparse.Namespace) -> int:
             else None
         ),
     )
-    final = frames.path_for(frame["id"], ".png")
-    scratch.replace(final)
-    frame["path"] = str(final)
-    frames.save(frame)
     frame["changed"] = True
 
     def render(f: Any) -> None:
