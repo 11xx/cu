@@ -29,8 +29,10 @@ from . import (
     uinput,
     wait,
 )
+from .actions import ClipboardError
 from .browser import BrowserError
 from .capture import CaptureError
+from .compositor import QuietError
 from .config import ConfigError
 from .frames import FrameError
 from .hypr import HyprError
@@ -1066,7 +1068,10 @@ def main(argv: list[str] | None = None) -> int:
     except BrowserError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.TARGET_NOT_FOUND
-    except UinputError as exc:
+    except (UinputError, ClipboardError, QuietError) as exc:
+        # A path that cannot do the job. Each message names the other one —
+        # `--method keys` for a missing clipboard, `--backend uinput` for a
+        # chord the compositor cannot spell — so retrying as-is will not help.
         print(f"cu: {exc}", file=sys.stderr)
         return exits.PRECONDITION_FAILED
     except ConfigError as exc:
@@ -1078,6 +1083,9 @@ def main(argv: list[str] | None = None) -> int:
     except CaptureError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.DEGENERATE_AIM
+    except wait.WaitTimeout as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        return exits.TIMED_OUT
     except LookupError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.TARGET_NOT_FOUND
@@ -1090,6 +1098,13 @@ def main(argv: list[str] | None = None) -> int:
     except BrokenPipeError:
         return exits.OK
     except KeyboardInterrupt:
+        return exits.ERROR
+    except RuntimeError as exc:
+        # Anything this taxonomy has not been taught. A traceback would leave
+        # the caller with no code to branch on, which for a CLI whose contract
+        # *is* its exit codes is worse than an unhelpful one.
+        print(f"cu: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"cu: {exits.RESPONSE[exits.ERROR]}", file=sys.stderr)
         return exits.ERROR
 
 

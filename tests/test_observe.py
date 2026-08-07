@@ -161,3 +161,42 @@ def test_a_long_run_re_reads_before_acting_again(monkeypatch):
     clock[0] = checks.PROCESS_SCAN_TTL + 0.1
     checks.session_unlocked()
     assert len(scans) == 2
+
+
+# --- every failure reaches the caller as a code -----------------------------
+
+
+def _error_classes():
+    """Every error class the package declares, found rather than listed."""
+    import importlib
+    import pkgutil
+
+    import cu
+
+    found = {}
+    for module in pkgutil.iter_modules(cu.__path__):
+        loaded = importlib.import_module(f"cu.{module.name}")
+        for name, value in vars(loaded).items():
+            declared_here = getattr(value, "__module__", None) == loaded.__name__
+            if declared_here and isinstance(value, type) and issubclass(value, Exception):
+                found[f"{module.name}.{name}"] = value
+    return found
+
+
+@pytest.mark.parametrize("where", sorted(_error_classes()))
+def test_a_declared_error_becomes_an_exit_code(where, monkeypatch, capsys):
+    """A traceback leaves the caller with nothing to branch on, and this CLI's
+    whole contract is its exit codes."""
+    from cu import cli
+
+    error = _error_classes()[where]
+    raised = error(1, "boom") if error is cli.Refused else error("boom")
+
+    def explode(_args):
+        raise raised
+
+    monkeypatch.setattr(cli, "cmd_observe", explode)
+    code = cli.main(["observe"])
+    assert code != 0
+    assert code in exits.RESPONSE
+    assert "boom" in capsys.readouterr().err

@@ -596,6 +596,11 @@ context*. The user's abort means **stop, and do not retry** — an agent that
 treats that as transient defeats the safety mechanism. These must be distinct
 codes with distinct documented responses.
 
+No failure leaves by another door. Every error the package declares maps to a
+code, and anything unanticipated still exits `ERROR` with its type named on
+stderr rather than as a traceback — a caller whose whole contract is the exit
+code has nothing to branch on otherwise.
+
 **Configuration.** Settled: `$XDG_CONFIG_HOME/cu/config.toml`, defaults shipped
 in code so a host with no file still behaves correctly, user tables merged over
 them. Tables are merged recursively but lists are replaced wholesale — a user
