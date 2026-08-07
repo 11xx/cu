@@ -543,6 +543,10 @@ def cmd_know(args: argparse.Namespace) -> int:
 
         def render(r: Any) -> None:
             print(f"{r['app']}")
+            if not r.get("landmarks") and not r.get("notes"):
+                # Otherwise a bare name is the whole answer, and "never seen"
+                # reads exactly like "seen, and nothing was worth keeping".
+                print("  nothing learned about it yet")
             for key, mark in sorted(r.get("landmarks", {}).items()):
                 rect = mark["rect"]
                 seen = f"{mark.get('confirmed', 0)}✓/{mark.get('missed', 0)}✗"
