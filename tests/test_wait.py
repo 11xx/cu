@@ -48,3 +48,42 @@ def test_a_window_is_found_by_whichever_argument_carries_its_address():
 def test_resolution_returns_none_when_no_argument_is_an_address():
     windows = [{"address": "0xdeadbeef", "class": "zen", "title": "x"}]
     assert wait._resolve(["11", "Alacritty"], windows) is None
+
+
+def test_the_subscription_is_opened_before_the_state_is_checked(monkeypatch):
+    """Both orders answer the common cases; only one survives the gap.
+
+    An event announced between the snapshot and the subscription reaches
+    neither, and the wait then runs to its timeout reporting that the thing
+    never happened — while it sits on screen.
+    """
+    order = []
+
+    class Subscription:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(wait, "connect", lambda: order.append("subscribe") or Subscription())
+    monkeypatch.setattr(
+        wait,
+        "already_true",
+        lambda *a, **k: order.append("snapshot") or {"class": "zen", "title": "a page"},
+    )
+    result = wait.until("window-open", cls="zen")
+    assert result["waited"] is False
+    assert order == ["subscribe", "snapshot"]
+
+
+def test_a_closed_subscription_is_released_even_when_nothing_matches(monkeypatch):
+    closed = []
+
+    class Subscription:
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(wait, "connect", Subscription)
+    monkeypatch.setattr(wait, "already_true", lambda *a, **k: None)
+    monkeypatch.setattr(wait, "stream", lambda conn, deadline: iter(()))
+    with pytest.raises(wait.WaitTimeout):
+        wait.until("window-open", cls="zen", timeout=0.01)
+    assert closed

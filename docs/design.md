@@ -158,7 +158,17 @@ actually needs pixels. This is the largest single lever on both token cost and
 reliability, and it exists only because the compositor is scriptable.
 
 `cu wait` subscribes to the Hyprland event socket for the same reason: waiting
-for `openwindow` beats screenshotting in a loop.
+for `openwindow` beats screenshotting in a loop. It also answers from a
+snapshot first, because a window that is already open would otherwise block
+until the timeout — the most confusing possible answer, since the window is
+right there.
+
+The order of those two is load-bearing: **subscribe, then check.** The
+compositor keeps running between them, and an event announced in that gap
+reaches neither the snapshot nor a socket not yet listening. Checking first
+costs a wait its whole timeout and reports that the thing never happened, with
+the thing on screen. Subscribing first makes losing the race free — the event
+is already buffered when the snapshot comes back empty.
 
 ## Capture and the token budget
 

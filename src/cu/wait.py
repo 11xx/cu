@@ -16,6 +16,7 @@ import selectors
 import socket
 import time
 from collections.abc import Iterator
+from contextlib import closing
 from typing import Any
 
 from . import hypr, observe
@@ -40,17 +41,29 @@ def normalise_address(value: str) -> str:
     return value[2:].lower() if value.startswith("0x") else value.lower()
 
 
-def stream(deadline: float) -> Iterator[tuple[str, list[str]]]:
-    """Yield `(event, args)` until the deadline passes.
+def connect() -> socket.socket:
+    """Subscribe to the event stream.
 
-    A partial line is held rather than parsed: the socket delivers bytes, and a
-    line split across two reads would otherwise surface as two malformed events.
+    Separate from reading it so that a caller can subscribe *before* asking
+    whether what it waits for has already happened. Between those two acts the
+    compositor is still running, and an event announced in the gap is one
+    nobody is listening for — the wait would then run to its timeout and
+    report that the thing never happened while it sat on screen.
     """
     path = hypr.event_socket()
     if path is None or not path.is_socket():
         raise hypr.HyprError("the Hyprland event socket is unavailable")
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.connect(str(path))
+    return conn
+
+
+def stream(conn: socket.socket, deadline: float) -> Iterator[tuple[str, list[str]]]:
+    """Yield `(event, args)` until the deadline passes.
+
+    A partial line is held rather than parsed: the socket delivers bytes, and a
+    line split across two reads would otherwise surface as two malformed events.
+    """
     selector = selectors.DefaultSelector()
     selector.register(conn, selectors.EVENT_READ)
     buffered = ""
@@ -73,7 +86,6 @@ def stream(deadline: float) -> Iterator[tuple[str, list[str]]]:
                 yield name, rest.split(",")
     finally:
         selector.close()
-        conn.close()
 
 
 def _window_matches(window: dict[str, Any], cls: str | None, title: str | None) -> bool:
@@ -129,31 +141,38 @@ def until(
     if condition not in EVENTS:
         raise ValueError(f"unknown condition {condition!r}; expected one of {sorted(EVENTS)}")
 
-    existing = already_true(condition, cls, title)
-    if existing is not None:
-        return {"condition": condition, "matched": existing, "waited": False}
-
     deadline = time.monotonic() + timeout
     wanted = EVENTS[condition]
-    for name, args in stream(deadline):
-        if name not in wanted:
-            continue
-        if condition == "window-close":
-            # There is nothing left to inspect, so the event itself is the
-            # answer and the caller only ever asked whether it happened.
-            return {"condition": condition, "matched": {"address": args[0]}, "waited": True}
-        # The event names a window; its geometry and title come from a fresh
-        # snapshot, because the event carries neither and an agent's next move
-        # needs both.
-        time.sleep(settle)  # a window is mapped a moment after it is announced
-        snap = observe.snapshot()
-        match = _resolve(args, snap["windows"])
-        if match is None and condition == "focus":
-            # The non-v2 focus event carries a class and title rather than an
-            # address, so fall back to whatever now holds focus.
-            match = next((w for w in snap["windows"] if w["focused"]), None)
-        if match and _window_matches(match, cls, title):
-            return {"condition": condition, "matched": match, "waited": True}
+    # Subscribed before asking. The snapshot answers the common case without
+    # waiting; subscribing first is what makes losing that race cost nothing.
+    with closing(connect()) as conn:
+        existing = already_true(condition, cls, title)
+        if existing is not None:
+            return {"condition": condition, "matched": existing, "waited": False}
+
+        for name, args in stream(conn, deadline):
+            if name not in wanted:
+                continue
+            if condition == "window-close":
+                # There is nothing left to inspect, so the event itself is the
+                # answer and the caller only ever asked whether it happened.
+                return {
+                    "condition": condition,
+                    "matched": {"address": args[0]},
+                    "waited": True,
+                }
+            # The event names a window; its geometry and title come from a
+            # fresh snapshot, because the event carries neither and an agent's
+            # next move needs both.
+            time.sleep(settle)  # a window is mapped a moment after it is announced
+            snap = observe.snapshot()
+            match = _resolve(args, snap["windows"])
+            if match is None and condition == "focus":
+                # The non-v2 focus event carries a class and title rather than
+                # an address, so fall back to whatever now holds focus.
+                match = next((w for w in snap["windows"] if w["focused"]), None)
+            if match and _window_matches(match, cls, title):
+                return {"condition": condition, "matched": match, "waited": True}
 
     raise WaitTimeout(
         f"no {condition} event matching "
