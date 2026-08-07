@@ -14,12 +14,13 @@ supplies what the warp cannot: buttons, wheels, and keys.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import os
 import signal
 import struct
 import time
-from typing import Any
+from typing import Any, Self
 
 DEVICE_PATH = "/dev/uinput"
 
@@ -166,7 +167,7 @@ class Device:
         self._held: set[int] = set()
         self._restore: list[tuple[int, Any]] = []
 
-    def __enter__(self) -> Device:
+    def __enter__(self) -> Self:
         try:
             fd = os.open(DEVICE_PATH, os.O_WRONLY | os.O_NONBLOCK)
         except OSError as exc:
@@ -193,11 +194,10 @@ class Device:
 
         # Signals must not bypass release. The previous handlers are restored on
         # exit so a caller that installed its own keeps it.
+        # Off the main thread this raises, and the context manager still releases.
         for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 self._restore.append((sig, signal.signal(sig, self._on_signal)))
-            except (ValueError, OSError):
-                pass  # not the main thread; the context manager still releases
 
         # A device the compositor has not enumerated yet accepts events at the
         # kernel and drops them before any client sees them.
@@ -209,7 +209,7 @@ class Device:
         signal.signal(signum, signal.SIG_DFL)
         os.kill(os.getpid(), signum)
 
-    def __exit__(self, *_exc: Any) -> None:
+    def __exit__(self, *_exc: object) -> None:
         self.close()
 
     def close(self) -> None:
@@ -224,16 +224,12 @@ class Device:
             pass  # destroying the device below releases them regardless
         finally:
             self._held.clear()
-            try:
+            with contextlib.suppress(OSError):
                 fcntl.ioctl(fd, UI_DEV_DESTROY)
-            except OSError:
-                pass
             os.close(fd)
             for sig, handler in self._restore:
-                try:
+                with contextlib.suppress(ValueError, OSError, TypeError):
                     signal.signal(sig, handler)
-                except (ValueError, OSError, TypeError):
-                    pass
             self._restore.clear()
 
     def _write(self, typ: int, code: int, value: int) -> None:

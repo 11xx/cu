@@ -73,7 +73,8 @@ def content_hash(recipe: dict[str, Any]) -> str:
     Review history and outcomes are excluded deliberately: recording that a
     replay failed must not invalidate the review of steps nobody edited.
     """
-    body = {key: recipe[key] for key in ("name", "site", "task", "steps", "preconditions", "verify")}
+    kept = ("name", "site", "task", "steps", "preconditions", "verify")
+    body = {key: recipe[key] for key in kept}
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
 
 
@@ -378,7 +379,8 @@ def _capture_window(window: dict[str, Any], cfg: dict[str, Any]) -> dict[str, An
     frames.collect()
     monitors = observe.monitors()
     rect = capture.clamp(
-        window["logical_rect"], capture.sole_monitor(window["logical_rect"], monitors)["logical_rect"]
+        window["logical_rect"],
+        capture.sole_monitor(window["logical_rect"], monitors)["logical_rect"],
     )
     monitor = capture.sole_monitor(rect, monitors)
     scratch = frames.store_dir() / ".pending.png"

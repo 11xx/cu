@@ -8,6 +8,22 @@ dependencies = []
 [project.scripts]
 cu = "cu.cli:main"
 
+# `uv run pytest` and `uv run ruff check .` are the gates. Naming them here
+# keeps the command that verifies a change the same for everyone who runs it.
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.16"]
+
+# Stated here rather than inherited, so the gate reports the same findings on
+# every host instead of whatever the person running it configured globally.
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Rules that catch defects. Pylint's refactor and convention families are
+# omitted deliberately: they argue about branch counts and deferred imports,
+# and the deferred imports here exist to break real cycles.
+select = ["E", "F", "I", "B", "UP", "SIM", "PYI", "RUF", "PLE", "PLW"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

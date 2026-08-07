@@ -41,7 +41,7 @@ def event_socket() -> Path | None:
 def _run(args: list[str], timeout: float = 5.0) -> str:
     try:
         proc = subprocess.run(
-            ["hyprctl", *args], capture_output=True, text=True, timeout=timeout
+            ["hyprctl", *args], capture_output=True, text=True, timeout=timeout, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise HyprError(f"hyprctl {' '.join(args)}: {exc}") from exc

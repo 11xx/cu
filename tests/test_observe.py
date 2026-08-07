@@ -136,10 +136,10 @@ def test_lock_screen_blocks_injection(monkeypatch):
 def _counted_scan(monkeypatch, clock):
     """Replace the /proc walk with a counter, and hand the module a fake clock."""
     scans = []
-    monkeypatch.setattr(checks, "_process_scan", None, raising=False)
+    monkeypatch.setattr(checks, "_process_scan", [], raising=False)
     monkeypatch.setattr(checks.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(
-        checks.Path, "iterdir", lambda self: iter(()) if scans.append(1) else iter(())
+        checks.Path, "iterdir", lambda self: (scans.append(1), iter(()))[1]
     )
     return scans
 

@@ -18,7 +18,10 @@ def isolated_store(tmp_path, monkeypatch):
 
 
 def log(**extra):
-    return {"action": "key", "chord": "ctrl+t", "semantic": None, "window": {"class": "zen"}, **extra}
+    return {
+        "action": "key", "chord": "ctrl+t", "semantic": None,
+        "window": {"class": "zen"}, **extra,
+    }
 
 
 def build(entries=None, name="demo"):

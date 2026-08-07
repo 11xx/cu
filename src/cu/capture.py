@@ -34,7 +34,7 @@ class CaptureError(RuntimeError):
 def _run(args: list[str]) -> None:
     if not shutil.which(args[0]):
         raise CaptureError(f"{args[0]} is not installed")
-    proc = subprocess.run(args, capture_output=True, text=True)
+    proc = subprocess.run(args, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         raise CaptureError(f"{' '.join(args[:2])}: {proc.stderr.strip()}")
 

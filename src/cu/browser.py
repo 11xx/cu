@@ -182,7 +182,8 @@ def default_profile(profile_home: Path) -> Path | None:
             if candidate.is_dir():
                 return candidate
     for section in parser.sections():
-        if parser.get(section, "Default", fallback="") == "1" and parser.has_option(section, "Path"):
+        flagged = parser.get(section, "Default", fallback="") == "1"
+        if flagged and parser.has_option(section, "Path"):
             candidate = profile_home / parser.get(section, "Path")
             if candidate.is_dir():
                 return candidate

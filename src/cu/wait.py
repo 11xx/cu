@@ -15,7 +15,8 @@ from __future__ import annotations
 import selectors
 import socket
 import time
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 from . import hypr, observe
 
@@ -76,11 +77,9 @@ def stream(deadline: float) -> Iterator[tuple[str, list[str]]]:
 
 
 def _window_matches(window: dict[str, Any], cls: str | None, title: str | None) -> bool:
-    if cls and cls.lower() not in window["class"].lower():
-        return False
-    if title and title.lower() not in window["title"].lower():
-        return False
-    return True
+    return (not cls or cls.lower() in window["class"].lower()) and (
+        not title or title.lower() in window["title"].lower()
+    )
 
 
 def already_true(

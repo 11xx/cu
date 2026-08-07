@@ -105,7 +105,9 @@ def uinput() -> dict[str, Any]:
 #: the whole run against the moment it started.
 PROCESS_SCAN_TTL = 1.0
 
-_process_scan: tuple[float, list[tuple[int, list[str]]]] | None = None
+#: The most recent scan and when it was taken. A list rather than a rebound
+#: module global so the memo is updated in place.
+_process_scan: list[tuple[float, list[tuple[int, list[str]]]]] = []
 
 
 def _processes() -> list[tuple[int, list[str]]]:
@@ -115,10 +117,9 @@ def _processes() -> list[tuple[int, list[str]]]:
     both guards exist for the case where the world changes under an agent, so
     the answer is dated and expires rather than being fixed at process start.
     """
-    global _process_scan
     now = time.monotonic()
-    if _process_scan is not None and now - _process_scan[0] < PROCESS_SCAN_TTL:
-        return _process_scan[1]
+    if _process_scan and now - _process_scan[0][0] < PROCESS_SCAN_TTL:
+        return _process_scan[0][1]
     found = []
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
@@ -130,7 +131,7 @@ def _processes() -> list[tuple[int, list[str]]]:
         args = [a.decode(errors="replace") for a in argv if a]
         if args:
             found.append((int(entry.name), args))
-    _process_scan = (now, found)
+    _process_scan[:] = [(now, found)]
     return found
 
 

@@ -14,19 +14,30 @@ import time
 from typing import Any
 
 from . import (
-    actions, browser, capture, checks, config, exits, frames, knowledge, observe,
-    recipes, sandbox, uinput, wait,
+    actions,
+    browser,
+    capture,
+    checks,
+    config,
+    exits,
+    frames,
+    knowledge,
+    observe,
+    recipes,
+    safety,
+    sandbox,
+    uinput,
+    wait,
 )
 from .browser import BrowserError
 from .capture import CaptureError
 from .config import ConfigError
 from .frames import FrameError
+from .hypr import HyprError
 from .knowledge import KnowledgeError
 from .recipes import RecipeError
-from .sandbox import SandboxError
-from .hypr import HyprError
-from . import safety
 from .safety import Refused
+from .sandbox import SandboxError
 from .uinput import UinputError
 
 STATUS_MARK = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL"}
@@ -55,7 +66,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     payload = {
         "status": overall,
         "checks": results,
-        "exit_codes": {exits.name(c): {"code": c, "response": r} for c, r in exits.RESPONSE.items()},
+        "exit_codes": {
+            exits.name(c): {"code": c, "response": r} for c, r in exits.RESPONSE.items()
+        },
     }
 
     def render(_: Any) -> None:
@@ -140,7 +153,9 @@ def cmd_shot(args: argparse.Namespace) -> int:
     window = None
 
     if args.landmark and (args.output or args.region):
-        raise ValueError("--landmark aims within a window; it cannot combine with --output or --region")
+        raise ValueError(
+            "--landmark aims within a window; it cannot combine with --output or --region"
+        )
 
     if args.output and not args.landmark:
         monitor = next((m for m in monitors if m["name"] == args.output), None)
@@ -267,9 +282,12 @@ def _last_frame_like(
             candidate = json.loads(meta.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        if candidate.get("source") == source and candidate.get("logical_rect") == rect:
-            if candidate["captured_at"] > newest_at:
-                newest, newest_at = candidate, candidate["captured_at"]
+        if (
+            candidate.get("source") == source
+            and candidate.get("logical_rect") == rect
+            and candidate["captured_at"] > newest_at
+        ):
+            newest, newest_at = candidate, candidate["captured_at"]
     return newest
 
 
@@ -403,7 +421,7 @@ def cmd_recipe(args: argparse.Namespace) -> int:
             lambda r: print(
                 f"{'would replay' if r['dry_run'] else 'replayed'} {r['recipe']} "
                 f"r{r['revision']}: {r['steps']} steps, "
-                f"verification {'passed' if r['verified'] else 'failed' if r['verified'] is False else 'not stated'}"
+                f"verification {_verdict(r['verified'])}"
             ),
         )
         return exits.OK
@@ -411,16 +429,25 @@ def cmd_recipe(args: argparse.Namespace) -> int:
     return exits.USAGE
 
 
+def _verdict(verified: bool | None) -> str:
+    """Three outcomes, because "not stated" is not the same as "failed"."""
+    return {True: "passed", False: "failed", None: "not stated"}[verified]
+
+
 def _describe_step(step: dict[str, Any]) -> str:
     action = step["action"]
     if action in {"click", "move"}:
         rel = step["relative"]
-        how = action if action == "move" else f"{step.get('button', 'left')} x{step.get('count', 1)}"
+        pressed = f"{step.get('button', 'left')} x{step.get('count', 1)}"
+        how = action if action == "move" else pressed
         return f"{how} at {rel['x']:.3f},{rel['y']:.3f} of {step['window_class']}"
     if action == "scroll":
         return f"scroll dy {step.get('dy',0)} dx {step.get('dx',0)}"
     if action == "type":
-        return f"type parameter {step.get('param')!r} ({step.get('length')} chars via {step.get('method')})"
+        return (
+            f"type parameter {step.get('param')!r} "
+            f"({step.get('length')} chars via {step.get('method')})"
+        )
     if action == "key":
         return f"key {step.get('semantic') or 'chord'} → {step.get('chord')}"
     if action == "browser":
@@ -583,7 +610,7 @@ def cmd_browser(args: argparse.Namespace) -> int:
                 installed = "" if b["resolved"] else "  (not installed)"
                 print(
                     f"{b['name']:<20} {b['family']:<9} "
-                    f"class {str(b['window_class'] or '?'):<16} "
+                    f"class {b['window_class'] or '?'!s:<16} "
                     f"{len(b['actions'])} actions{installed}"
                 )
         payload = {
@@ -626,7 +653,7 @@ def cmd_browser(args: argparse.Namespace) -> int:
         _emit(payload, args.json, render)
         return exits.OK
 
-    chord, source = browser.resolve(target, args.action, cfg)
+    chord, _source = browser.resolve(target, args.action, cfg)
     if chord is None:
         known = sorted(browser.keymap_for(target)) or ["none"]
         print(
@@ -898,7 +925,10 @@ def build_parser() -> argparse.ArgumentParser:
         return p
 
     def add_aim(p: argparse.ArgumentParser, required: bool) -> None:
-        p.add_argument("--frame", metavar="ID", required=required, help="frame the coordinate came from")
+        p.add_argument(
+            "--frame", metavar="ID", required=required,
+            help="frame the coordinate came from",
+        )
         p.add_argument("--at", metavar="X,Y", required=required, help="coordinate in image pixels")
 
     focus = add_injecting("focus", "give a window keyboard focus", cmd_focus)
@@ -948,8 +978,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     key = add_injecting("key", "a semantic action, or a literal chord", cmd_key)
     target = key.add_mutually_exclusive_group(required=True)
-    target.add_argument("--action", metavar="NAME", help="a semantic action, resolved per application")
-    target.add_argument("--chord", metavar="CHORD", help="a literal chord such as 'ctrl+alt+shift+f4'")
+    target.add_argument(
+        "--action", metavar="NAME", help="a semantic action, resolved per application"
+    )
+    target.add_argument(
+        "--chord", metavar="CHORD", help="a literal chord such as 'ctrl+alt+shift+f4'"
+    )
     key.add_argument("--repeat", type=int, default=1, help="how many times to send it")
     key.add_argument(
         "--backend",

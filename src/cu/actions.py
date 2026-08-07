@@ -123,7 +123,9 @@ def resolve_target(
     return {"snapshot": snap, "frame": frame, "aimed": aim(frame, at[0], at[1], snap)}
 
 
-def move(cfg: dict[str, Any], frame_id: str, at: tuple[float, float], *, dry_run: bool) -> dict[str, Any]:
+def move(
+    cfg: dict[str, Any], frame_id: str, at: tuple[float, float], *, dry_run: bool
+) -> dict[str, Any]:
     target = resolve_target(frame_id, at, cfg)
     aimed = target["aimed"]
     safety.preflight_pointer(cfg, aimed["window_under_point"], target["frame"])
@@ -241,7 +243,7 @@ def _clipboard_read() -> bytes | None:
     """
     if not shutil.which("wl-paste"):
         return None
-    proc = subprocess.run(["wl-paste", "--no-newline"], capture_output=True)
+    proc = subprocess.run(["wl-paste", "--no-newline"], capture_output=True, check=False)
     return proc.stdout if proc.returncode == 0 else None
 
 
@@ -263,6 +265,7 @@ def _clipboard_write(data: bytes) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         timeout=5,
+        check=False,
     )
     if proc.returncode != 0:
         raise ClipboardError(f"wl-copy exited {proc.returncode}")
@@ -292,7 +295,9 @@ def type_text(
     window = next((w for w in snap["windows"] if focus and w["address"] == focus["address"]), None)
     safety.preflight_keyboard(cfg, window, focus)
     if window is None:
-        raise Refused(exits.TARGET_NOT_FOUND, "no window holds focus; nothing would receive the text")
+        raise Refused(
+            exits.TARGET_NOT_FOUND, "no window holds focus; nothing would receive the text"
+        )
 
     chord = None
     if method == "clipboard":
@@ -411,7 +416,7 @@ def compare_text(expected: str, got: str) -> dict[str, Any]:
     if expected in got:
         return {"status": "ok", "detail": f"field contains all {len(expected)} characters"}
     shared = 0
-    for sent, arrived in zip(expected, got):
+    for sent, arrived in zip(expected, got, strict=False):
         if sent != arrived:
             break
         shared += 1

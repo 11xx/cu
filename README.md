@@ -62,6 +62,10 @@ design rests on.
 
 ## Development
 
+The two gates. Both tools and the rules they enforce are pinned in
+`pyproject.toml`, so they report the same thing on any host.
+
 ```sh
-uv run --with pytest pytest tests/
+uv run pytest
+uv run ruff check .
 ```
