@@ -27,6 +27,7 @@ from . import (
     recipes,
     safety,
     sandbox,
+    status,
     uinput,
     wait,
 )
@@ -823,9 +824,40 @@ def cmd_key(args: argparse.Namespace) -> int:
     return exits.OK
 
 
+def cmd_status(args: argparse.Namespace) -> int:
+    """What cu is doing, for whatever shows the user things.
+
+    Prints nothing at all when idle, because that is what a status bar wants to
+    render for idle — a module whose command outputs an empty string takes up
+    no room.
+    """
+    record = status.read()
+    _emit(record, args.json, lambda r: print(status.describe(r)) if r.get("active") else None)
+    return exits.OK
+
+
+def cmd_session(args: argparse.Namespace) -> int:
+    """Bracket a stretch of work, so the indicator does not blink between steps.
+
+    A single action's record expires on its own, which is what keeps a killed
+    process from claiming the desktop forever. But a model deciding what to do
+    next routinely takes longer than that, and an indicator that clears while
+    the agent is still working reads as "it finished" at the moment the user
+    most wants the truth.
+    """
+    if args.subcommand == "begin":
+        record = status.begin(args.detail, pid=args.pid)
+        _emit(record, args.json, lambda r: print(f"working: {r['detail']}"))
+        return exits.OK
+    record = status.end()
+    _emit(record, args.json, lambda _r: print("idle"))
+    return exits.OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cu", description="Computer use for Hyprland.")
     parser.add_argument("--json", action="store_true", help="emit JSON on stdout")
+    parser.add_argument("--why", metavar="TEXT", default="", help="what this is for")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # Repeating --json per subcommand accepts both `cu --json observe` and the
@@ -836,8 +868,31 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON"
         )
+        # What the user sees while this runs. A command name says an agent is
+        # acting; a sentence says what it is trying to do, which is the part
+        # worth interrupting over or leaving alone.
+        p.add_argument(
+            "--why",
+            metavar="TEXT",
+            default=argparse.SUPPRESS,
+            help="a short description of the intent, shown to the user",
+        )
         p.set_defaults(run=run)
         return p
+
+    add("status", "what cu is doing, for a status bar to poll", cmd_status)
+
+    session = add("session", "bracket a stretch of work as one activity", cmd_session)
+    ssub2 = session.add_subparsers(dest="subcommand", required=True)
+    begin = ssub2.add_parser("begin", help="say an agent has started working")
+    begin.add_argument("detail", help="a short description the user will see")
+    begin.add_argument(
+        "--pid", type=int,
+        help="end the session when this process does; omit if there is none",
+    )
+    begin.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    ended = ssub2.add_parser("end", help="say it has stopped")
+    ended.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
 
     add("doctor", "verify every environment precondition", cmd_doctor)
     add("observe", "monitors, windows, focus, cursor", cmd_observe)
@@ -1063,6 +1118,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Published before the command runs rather than after, because the point is
+    # to say what is happening while it happens. `status` is excluded: a reader
+    # asking what is going on is not itself something going on.
+    if args.command not in {"status", "session"}:
+        status.publish(args.command, detail=getattr(args, "why", "") or "")
     try:
         return args.run(args)
     except Refused as exc:

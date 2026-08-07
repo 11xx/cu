@@ -527,12 +527,64 @@ landmark that keeps missing belongs to an application that changed, and the
 counters make that visible rather than letting it quietly cost an extra capture
 on every run.
 
+## Telling the user, while it happens
+
+An agent driving a desktop is the most visible thing on it and the easiest to
+miss. Being watchable is already a safety property here — it is the argument
+for acting on the real screen rather than a headless output — but watchable
+only pays if the person can tell *that* it is happening without staring.
+
+**`cu` publishes state; it does not draw.** The indicator belongs in whatever
+the user already looks at, which on this desktop is the status bar.
+
+That split is not only taste. An overlay and a screenshot-driven agent compete
+for the same pixels: `grim` captures layer-shell surfaces, so anything `cu`
+drew would land in the frames the model then reads and acts on. Hyprland 0.56
+offers no exclusion — a `noscreenshare` layer rule is accepted and does
+nothing — which leaves hiding the overlay around every capture, or editing it
+back out of the PNG. The status bar is already a layer surface in every frame,
+so an indicator inside it adds no new interference at all.
+
+Two artifacts, because there are two questions:
+
+- **`$XDG_RUNTIME_DIR/cu/status.json` — what is happening now.** One small
+  object, replaced atomically. A bar polling it gets a whole state or the
+  previous whole state and never parses history to find the end of it. Runtime
+  state, so a reboot cannot leave a stale claim behind.
+- **The action log — what happened.** Unchanged, append-only, read afterwards.
+
+**Records expire.** `cu` has no daemon, so nothing writes "finished" for a
+process killed mid-action. A record carries the moment it stops being true and
+a reader past that reports idle. A stuck "an agent is driving your desktop" is
+the one failure that would teach the user to ignore the indicator.
+
+**`--why` is the part worth showing.** `cu click` says an agent is acting;
+`--why "clicking Submit"` says what it is trying to do, which is what decides
+whether to interrupt. `cu session begin` brackets a stretch of work so the
+indicator does not blink out while a model spends longer thinking than one
+action's expiry.
+
+`cu status` prints that line and nothing at all when idle, which is exactly
+what a bar module wants to render for idle:
+
+```jsonc
+// waybar
+"custom/cu": {
+  "exec": "cu status --json",
+  "return-type": "json",
+  "interval": 1,
+  "format": "🤖 {}"
+}
+```
+
 ## Command surface
 
 The whole contract, in one place. Everything takes `--json` and `--dry-run`.
 
 | Command | Purpose | Creates a uinput device |
 | --- | --- | --- |
+| `cu status` | What cu is doing, for a status bar to poll | no |
+| `cu session` | Bracket a stretch of work as one activity | no |
 | `cu doctor` | Verify every precondition in [environment.md](environment.md) | no |
 | `cu observe` | Monitors, windows, workspaces, focus, cursor | no |
 | `cu shot` | Capture; writes a PNG and a frame descriptor | no |

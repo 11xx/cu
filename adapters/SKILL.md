@@ -71,6 +71,19 @@ Read them; they say what to do next, and the response differs per code.
 their abort key. Stop what you are doing and tell them. Attempting to clear the
 flag or retry past it defeats the only interlock they hold.
 
+## Say what you are doing
+
+```sh
+cu session begin 'booking a flight'    # the user sees this while you work
+cu click --frame f3 --at 412,300 --why 'accepting the fare'
+cu session end
+```
+
+The user's status bar shows this. `--why` is one short phrase about intent, not
+the command — "accepting the fare", not "click at 412,300". Open a session for
+anything spanning more than a couple of commands: without one the indicator
+clears while you are thinking, which reads to the user as "it finished".
+
 ## Typing and keys
 
 ```sh

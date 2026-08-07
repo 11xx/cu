@@ -417,14 +417,15 @@ def check(verify: dict[str, Any] | None) -> bool | None:
     """
     if not verify:
         return None
+    kind = verify.get("kind")
+    field = {"window-title": "title", "window-class": "class"}.get(kind)
+    if field is None:
+        # Checked before the compositor is asked anything. A recipe naming a
+        # check cu does not implement is wrong however the screen looks, and
+        # reading the screen first only delays saying so.
+        raise RecipeError(f"unknown verification kind {kind!r}")
+
     from . import observe
 
-    snap = observe.snapshot()
-    kind = verify.get("kind")
-    if kind == "window-title":
-        needle = verify.get("contains", "").lower()
-        return any(needle in w["title"].lower() for w in snap["windows"])
-    if kind == "window-class":
-        needle = verify.get("contains", "").lower()
-        return any(needle in w["class"].lower() for w in snap["windows"])
-    raise RecipeError(f"unknown verification kind {kind!r}")
+    needle = verify.get("contains", "").lower()
+    return any(needle in w[field].lower() for w in observe.snapshot()["windows"])

@@ -33,6 +33,11 @@ bin/cu recipe replay open-url --param text1=example.com
 bin/cu know set zen urlbar --rect 0.1,0.02,0.6,0.04   # remember where to look
 bin/cu shot --landmark zen/urlbar    # aim a capture by what a past run learned
 bin/cu sandbox create                # a headless output, when you want one
+
+bin/cu session begin 'booking a flight'   # tell the user what is happening
+bin/cu click --frame f3 --at 412,300 --why 'accepting the fare'
+bin/cu status                        # one line for a status bar; empty when idle
+bin/cu session end
 ```
 
 Every injecting command takes `--dry-run`, which runs every interlock and
@@ -50,12 +55,18 @@ a caller needs no knowledge of the Python underneath.
 the image depicts and its pixel size. Later commands take coordinates as
 `--frame <id> --at x,y` in image pixels, and `cu` maps them back to the screen.
 
+`cu` publishes what it is doing to `$XDG_RUNTIME_DIR/cu/status.json` — one
+small object, replaced atomically, so a status bar can poll it and show the
+user that an agent is driving. It does not draw an overlay: `grim` captures
+layer surfaces, so anything `cu` drew would end up in the frames the model
+reads. Records expire, because nothing writes "finished" for a killed process.
+
 ## Status
 
 `doctor`, `observe`, `shot`, `focus`, and the input commands — `move`, `click`,
 `scroll`, `type`, `key` — are implemented, with the safety interlocks, as is
-`wait`, `browser`, `recipe`, `know`, and `sandbox`. Every command in the design
-is built — see
+`wait`, `browser`, `recipe`, `know`, `sandbox`, and the `status`/`session`
+feed a status bar reads. Every command in the design is built — see
 [docs/design.md](docs/design.md) for the command surface and build order, and
 [docs/environment.md](docs/environment.md) for the verified host facts the
 design rests on.

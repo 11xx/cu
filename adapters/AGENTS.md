@@ -51,5 +51,10 @@ exactly like success. Exit 25 means it did not arrive — read the field rather
 than retyping, which can duplicate whatever did land. Verifying leaves the
 field selected, so submit next, or re-aim before typing again.
 
+Tell the user what you are doing: `cu session begin '<short phrase>'` around a
+stretch of work, `--why '<short phrase>'` on individual commands, and
+`cu session end` when done. It shows in their status bar, and it is how they
+decide whether to interrupt you.
+
 Every injecting command takes `--dry-run`. Recipes do not replay until a human
 has read and approved them; never approve on the user's behalf.
