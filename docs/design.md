@@ -73,6 +73,12 @@ into that single ratio. The same expression is correct for a full-output frame,
 a window crop, and an arbitrary region — there is no second code path to get
 wrong.
 
+`logical_rect` is always whole pixels, rounded outward from whatever was asked
+for and back inside the output. `grim -g` takes integers, so a fractional
+rectangle — which is what a window-relative landmark resolves to — would be
+captured as one region and described as another, and every coordinate mapped
+back through the frame would inherit the difference.
+
 **The model only ever emits image coordinates, always paired with the frame id
 they came from:**
 
@@ -171,7 +177,10 @@ budgeted rather than literal:
 - `--for claude|openai|generic` selects a provider profile that sets the
   downscale target and format.
 - `--if-changed` hashes the region and skips re-sending an unchanged screen,
-  which is the common case in a wait loop.
+  which is the common case in a wait loop. The reused frame is re-dated by the
+  capture that confirmed it: the pixels were just read back and matched, which
+  is the evidence the staleness threshold stands in for, so a frame proven
+  current must not then be refused as too old.
 
 For the Claude profile: current models accept up to 2576px on the long edge and
 charge up to ~4784 tokens for a single image at that size, with returned
@@ -262,6 +271,12 @@ same: re-observe, then decide again.
 **Denylist.** Refuse to inject into window classes matching a configurable
 list — lock screens, password managers, authentication prompts. Refuse
 entirely when the session is locked.
+
+The lock-screen and remapper guards both read `/proc`, and the scan is dated
+rather than fixed at process start. One scan serves both within a single
+injection — they are meant to describe the same instant — but it expires
+quickly, because a replay injects repeatedly over minutes and a session locked
+partway through has to be seen by the actions that follow it.
 
 **Guaranteed release.** Every press is paired with a release, including on
 `SIGINT`/`SIGTERM` and on panic. Destroying the uinput device releases its keys

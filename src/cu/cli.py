@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from typing import Any
 
 from . import (
@@ -204,6 +205,11 @@ def cmd_shot(args: argparse.Namespace) -> int:
         previous = _last_frame_like(source, rect)
         if previous and previous.get("digest_native") == digest:
             scratch.unlink(missing_ok=True)
+            # The pixels were just re-read and match, which is the evidence
+            # staleness is a proxy for. Keeping the original timestamp would
+            # let a frame proven current a moment ago be refused as too old.
+            previous["captured_at"] = time.time()
+            frames.save(previous)
             payload = {**previous, "changed": False}
             _emit(payload, args.json, lambda p: print(f"unchanged; reusing {p['id']}"))
             return exits.OK

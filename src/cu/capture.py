@@ -12,6 +12,7 @@ frame's rectangle is directly usable as its own capture argument.
 from __future__ import annotations
 
 import hashlib
+import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -67,10 +68,23 @@ def sole_monitor(
 
 
 def clamp(rect: dict[str, float], bounds: dict[str, float]) -> dict[str, float]:
-    x0 = max(rect["x"], bounds["x"])
-    y0 = max(rect["y"], bounds["y"])
-    x1 = min(rect["x"] + rect["w"], bounds["x"] + bounds["w"])
-    y1 = min(rect["y"] + rect["h"], bounds["y"] + bounds["h"])
+    """The capturable rectangle: inside the output, and on whole pixels.
+
+    Both halves are one operation because a caller has no use for either
+    without the other. `grim -g` takes integers, so a fractional rectangle —
+    which is what a window-relative landmark resolves to — is truncated on the
+    way in while the frame keeps the fraction. Every coordinate later mapped
+    back through that frame inherits the difference. Rounding outward here
+    means the frame records exactly the region that was captured.
+    """
+    x0 = math.floor(max(rect["x"], bounds["x"]))
+    y0 = math.floor(max(rect["y"], bounds["y"]))
+    x1 = math.ceil(min(rect["x"] + rect["w"], bounds["x"] + bounds["w"]))
+    y1 = math.ceil(min(rect["y"] + rect["h"], bounds["y"] + bounds["h"]))
+    # Rounding outward can leave the output, so the bounds get the last word.
+    x0, y0 = max(x0, math.ceil(bounds["x"])), max(y0, math.ceil(bounds["y"]))
+    x1 = min(x1, math.floor(bounds["x"] + bounds["w"]))
+    y1 = min(y1, math.floor(bounds["y"] + bounds["h"]))
     if x1 <= x0 or y1 <= y0:
         raise CaptureError("region is empty after clamping to its output")
     return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
@@ -97,7 +111,12 @@ def grab_output(name: str, dest: Path, scale: float) -> None:
 
 
 def grab_region(rect: dict[str, float], dest: Path, scale: float) -> None:
-    geometry = f"{int(rect['x'])},{int(rect['y'])} {int(rect['w'])}x{int(rect['h'])}"
+    """Capture a rectangle that `clamp` has already put on whole pixels.
+
+    Rounding here instead would be the frame contract's own bug: grim would
+    capture one rectangle while the frame described another.
+    """
+    geometry = f"{round(rect['x'])},{round(rect['y'])} {round(rect['w'])}x{round(rect['h'])}"
     _run(["grim", "-g", geometry, "-s", f"{scale:.6f}", str(dest)])
 
 

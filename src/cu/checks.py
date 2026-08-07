@@ -8,9 +8,9 @@ releases.
 
 from __future__ import annotations
 
-import functools
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -97,16 +97,28 @@ def uinput() -> dict[str, Any]:
     return _check("uinput", OK, f"writable as uid {os.getuid()}, no root needed")
 
 
-@functools.cache
+#: How long a /proc scan may be reused. Long enough that the remapper filter
+#: and the lock-screen check share one scan within a single injection — they
+#: are meant to describe the same instant, and scanning twice cost about half
+#: the latency of a dry-run command. Short enough that a replay, which injects
+#: repeatedly over minutes, re-reads before each action rather than deciding
+#: the whole run against the moment it started.
+PROCESS_SCAN_TTL = 1.0
+
+_process_scan: tuple[float, list[tuple[int, list[str]]]] | None = None
+
+
 def _processes() -> list[tuple[int, list[str]]]:
     """Every readable process as (pid, argv). Ignores races against exiting pids.
 
-    Cached because `cu` is a one-shot process and two guards need this on every
-    injection — the remapper filter and the lock-screen check. Scanning /proc
-    twice cost about half the latency of a dry-run command, and re-reading it
-    would not be more correct: both guards are meant to describe the same
-    instant, and a second scan could report a different one.
+    A lock screen or an unfiltered remapper appearing mid-run has to be seen:
+    both guards exist for the case where the world changes under an agent, so
+    the answer is dated and expires rather than being fixed at process start.
     """
+    global _process_scan
+    now = time.monotonic()
+    if _process_scan is not None and now - _process_scan[0] < PROCESS_SCAN_TTL:
+        return _process_scan[1]
     found = []
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
@@ -118,6 +130,7 @@ def _processes() -> list[tuple[int, list[str]]]:
         args = [a.decode(errors="replace") for a in argv if a]
         if args:
             found.append((int(entry.name), args))
+    _process_scan = (now, found)
     return found
 
 

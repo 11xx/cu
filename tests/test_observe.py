@@ -131,3 +131,33 @@ def test_absent_xremap_is_fine(monkeypatch):
 def test_lock_screen_blocks_injection(monkeypatch):
     _procs(monkeypatch, [(7, ["/usr/bin/hyprlock"])])
     assert checks.session_unlocked()["status"] == checks.FAIL
+
+
+def _counted_scan(monkeypatch, clock):
+    """Replace the /proc walk with a counter, and hand the module a fake clock."""
+    scans = []
+    monkeypatch.setattr(checks, "_process_scan", None, raising=False)
+    monkeypatch.setattr(checks.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        checks.Path, "iterdir", lambda self: iter(()) if scans.append(1) else iter(())
+    )
+    return scans
+
+
+def test_one_scan_serves_both_guards_in_a_single_injection(monkeypatch):
+    """The remapper filter and the lock check are meant to describe one instant."""
+    clock = [0.0]
+    scans = _counted_scan(monkeypatch, clock)
+    checks.xremap_filter()
+    checks.session_unlocked()
+    assert len(scans) == 1
+
+
+def test_a_long_run_re_reads_before_acting_again(monkeypatch):
+    """A replay injects over minutes, so a session locked mid-run must be seen."""
+    clock = [0.0]
+    scans = _counted_scan(monkeypatch, clock)
+    checks.session_unlocked()
+    clock[0] = checks.PROCESS_SCAN_TTL + 0.1
+    checks.session_unlocked()
+    assert len(scans) == 2
