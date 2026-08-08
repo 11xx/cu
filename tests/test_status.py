@@ -90,6 +90,29 @@ def test_a_session_is_named_rather_than_inferred(monkeypatch):
     assert sorted(details()) == ["clicking Submit", "filling in the expense form"]
 
 
+RUNNER = """
+import sys
+from cu import status
+status.publish("observe", detail=sys.argv[1])
+"""
+
+
+def test_unbracketed_commands_do_not_accumulate_on_the_bar(monkeypatch):
+    """Each cu is a new short-lived process, so an unbracketed command that
+    expired on a timeout would leave one entry per invocation and grow a row of
+    marks for work that finished seconds ago. It claims the desktop for exactly
+    as long as its process runs."""
+    monkeypatch.delenv(status.SESSION_ENV, raising=False)
+    for n in range(5):
+        subprocess.run(
+            [sys.executable, "-c", textwrap.dedent(RUNNER), f"action {n}"],
+            env=os.environ.copy(),
+            check=True,
+        )
+
+    assert status.read()["drivers"] == []
+
+
 def test_the_environment_binds_a_command_to_its_session(monkeypatch):
     session = status.begin("booking a flight")["id"]
     monkeypatch.setenv(status.SESSION_ENV, session)

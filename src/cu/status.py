@@ -237,11 +237,17 @@ def publish(command: str, detail: str = "", session: str | None = None) -> dict[
     not.
 
     A command inside a session renews that session's entry and takes its
-    detail when it offers none of its own. A command outside one is its own
-    driver, keyed by its process and expiring on its own — honest about the
-    fact that nothing has said which stretch of work it belongs to.
+    detail when it offers none of its own.
+
+    A command outside one is its own driver, watching its own process. That is
+    the whole of what an unbracketed command honestly claims: something is
+    happening for exactly as long as the command runs. Letting it expire on a
+    timeout instead would leave one entry behind per invocation, and an agent
+    working without a session would grow a row of marks on the user's bar for
+    work that finished seconds ago.
     """
     now = time.time()
+    loose = session is None and current_session() is None
     key = session or current_session() or f"pid:{os.getpid()}"
     with _registry() as drivers:
         driver = _find(drivers, key)
@@ -249,7 +255,7 @@ def publish(command: str, detail: str = "", session: str | None = None) -> dict[
             driver = {
                 "id": key,
                 "session": False,
-                "agent_pid": None,
+                "agent_pid": os.getpid() if loose else None,
                 "started_at": now,
             }
             drivers.append(driver)

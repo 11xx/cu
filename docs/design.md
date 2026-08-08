@@ -628,6 +628,13 @@ stops being true and a reader drops it past that. A stuck "an agent is driving
 your desktop" is the one failure that would teach the user to ignore the
 indicator.
 
+A session's entry expires on a timeout it renews with every command inside it,
+because the gap between two commands is a model thinking rather than an agent
+that stopped. An unbracketed command instead watches its own process and is
+gone the moment that exits, which is all it honestly claims: each `cu` is a new
+short-lived process, so a timeout would leave one entry behind per invocation
+and grow a row of marks for work that finished seconds ago.
+
 **`--why` is the part worth showing.** `cu click` says an agent is acting;
 `--why "clicking Submit"` says what it is trying to do, which is what decides
 whether to interrupt. `cu session begin` brackets a stretch of work so the
