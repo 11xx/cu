@@ -17,13 +17,20 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from typing import Any
 
 from . import compositor, config, exits, frames, hypr, observe, safety, uinput
 from .safety import Refused
 
 
-def send_chords(cfg: dict[str, Any], chords: list[str], backend: str) -> None:
+def send_chords(
+    cfg: dict[str, Any],
+    chords: list[str],
+    backend: str,
+    *,
+    before_send: Callable[[], None] | None = None,
+) -> None:
     """Emit each chord through the selected backend.
 
     The uinput device is built once for the whole sequence: constructing it
@@ -32,12 +39,16 @@ def send_chords(cfg: dict[str, Any], chords: list[str], backend: str) -> None:
     """
     if backend == "compositor":
         for chord in chords:
+            if before_send:
+                before_send()
             compositor.send_chord(chord)
         return
     with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
         for index, chord in enumerate(chords):
             if index:
                 time.sleep(cfg["input"]["gap_ms"] / 1000)
+            if before_send:
+                before_send()
             device.chord(chord, cfg["input"]["press_ms"])
 
 
@@ -219,7 +230,7 @@ def scroll(
         landed = warp(cfg, aimed["logical"]["x"], aimed["logical"]["y"], dry_run=dry_run)
     if not dry_run:
         with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
-            point = aimed["logical"] if aimed else None
+            point = aimed["logical"] if aimed else target["snapshot"]["cursor_logical"]
             under, landed = _live_pointer_target(
                 cfg, target["frame"], point, target["snapshot"]["monitors"]
             )
@@ -350,7 +361,12 @@ def type_text(
         previous = _clipboard_read() if can_restore else None
         _clipboard_write(text.encode())
         try:
-            send_chords(cfg, [chord], backend)
+            send_chords(
+                cfg,
+                [chord],
+                backend,
+                before_send=lambda: _recheck_keyboard(cfg, window),
+            )
             # The paste has to be consumed before the clipboard reverts;
             # restoring too eagerly pastes the *previous* contents.
             time.sleep(0.12)
@@ -371,6 +387,7 @@ def type_text(
             [f"shift+{name}" if shifted else name
              for name, shifted in (uinput.char_to_key(c) for c in text)],
             backend,
+            before_send=lambda: _recheck_keyboard(cfg, window),
         )
         if verify:
             previous = _clipboard_read() if restore_clipboard else None
@@ -416,7 +433,12 @@ def read_back(
             "detail": f"no select-all or copy binding known for {window['class']}",
         }
     _clipboard_write(b"")
-    send_chords(cfg, [select, copy], backend)
+    send_chords(
+        cfg,
+        [select, copy],
+        backend,
+        before_send=lambda: _recheck_keyboard(cfg, window),
+    )
     time.sleep(0.12)
     got = (_clipboard_read() or b"").decode(errors="replace")
     return compare_text(expected, got)
@@ -470,6 +492,18 @@ def browser_action(
     """
     from . import browser as browser_module
 
+    snap = observe.snapshot()
+    focus = snap["focused"]
+    current = browser_module.for_window_class(focus["class"]) if focus else None
+    if current is None or current["id"] != target["id"]:
+        got = focus["class"] if focus else "nothing"
+        raise Refused(
+            exits.FOCUS_CHANGED,
+            f"expected {target['name']} to hold focus, but {got} does",
+        )
+    window = next((w for w in snap["windows"] if w["address"] == focus["address"]), None)
+    if window is None:
+        raise Refused(exits.FOCUS_CHANGED, f"{target['name']} closed before the action")
     chord, source = browser_module.resolve(target, action, cfg)
     if chord is None:
         raise Refused(
@@ -477,7 +511,15 @@ def browser_action(
             f"{target['name']} has no binding for {action!r}; "
             "add one under [keys] rather than guessing a chord",
         )
-    result = key(cfg, action=None, chord=chord, backend=backend, dry_run=dry_run, record=False)
+    result = key(
+        cfg,
+        action=None,
+        chord=chord,
+        backend=backend,
+        expected_window=window,
+        dry_run=dry_run,
+        record=False,
+    )
     result.update(
         {"action": "browser", "semantic": action, "browser": target["name"],
          "resolved_from": source}
@@ -493,6 +535,7 @@ def key(
     chord: str | None,
     repeat: int = 1,
     backend: str | None = None,
+    expected_window: dict[str, Any] | None = None,
     record: bool = True,
     dry_run: bool,
 ) -> dict[str, Any]:
@@ -508,6 +551,8 @@ def key(
     snap = observe.snapshot()
     focus = snap["focused"]
     window = next((w for w in snap["windows"] if focus and w["address"] == focus["address"]), None)
+    if expected_window is not None:
+        safety.confirm_focus(expected_window, focus)
     safety.preflight_keyboard(cfg, window, focus)
 
     resolved = chord
@@ -526,7 +571,12 @@ def key(
 
     uinput.parse_chord(resolved)  # fail before the device exists, not after
     if not dry_run:
-        send_chords(cfg, [resolved] * repeat, backend)
+        send_chords(
+            cfg,
+            [resolved] * repeat,
+            backend,
+            before_send=lambda: _recheck_keyboard(cfg, window),
+        )
 
     result = {
         "action": "key",
@@ -566,6 +616,11 @@ def _live_pointer_target(
     under = observe.window_at(cursor["x"], cursor["y"], observe.windows(monitors))
     safety.preflight_pointer(cfg, under, frame)
     return under, cursor
+
+
+def _recheck_keyboard(cfg: dict[str, Any], window: dict[str, Any] | None) -> None:
+    """Reassert focus after device settlement, immediately before a chord."""
+    safety.preflight_keyboard(cfg, window, observe.focused())
 
 
 def _describe(window: dict[str, Any] | None) -> dict[str, Any] | None:

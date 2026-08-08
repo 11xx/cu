@@ -307,12 +307,12 @@ def test_typing_restores_an_initially_empty_clipboard(monkeypatch):
     writes = []
     cleared = []
     monkeypatch.setattr(observe, "snapshot", lambda: {"focused": focused, "windows": [focused]})
-    monkeypatch.setattr(safety, "preflight_keyboard", lambda *a: None)
+    monkeypatch.setattr(safety, "_common", lambda *a: None)
     monkeypatch.setattr(actions.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(actions, "_clipboard_read", lambda: None)
     monkeypatch.setattr(actions, "_clipboard_write", writes.append)
     monkeypatch.setattr(actions, "_clipboard_clear", lambda: cleared.append(True))
-    monkeypatch.setattr(actions, "send_chords", lambda *a: None)
+    monkeypatch.setattr(actions, "send_chords", lambda *a, **k: None)
     monkeypatch.setattr(actions.time, "sleep", lambda _seconds: None)
     actions.type_text(CFG, "private text", dry_run=False)
     assert writes == [b"private text"]
@@ -326,6 +326,25 @@ def test_typing_restores_an_initially_empty_clipboard(monkeypatch):
 def test_non_positive_action_counts_are_usage_errors(call):
     with pytest.raises(ValueError):
         call()
+
+
+def test_key_rechecks_focus_immediately_before_the_chord(monkeypatch):
+    expected = window("0x1")
+    monkeypatch.setattr(
+        observe,
+        "snapshot",
+        lambda: {"focused": expected, "windows": [expected]},
+    )
+    monkeypatch.setattr(safety, "_common", lambda *a: None)
+    monkeypatch.setattr(observe, "focused", lambda: window("0x2", cls="zen"))
+
+    def send(_cfg, _chords, _backend, *, before_send):
+        before_send()
+
+    monkeypatch.setattr(actions, "send_chords", send)
+    with pytest.raises(Refused) as caught:
+        actions.key(CFG, action=None, chord="a", dry_run=False)
+    assert caught.value.code == exits.FOCUS_CHANGED
 
 
 # --- what is under a point ------------------------------------------------
