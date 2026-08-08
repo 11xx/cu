@@ -7,53 +7,64 @@ keyboard, and windows of a real desktop session, through a deterministic CLI
 that any harness can call as a shell command. Claude Code and Codex are the
 initial consumers; nothing in the interface is specific to either.
 
+## Install
+
+```sh
+make install                         # puts `cu` on PATH
+```
+
+An editable install, so the command on PATH is this checkout rather than a copy
+of it — a stale binary is not a failure mode this project should have. It also
+means the checkout has to stay put. Without installing, `bin/cu` is the same
+command and needs no knowledge of `uv`; every example below works either way.
+
 ## Orientation
 
 ```sh
-bin/cu                               # the workflow guide; no arguments needed
+cu                                   # the workflow guide; no arguments needed
 ```
 
-A bare `bin/cu` prints what a session needs before its first command: observe
+A bare `cu` prints what a session needs before its first command: observe
 before capturing, act through the frame you read, what each exit code obliges,
 how hard the driving model should think, and which interlocks exist. `--help`
 is the per-command reference and points back at it. There is no skill or prompt
 fragment to install alongside — the CLI is the only workflow surface, so a
-caller that reaches straight for `bin/cu click` can still find out what it owes.
+caller that reaches straight for `cu click` can still find out what it owes.
 
 ## Usage
 
 ```sh
-bin/cu doctor                        # verify every environment precondition
-bin/cu observe                       # monitors, windows, focus, cursor
-bin/cu shot                          # capture the focused window
-bin/cu shot --output DP-2            # a whole monitor
-bin/cu shot --region '100,100 400x200'
-bin/cu shot --if-changed             # reuse the last frame if nothing moved
-bin/cu shot --for openai             # capture at another consumer's budget
-bin/cu profiles                      # what a capture costs each consumer
+cu doctor                        # verify every environment precondition
+cu observe                       # monitors, windows, focus, cursor
+cu shot                          # capture the focused window
+cu shot --output <name>          # a whole monitor; `cu observe` names them
+cu shot --region '100,100 400x200'
+cu shot --if-changed             # reuse the last frame if nothing moved
+cu shot --for openai             # capture at another consumer's budget
+cu profiles                      # what a capture costs each consumer
 
-bin/cu wait window-open --class zen  # block on a compositor event
-bin/cu focus zen                     # give a window keyboard focus
-bin/cu move  --frame f3 --at 412,300 # warp the pointer to a frame coordinate
-bin/cu click --frame f3 --at 412,300 # warp, check the target, press and release
-bin/cu scroll --dy -3                # wheel where the pointer already is
-bin/cu type 'hello'                  # clipboard by default, --method keys to synthesize
-bin/cu type 'hello' --verify         # read the field back and confirm it arrived
-bin/cu key --action paste            # a semantic action, resolved per application
-bin/cu browser list                  # installed browsers and what each resolves
-bin/cu browser focus-urlbar          # a semantic browser action, never a chord
-bin/cu recipe save open-url --last 4 # promote a successful run from the log
-bin/cu recipe replay open-url --param text1=example.com
+cu wait window-open --class zen  # block on a compositor event
+cu focus zen                     # give a window keyboard focus
+cu move  --frame f3 --at 412,300 # warp the pointer to a frame coordinate
+cu click --frame f3 --at 412,300 # warp, check the target, press and release
+cu scroll --dy -3                # wheel where the pointer already is
+cu type 'hello'                  # clipboard by default, --method keys to synthesize
+cu type 'hello' --verify         # read the field back and confirm it arrived
+cu key --action paste            # a semantic action, resolved per application
+cu browser list                  # installed browsers and what each resolves
+cu browser focus-urlbar          # a semantic browser action, never a chord
+cu recipe save open-url --last 4 # promote a successful run from the log
+cu recipe replay open-url --param text1=example.com
 
-bin/cu know set zen urlbar --rect 0.1,0.02,0.6,0.04   # remember where to look
-bin/cu know host 'keys pass through a remapping layer'  # a fact about the machine
-bin/cu shot --landmark zen/urlbar    # aim a capture, widened as the window drifts
-bin/cu sandbox create                # a headless output, when you want one
+cu know set zen urlbar --rect 0.1,0.02,0.6,0.04   # remember where to look
+cu know host 'keys pass through a remapping layer'  # a fact about the machine
+cu shot --landmark zen/urlbar    # aim a capture, widened as the window drifts
+cu sandbox create                # a headless output, when you want one
 
-bin/cu session begin 'booking a flight'   # tell the user what is happening
-bin/cu click --frame f3 --at 412,300 --why 'accepting the fare'
-bin/cu status                        # one line for a status bar; empty when idle
-bin/cu session end
+cu session begin 'booking a flight'   # tell the user what is happening
+cu click --frame f3 --at 412,300 --why 'accepting the fare'
+cu status                        # one line for a status bar; empty when idle
+cu session end
 ```
 
 Every injecting command takes `--dry-run`, which runs every interlock and
