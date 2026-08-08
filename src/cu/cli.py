@@ -100,7 +100,10 @@ def cmd_profiles(args: argparse.Namespace) -> int:
     checkable without reading the merge.
     """
     cfg = config.load()
-    default = cfg["capture"]["profile"]
+    # Resolved first: a default naming no stanza would otherwise print a table
+    # with no marker on it, which reads as "none is the default" rather than as
+    # the misconfiguration every other command is about to hit.
+    default = capture.default_name(cfg)
     rows = [
         {"name": n, "default": n == default, **capture.resolve(n, cfg)}
         for n in capture.names(cfg)
@@ -255,7 +258,7 @@ def cmd_shot(args: argparse.Namespace) -> int:
         source = {"type": "window", "name": window["class"]}
 
     frames.collect()
-    name = args.profile or cfg["capture"]["profile"]
+    name = args.profile or capture.default_name(cfg)
     profile = capture.resolve(name, cfg)
     scale = capture.scale_for(rect, monitor["scale"], profile["max_long_edge"])
     native = {
@@ -410,13 +413,18 @@ def cmd_recipe(args: argparse.Namespace) -> int:
         return exits.OK
 
     if args.subcommand == "save":
+        # Resolved before anything is written: the name is stored verbatim and
+        # every replay resolves it again, so a profile that does not resolve
+        # turns into a recipe that refuses at the moment it is relied on.
+        profile = args.profile or capture.default_name(cfg)
+        capture.resolve(profile, cfg)
         entries = _read_log(cfg, args.last)
         recipe = recipes.from_log(
             entries,
             args.name,
             args.site or "",
             args.task or "",
-            args.profile or cfg["capture"]["profile"],
+            profile,
         )
         path = recipes.save(recipe)
         _emit(
@@ -1114,9 +1122,13 @@ def build_parser() -> argparse.ArgumentParser:
             kp.add_argument("text", help="the fact worth keeping")
         if name == "host":
             # Host facts are notes only, and are addressed by the position the
-            # listing prints: a machine has no name to key a fact by.
-            kp.add_argument("text", nargs="?", help="a fact about this machine")
-            kp.add_argument(
+            # listing prints: a machine has no name to key a fact by. Adding and
+            # dropping are exclusive because the command does one or the other:
+            # a caller who wrote both meant one of them, and argparse refusing
+            # is the only outcome that does not silently discard the other.
+            host_action = kp.add_mutually_exclusive_group()
+            host_action.add_argument("text", nargs="?", help="a fact about this machine")
+            host_action.add_argument(
                 "--forget", nargs="?", type=int, const=0, metavar="N",
                 help="drop note N, or every host note when given no number",
             )

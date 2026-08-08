@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cu import capture, config
+from cu import capture, cli, config, exits
 
 
 @pytest.fixture
@@ -82,6 +82,57 @@ def test_the_base_prices_an_unmeasured_consumer_no_lower_than_a_known_one(cfg):
         assert base["patch_px"] <= other["patch_px"]
         assert base["max_long_edge"] <= other["max_long_edge"]
         assert base["max_bytes"] <= other["max_bytes"]
+
+
+def test_profile_rejects_non_positive_patch_size(cfg):
+    """Zero patches per side divides by zero inside `visual_tokens`.
+
+    An arithmetic exception carries no exit code, so the caller learns that
+    something went wrong rather than which configured line to fix.
+    """
+    cfg["capture"]["profiles"]["broken"] = {"patch_px": 0}
+    with pytest.raises(config.ConfigError) as err:
+        capture.resolve("broken", cfg)
+    assert "patch_px" in str(err.value)
+
+
+@pytest.mark.parametrize("value", [True, "1920", None])
+def test_a_field_that_is_not_a_number_is_refused_rather_than_carried(cfg, value):
+    """`True` is an `int` in Python, so it has to be excluded by name."""
+    cfg["capture"]["profiles"]["broken"] = {"max_long_edge": value}
+    with pytest.raises(config.ConfigError):
+        capture.resolve("broken", cfg)
+
+
+def test_zero_stays_a_budget_of_none_rather_than_becoming_a_refusal(cfg):
+    cfg["capture"]["profiles"]["frugal"] = {"token_budget": 0}
+    assert capture.resolve("frugal", cfg)["token_budget"] == 0
+
+
+def test_a_profile_cannot_downscale_past_its_own_ceiling(cfg):
+    """The two would contradict each other, and the larger one would be used."""
+    cfg["capture"]["profiles"]["backwards"] = {"max_long_edge": 4000, "ceiling": 2000}
+    with pytest.raises(config.ConfigError):
+        capture.resolve("backwards", cfg)
+
+
+def test_an_unknown_default_is_configuration_while_a_typed_one_is_usage(cfg):
+    """The two ask different things: one is a file to fix, one is a retype."""
+    cfg["capture"]["profile"] = "gemini"
+    with pytest.raises(config.ConfigError):
+        capture.default_name(cfg)
+    with pytest.raises(ValueError):
+        capture.resolve("gemini", cfg)
+
+
+def test_profiles_command_rejects_unknown_configured_default(tmp_path, monkeypatch, capsys):
+    """A table with no marker on it reads as 'no default', not as broken."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    (tmp_path / "cu").mkdir()
+    (tmp_path / "cu" / "config.toml").write_text('[capture]\nprofile = "gemini"\n')
+
+    assert cli.main(["profiles"]) == exits.PRECONDITION_FAILED
+    assert "gemini" in capsys.readouterr().err
 
 
 def test_a_loaded_config_does_not_alias_the_defaults():
