@@ -16,3 +16,7 @@ import pytest
 def isolated_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
     (tmp_path / "runtime").mkdir(parents=True, exist_ok=True)
+    # A session the developer happens to have open would otherwise adopt every
+    # entry the suite publishes, so the tests would agree with each other while
+    # describing the wrong driver.
+    monkeypatch.delenv("CU_SESSION", raising=False)

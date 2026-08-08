@@ -21,6 +21,7 @@ VERIFY_FAILED = 25
 DENIED_BY_POLICY = 30
 ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
+DESKTOP_BUSY = 42
 NOT_MAPPED = 50
 
 #: What a caller should do on each code. Shipped in `cu doctor --json` and
@@ -56,6 +57,10 @@ RESPONSE = {
         "The user is moving the physical mouse. Yield; wait for them to stop "
         "before retrying."
     ),
+    DESKTOP_BUSY: (
+        "Another agent is driving the desktop. Wait for it to finish and retry; "
+        "acting now would interleave with its pointer, focus, and clipboard."
+    ),
     NOT_MAPPED: (
         "No known binding for this action in this application. "
         "Do not guess a default chord."
@@ -66,7 +71,7 @@ RESPONSE = {
 #: ABORTED_BY_USER is excluded deliberately: an agent that retries it has
 #: defeated the one interlock the user holds and the agent cannot clear.
 RETRYABLE = frozenset(
-    {STALE_FRAME, FOCUS_CHANGED, TARGET_NOT_FOUND, TIMED_OUT, HUMAN_ACTIVE}
+    {STALE_FRAME, FOCUS_CHANGED, TARGET_NOT_FOUND, TIMED_OUT, HUMAN_ACTIVE, DESKTOP_BUSY}
 )
 
 

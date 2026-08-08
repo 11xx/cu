@@ -76,6 +76,7 @@ EXIT CODES ARE THE CONTRACT
   30  Denylist, lock, unreviewed recipe Do not retry; tell the user
   40  The user aborted                  Stop. Do not retry. Do not clear it.
   41  The user is moving the mouse      Yield; wait before retrying
+  42  Another agent is driving          Wait for it to finish, then retry
   50  No known binding for that action  Do not guess a chord; say so
 
   Code 40 is not a transient failure. It means the person at the desk pressed
@@ -103,7 +104,7 @@ HOW HARD TO THINK
   runtime interlock without spending a visual decision at all.
 
 SAY WHAT YOU ARE DOING
-  cu session begin 'booking a flight'
+  export CU_SESSION=$(cu session begin 'booking a flight')
   cu click --frame f3 --at 412,300 --why 'accepting the fare'
   cu session end
 
@@ -113,6 +114,22 @@ SAY WHAT YOU ARE DOING
   Open a session for anything spanning more than a couple of commands —
   without one the indicator clears while you are thinking, which reads to the
   user as "it finished".
+
+  `session begin` prints an id, and every command inside the session must say
+  it belongs there: through CU_SESSION as above, or --session ID if you cannot
+  set an environment variable between commands. It is never inferred, because
+  you may not be the only agent on this desktop and guessing would file your
+  actions under someone else's intent.
+
+YOU MAY NOT BE ALONE HERE
+  The desktop is one pointer, one keyboard focus, and one clipboard. `cu`
+  serializes the commands that touch them, so only one agent injects at a time
+  and the rest wait briefly. Past that wait you get exit 42 naming who holds
+  it: that is another agent working, not a fault. Wait and retry.
+
+  Reading is never serialized — observe, shot, wait, status, and doctor answer
+  while someone else is driving, which is how you find out what is going on.
+  `cu status` lists every agent currently driving, not just you.
 
 TYPING AND KEYS
   cu type 'some text'            Clipboard by default; restores what was there.

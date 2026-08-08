@@ -61,9 +61,9 @@ cu know host 'keys pass through a remapping layer'  # a fact about the machine
 cu shot --landmark zen/urlbar    # aim a capture, widened as the window drifts
 cu sandbox create                # a headless output, when you want one
 
-cu session begin 'booking a flight'   # tell the user what is happening
+export CU_SESSION=$(cu session begin 'booking a flight')   # tell the user
 cu click --frame f3 --at 412,300 --why 'accepting the fare'
-cu status                        # one line for a status bar; empty when idle
+cu status                        # a line per driving agent; empty when idle
 cu session end
 ```
 
@@ -94,14 +94,35 @@ captured for. Later commands take coordinates as
 small object, replaced atomically, so a status bar can poll it and show the
 user that an agent is driving. It does not draw an overlay: `grim` captures
 layer surfaces, so anything `cu` drew would end up in the frames the model
-reads. Records expire, because nothing writes "finished" for a killed process.
+reads. Entries expire, because nothing writes "finished" for a killed process.
+
+More than one agent may be driving one desktop, so that object is a registry
+with an entry per driver rather than a single record, and `cu status` lists
+them all. A session is claimed explicitly — `cu session begin` prints an id
+that later commands pass through `CU_SESSION` or `--session` — because
+inferring it from process ancestry would file one agent's actions under
+another's intent.
+
+```sh
+export CU_SESSION=$(cu session begin 'booking a flight')
+cu click --frame f3 --at 412,300 --why 'accepting the fare'
+cu session end
+```
+
+The commands that reach the shared pointer, keyboard focus, and clipboard hold
+a host-wide `flock` while they run, so only one agent injects at a time. A
+second one waits briefly and then gets exit 42 naming the holder; reading —
+`observe`, `shot`, `wait`, `status`, `doctor` — is never serialized. Without
+this, two agents warping the same pointer produce a click on the wrong window
+at exit 0.
 
 ## Status
 
 `doctor`, `observe`, `shot`, `focus`, and the input commands — `move`, `click`,
 `scroll`, `type`, `key` — are implemented, with the safety interlocks, as is
 `wait`, `browser`, `recipe`, `know`, `sandbox`, and the `status`/`session`
-feed a status bar reads. Every command in the design is built — see
+feed a status bar reads. Concurrent agents are serialized on the desktop and
+reported individually. Every command in the design is built — see
 [docs/design.md](docs/design.md) for the command surface and build order, and
 [docs/environment.md](docs/environment.md) for the verified host facts the
 design rests on.
