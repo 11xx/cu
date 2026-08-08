@@ -48,12 +48,48 @@ PROFILE_FIELDS = {
     "max_images_per_request": int,
 }
 
+#: The one field zero is a value for rather than a mistake: it is how a
+#: consumer states no cap of its own. Everywhere else zero would divide, scale,
+#: or size something into nothing.
+UNBOUNDED_AT_ZERO = frozenset({"token_budget"})
+
+
+def _check_field(profile: str, field: str, value: Any) -> None:
+    """A configured value has to survive the arithmetic, not merely be present.
+
+    Booleans are refused explicitly because `True` is an `int` in Python: a
+    patch size of one pixel is not a refusal anyone would recognise as one.
+    Non-finite floats are refused for the same reason one step further on: TOML
+    spells `nan` and `inf`, and both pass an ordering check — `nan` compares
+    false against every bound — before failing inside `round()`.
+    """
+    accepted = int if PROFILE_FIELDS[field] is int else (int, float)
+    if isinstance(value, bool) or not isinstance(value, accepted):
+        raise ConfigError(
+            f"capture profile {profile!r} sets {field} to {value!r}; "
+            f"it must be {'an integer' if accepted is int else 'a number'}"
+        )
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ConfigError(
+            f"capture profile {profile!r} sets {field} to {value!r}; "
+            "it must be a finite number"
+        )
+    floor = 0 if field in UNBOUNDED_AT_ZERO else 1
+    if value < floor:
+        raise ConfigError(
+            f"capture profile {profile!r} sets {field} to {value!r}; "
+            f"it must be at least {floor}"
+        )
+
 
 def resolve(name: str, cfg: dict[str, Any]) -> dict[str, Any]:
     """One consumer's capabilities: the base, with that consumer's deltas.
 
     A field the base does not carry cannot be introduced by a profile, so a
     typo in a user's config is a refusal rather than a silently ignored key.
+    Values are checked here too: every later caller divides, scales, or budgets
+    by them, where a string or a zero is an exception with no exit code rather
+    than a configuration the user can be told to fix.
     """
     table = cfg["capture"]["profiles"]
     if name not in table:
@@ -75,7 +111,31 @@ def resolve(name: str, cfg: dict[str, Any]) -> dict[str, Any]:
             f"capture profile {BASE_PROFILE!r} is missing {', '.join(sorted(missing))}; "
             "every field must have a conservative default to inherit"
         )
+    for field in PROFILE_FIELDS:
+        _check_field(name, field, resolved[field])
+    if resolved["max_long_edge"] > resolved["ceiling"]:
+        raise ConfigError(
+            f"capture profile {name!r} downscales to {resolved['max_long_edge']}px, "
+            f"past the {resolved['ceiling']}px the consumer accepts"
+        )
     return resolved
+
+
+def default_name(cfg: dict[str, Any]) -> str:
+    """The profile that applies when the caller names none.
+
+    Unknown here is a configuration error rather than the usage error `resolve`
+    raises: nobody typed this name on the command line, so no rewording of the
+    command reaches a working one.
+    """
+    name = cfg["capture"]["profile"]
+    table = cfg["capture"]["profiles"]
+    if name not in table:
+        raise ConfigError(
+            f"configured default capture profile {name!r} has no stanza under "
+            f"[capture.profiles]; configured: {', '.join(sorted(table))}"
+        )
+    return name
 
 
 def names(cfg: dict[str, Any]) -> list[str]:

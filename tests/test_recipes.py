@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from cu import recipes
+from cu import cli, exits, recipes
 
 
 @pytest.fixture(autouse=True)
@@ -210,3 +210,29 @@ def test_an_unknown_verification_kind_is_an_error():
 def test_a_missing_recipe_is_named_in_the_error():
     with pytest.raises(recipes.RecipeError, match="absent"):
         recipes.load("absent")
+
+
+# --- the profile a replay will use ----------------------------------------
+
+
+def test_save_rejects_an_unknown_capture_profile(capsys):
+    """The name is stored verbatim and resolved again at replay.
+
+    Writing one that does not resolve defers the refusal to the run the recipe
+    was saved for, which is the run least able to do anything about it.
+    """
+    assert cli.main(["recipe", "save", "demo", "--for", "gemini"]) == exits.USAGE
+    assert "gemini" in capsys.readouterr().err
+    assert recipes.listing() == []
+
+
+def test_save_separates_a_typed_profile_from_a_configured_one(tmp_path, monkeypatch):
+    """An unknown default is a file to fix, not a command to retype."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    (tmp_path / "config" / "cu").mkdir(parents=True)
+    (tmp_path / "config" / "cu" / "config.toml").write_text(
+        '[capture]\nprofile = "gemini"\n'
+    )
+
+    assert cli.main(["recipe", "save", "demo"]) == exits.PRECONDITION_FAILED
+    assert recipes.listing() == []

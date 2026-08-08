@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cu import knowledge
+from cu import cli, knowledge
 
 
 @pytest.fixture(autouse=True)
@@ -66,6 +66,31 @@ def test_forgetting_everything_leaves_nothing_behind():
     knowledge.forget_host()
     assert knowledge.load_host() == {"notes": []}
     assert not knowledge.host_path().exists()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["know", "host", "a fact", "--forget"],
+        ["know", "host", "a fact", "--forget", "1"],
+        ["know", "host", "--forget", "1", "a fact"],
+    ],
+)
+def test_host_text_and_forget_are_mutually_exclusive(argv):
+    """Adding and dropping in one command: one of the two would be discarded."""
+    knowledge.add_host_note("already here")
+    with pytest.raises(SystemExit) as exit_code:
+        cli.main(argv)
+    assert exit_code.value.code == 2
+    assert [n["text"] for n in knowledge.load_host()["notes"]] == ["already here"]
+
+
+def test_each_host_form_survives_on_its_own():
+    """The exclusion must not cost the three forms the command actually has."""
+    assert cli.main(["know", "host", "a fact"]) == 0
+    assert cli.main(["know", "host"]) == 0
+    assert cli.main(["know", "host", "--forget"]) == 0
+    assert knowledge.load_host() == {"notes": []}
 
 
 def test_a_corrupt_host_record_reads_as_an_error_rather_than_as_empty():
