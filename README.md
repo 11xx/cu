@@ -7,6 +7,19 @@ keyboard, and windows of a real desktop session, through a deterministic CLI
 that any harness can call as a shell command. Claude Code and Codex are the
 initial consumers; nothing in the interface is specific to either.
 
+## Orientation
+
+```sh
+bin/cu                               # the workflow guide; no arguments needed
+```
+
+A bare `bin/cu` prints what a session needs before its first command: observe
+before capturing, act through the frame you read, what each exit code obliges,
+how hard the driving model should think, and which interlocks exist. `--help`
+is the per-command reference and points back at it. There is no skill or prompt
+fragment to install alongside — the CLI is the only workflow surface, so a
+caller that reaches straight for `bin/cu click` can still find out what it owes.
+
 ## Usage
 
 ```sh

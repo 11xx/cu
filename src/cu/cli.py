@@ -22,6 +22,7 @@ from . import (
     config,
     exits,
     frames,
+    guide,
     knowledge,
     observe,
     recipes,
@@ -910,10 +911,18 @@ def cmd_session(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="cu", description="Computer use for Hyprland.")
+    parser = argparse.ArgumentParser(
+        prog="cu",
+        description="Computer use for Hyprland.",
+        epilog="Run `cu` with no arguments for the workflow guide.",
+    )
     parser.add_argument("--json", action="store_true", help="emit JSON on stdout")
     parser.add_argument("--why", metavar="TEXT", default="", help="what this is for")
-    sub = parser.add_subparsers(dest="command", required=True)
+    # Optional, so a bare `cu` is a request for the guide rather than a usage
+    # error. Every other malformed invocation still fails at 2: an unknown
+    # command, an unrecognized flag, and a subcommand missing a required
+    # argument are all rejected by argparse before this matters.
+    sub = parser.add_subparsers(dest="command", required=False)
 
     # Repeating --json per subcommand accepts both `cu --json observe` and the
     # `cu observe --json` an agent is far more likely to write. SUPPRESS keeps
@@ -1183,6 +1192,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command is None:
+        # Asking how to use cu is not something happening on the desktop, so
+        # this returns before anything is published and before dispatch, which
+        # has no command to dispatch to.
+        print(guide.render(), end="")
+        return exits.OK
     # Published before the command runs rather than after, because the point is
     # to say what is happening while it happens. `status` is excluded: a reader
     # asking what is going on is not itself something going on.
