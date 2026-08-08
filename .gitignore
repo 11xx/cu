@@ -4,6 +4,10 @@
 *.png
 *.ppm
 
+# Build artifacts. `make build` writes here, so leaving it untracked would make
+# running the gates dirty the tree.
+/dist/
+
 # Python
 __pycache__/
 *.py[cod]

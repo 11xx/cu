@@ -44,9 +44,12 @@ targeting Hyprland. Non-goals: no daemon, no overlay, no prompt layer.
   home directory, or a specific keybinding is a reading and belongs elsewhere:
   what cu can measure is `cu doctor`'s answer, and what a run learned about a
   particular machine and cannot probe for is `cu know host`.
-- **The gates.** `uv run pytest` and `uv run ruff check .`; both tools and the
-  rules they enforce are pinned in `pyproject.toml` so they report the same
-  thing on any host.
+- **The gates.** `make check` runs all three — `uv run pytest`,
+  `uv run ruff check .`, and `uv build`. Both tools and the rules they enforce
+  are pinned in `pyproject.toml` so they report the same thing on any host.
+- **`make install` is editable**, so the `cu` on PATH follows the checkout and
+  never needs refreshing after a change. It does pin to the checkout's path:
+  install from the repository, not from a worktree that is about to be removed.
 - **Silent failures are the whole subject.** Most of what this tool exists to
   prevent fails by producing something plausible at exit 0 — a dispatcher form
   that constructs and discards, a crop aimed at the wrong place, a paste an
