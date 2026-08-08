@@ -652,6 +652,9 @@ driving, which is exactly what a bar module wants to render for idle:
 }
 ```
 
+`eww/` carries a ready widget — `cu.yuck` and `cu.scss`, structure only, with
+colour left to the configuration that includes them.
+
 ## One desktop, one driver at a time
 
 Every other interlock asks whether *this* action is safe. None of them can see

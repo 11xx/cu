@@ -116,13 +116,36 @@ second one waits briefly and then gets exit 42 naming the holder; reading —
 this, two agents warping the same pointer produce a click on the wrong window
 at exit 0.
 
+## The eww indicator
+
+`eww/cu.yuck` and `eww/cu.scss` are a ready widget: one mark per driving agent,
+a tooltip carrying that agent's own `--why` and how long it has been running,
+hidden entirely while nothing is happening, and replaced by a stop mark once
+the user's abort flag is set. Clicking a mark sets that flag.
+
+They name no path, colour, or monitor, so they are included by relative path
+and styled by the configuration that includes them:
+
+```yuck
+(include "../../code/ai-agent-computer-use/eww/cu.yuck")
+...
+(cu-indicator)
+```
+
+```scss
+@import "../../code/ai-agent-computer-use/eww/cu.scss";
+.cu__driver  { color: $yellow; }
+.cu__aborted { color: $red; }
+```
+
 ## Status
 
 `doctor`, `observe`, `shot`, `focus`, and the input commands — `move`, `click`,
 `scroll`, `type`, `key` — are implemented, with the safety interlocks, as is
 `wait`, `browser`, `recipe`, `know`, `sandbox`, and the `status`/`session`
-feed a status bar reads. Concurrent agents are serialized on the desktop and
-reported individually. Every command in the design is built — see
+feed a status bar reads, with an eww widget for it. Concurrent agents are
+serialized on the desktop and reported individually. Every command in the
+design is built — see
 [docs/design.md](docs/design.md) for the command surface and build order, and
 [docs/environment.md](docs/environment.md) for the verified host facts the
 design rests on.
