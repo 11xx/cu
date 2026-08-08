@@ -1041,7 +1041,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.set_defaults(run=run, injects=False)
         return p
 
-    add("status", "what cu is doing, for a status bar to poll", cmd_status)
+    add("status", "who is driving the desktop, for a status bar to poll", cmd_status)
 
     session = add("session", "bracket a stretch of work as one activity", cmd_session)
     ssub2 = session.add_subparsers(dest="subcommand", required=True)
