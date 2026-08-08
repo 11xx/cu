@@ -31,7 +31,7 @@ bin/cu recipe save open-url --last 4 # promote a successful run from the log
 bin/cu recipe replay open-url --param text1=example.com
 
 bin/cu know set zen urlbar --rect 0.1,0.02,0.6,0.04   # remember where to look
-bin/cu shot --landmark zen/urlbar    # aim a capture by what a past run learned
+bin/cu shot --landmark zen/urlbar    # aim a capture, widened as the window drifts
 bin/cu sandbox create                # a headless output, when you want one
 
 bin/cu session begin 'booking a flight'   # tell the user what is happening

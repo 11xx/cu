@@ -137,6 +137,13 @@ frame, exactly as you would without it. Never turn a remembered position into a
 click coordinate — a control that has moved would be clicked confidently and
 the click would land on something.
 
+It steers rather than asserts, and says how much to believe it. A window the
+size it was learned at resolves `exact`. A resized one resolves `widened` —
+the region covers every way the control could have followed the resize, so
+search it rather than expecting the control centred. Too far, and it resolves
+`stale` and hands back the whole window, which is what you would have captured
+anyway. Each is printed on stderr and carried in the frame.
+
 Record what you learn as you go, and score a landmark after using it. That is
 what makes the next run cheaper.
 

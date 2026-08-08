@@ -37,9 +37,12 @@ different command.
 
 `cu know` carries what earlier runs learned about an application, and
 `cu shot --landmark app/name` aims a capture from it. A landmark says where to
-look, never where to click: read the pixels and act through the frame. Record
-landmarks and notes as you discover them, and `cu know confirm`/`miss` after
-using one.
+look, never where to click: read the pixels and act through the frame. It
+steers rather than asserts — a resized window widens the region to cover every
+way the control could have followed, and a window too far from the learned one
+gives the whole window back — so search what comes out instead of expecting the
+control centred. Record landmarks and notes as you discover them, and
+`cu know confirm`/`miss` after using one.
 
 `cu` aims at the visible desktop, which is what lets the user watch and stop
 you. `cu sandbox create` is the explicit way to work on a headless output; say

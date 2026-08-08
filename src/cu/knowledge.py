@@ -17,9 +17,25 @@ derives a region from the window's current geometry, and the model confirms
 from those pixels before acting. Knowledge collapses the search; the frame
 contract still decides the coordinate.
 
-**Positions are stored window-relative** for the same reason recipes store them
-that way: a fraction survives the window being moved or resized, and an
-absolute coordinate describes one arrangement of one desktop at one moment.
+**Positions are stored window-relative**, because an absolute coordinate
+describes one arrangement of one desktop at one moment. A fraction survives the
+window being *moved*. It does not survive the window being *resized*, and under
+a tiling compositor resizing is the common case: a toolbar is a fixed number of
+pixels tall whatever height the window is, so halving the window halves where a
+fraction says the toolbar is while the toolbar stays where it was.
+
+So a landmark carries the window geometry it was learned at, and resolving it
+projects the stored fraction under every way the control might have followed
+the resize — stretching with the window, or holding a fixed size against one
+edge. The region handed back **covers all of them**, and it widens as the
+window diverges from the geometry that was measured. A landmark that would have
+to cover most of the window to stay honest reports itself stale instead, and
+the caller looks at the whole window as it would have without one.
+
+That is the shape of the whole store: it steers, it does not assert. A hint
+that hedges costs one slightly larger capture; a hint that claims a precision
+it does not have costs a confident mistake, and the environment it describes is
+too dynamic to support the claim.
 
 **Storage is user-global.** How a site is laid out is a fact about that site,
 not about whichever repository an agent happened to be working in.
@@ -35,6 +51,28 @@ from pathlib import Path
 from typing import Any
 
 KEY_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._@-]*$")
+
+#: How a control follows its window along one axis. `auto` declines to choose,
+#: which is the default because nothing about a stored fraction reveals which
+#: one is true — only the run that learned it can know, and usually it doesn't
+#: either. Naming an anchor narrows the region; it is an optimisation, and a
+#: wrong one costs a miss rather than a wrong coordinate.
+ANCHORS = {
+    "x": ("auto", "fraction", "left", "right"),
+    "y": ("auto", "fraction", "top", "bottom"),
+}
+
+#: Within this much of the learned size, every projection lands in the same
+#: place, so the region is used exactly as it was learned.
+SAME_SIZE = 0.02
+
+#: A hedged region is still a hypothesis, so it gets a margin — as a fraction
+#: of the window, on each side.
+MARGIN = 0.02
+
+#: Past this share of the window's area, a landmark has stopped collapsing the
+#: search and is only pretending to.
+USELESS_SHARE = 0.5
 
 
 class KnowledgeError(RuntimeError):
@@ -93,8 +131,17 @@ def set_landmark(
     *,
     context: str | None = None,
     note: str = "",
+    learned_rect: dict[str, float] | None = None,
+    anchor_x: str = "auto",
+    anchor_y: str = "auto",
 ) -> dict[str, Any]:
-    """Record where something is, as a fraction of the window."""
+    """Record where something is, as a fraction of the window.
+
+    `learned_rect` is the window's geometry when the fraction was measured.
+    Without it a landmark can only ever be projected by stretching, so it is
+    permanently hedged — the store keeps it rather than refusing it, because a
+    hedged hint still beats a full-window search.
+    """
     validate_key(name)
     if context:
         validate_key(context, "context")
@@ -102,13 +149,22 @@ def set_landmark(
         if not 0.0 <= rect[edge] <= 1.0:
             raise KnowledgeError(
                 f"{edge}={rect[edge]} is not a fraction of the window; "
-                "landmarks are stored window-relative so they survive a resize"
+                "landmarks are stored window-relative so they outlive the "
+                "desktop arrangement they were measured on"
+            )
+    for axis, anchor in (("x", anchor_x), ("y", anchor_y)):
+        if anchor not in ANCHORS[axis]:
+            raise KnowledgeError(
+                f"{anchor!r} is not an anchor for {axis}; "
+                f"use one of {', '.join(ANCHORS[axis])}"
             )
     record = load(app)
     key = _scoped(name, context)
     previous = record["landmarks"].get(key, {})
     record["landmarks"][key] = {
         "rect": rect,
+        "learned_rect": learned_rect or previous.get("learned_rect"),
+        "anchor": {"x": anchor_x, "y": anchor_y},
         "note": note or previous.get("note", ""),
         "context": context,
         "learned_at": previous.get("learned_at", time.time()),
@@ -194,11 +250,12 @@ def listing() -> list[dict[str, Any]]:
 
 
 def to_logical(landmark: dict[str, Any], window: dict[str, Any]) -> dict[str, float]:
-    """A stored fraction against a window's *current* geometry.
+    """A stored fraction stretched across a window's *current* geometry.
 
-    Resolved at call time from live geometry rather than from whatever the
-    window measured when the landmark was learned, so a moved or resized window
-    yields a correctly-aimed region instead of a confidently wrong one.
+    One hypothesis about how a control followed its window, and the only one
+    available when the learned geometry is unknown. It is right for content
+    that scales with the window and wrong for chrome that does not, which is
+    why `resolve` is what callers aim a capture with.
     """
     rect, frame = landmark["rect"], window["logical_rect"]
     return {
@@ -207,3 +264,110 @@ def to_logical(landmark: dict[str, Any], window: dict[str, Any]) -> dict[str, fl
         "w": max(rect["w"] * frame["w"], 1.0),
         "h": max(rect["h"] * frame["h"], 1.0),
     }
+
+
+def _spans(
+    start: float, length: float, origin: float, extent: float,
+    learned: float | None, anchor: str,
+) -> list[tuple[float, float]]:
+    """Where one axis of a landmark lands, under each surviving hypothesis.
+
+    `start` and `length` are the stored fractions; `origin` and `extent` are
+    the window's position and size on this axis now; `learned` is that size
+    when the landmark was measured. Stretching assumes the control scales with
+    the window. The two edge hypotheses assume it keeps the pixel size it was
+    measured at and holds station against the near or far edge — which is how
+    toolbars, sidebars, and status bars actually behave.
+    """
+    stretched = (origin + start * extent, length * extent)
+    if learned is None or learned <= 0 or anchor == "fraction":
+        return [stretched]
+    fixed = length * learned
+    near = (origin + start * learned, fixed)
+    far = (origin + extent - (1.0 - start - length) * learned - fixed, fixed)
+    if anchor in ("left", "top"):
+        return [near]
+    if anchor in ("right", "bottom"):
+        return [far]
+    # A projection landing wholly outside the window refutes itself — the
+    # control is in the window — and keeping it would widen every shrunken
+    # window's region to nothing useful. The stretched one is inside by
+    # construction, so something always survives.
+    inside = [
+        span
+        for span in (near, far)
+        if span[0] < origin + extent and span[0] + span[1] > origin
+    ]
+    return [stretched, *inside]
+
+
+def _cover(spans: list[tuple[float, float]]) -> tuple[float, float]:
+    lo = min(start for start, _ in spans)
+    hi = max(start + length for start, length in spans)
+    return lo, max(hi - lo, 1.0)
+
+
+def resolve(landmark: dict[str, Any], window: dict[str, Any]) -> dict[str, Any]:
+    """Where to look for a landmark, and how much of that to believe.
+
+    A landmark steers a capture; it does not assert a position. So the region
+    returned covers every way the control could have followed the window since
+    it was measured, and grows as those hypotheses diverge. Once covering them
+    honestly would take most of the window, the landmark is **stale**: the
+    whole window comes back instead, because a hint that no longer narrows
+    anything should say so rather than aim somewhere plausible.
+    """
+    rect, frame = landmark["rect"], window["logical_rect"]
+    learned = landmark.get("learned_rect")
+    anchor = landmark.get("anchor") or {}
+
+    if learned is None:
+        return {
+            "rect": _pad(to_logical(landmark, window), frame),
+            "confidence": "widened",
+            "reason": "learned before window geometry was recorded",
+        }
+
+    ratios = (frame["w"] / learned["w"], frame["h"] / learned["h"])
+    if all(abs(r - 1.0) <= SAME_SIZE for r in ratios):
+        # Every hypothesis coincides at the geometry the landmark was measured
+        # at, so hedging here would only spend pixels.
+        return {
+            "rect": to_logical(landmark, window),
+            "confidence": "exact",
+            "reason": "window is the size this was learned at",
+        }
+
+    x, w = _cover(
+        _spans(rect["x"], rect["w"], frame["x"], frame["w"], learned["w"],
+               anchor.get("x", "auto"))
+    )
+    y, h = _cover(
+        _spans(rect["y"], rect["h"], frame["y"], frame["h"], learned["h"],
+               anchor.get("y", "auto"))
+    )
+    covered = _pad({"x": x, "y": y, "w": w, "h": h}, frame)
+    reason = (
+        f"window is {round(frame['w'])}x{round(frame['h'])} now, "
+        f"learned at {round(learned['w'])}x{round(learned['h'])}"
+    )
+    if covered["w"] * covered["h"] > USELESS_SHARE * frame["w"] * frame["h"]:
+        return {
+            "rect": dict(frame),
+            "confidence": "stale",
+            "reason": f"{reason}; too far to narrow the search",
+        }
+    return {"rect": covered, "confidence": "widened", "reason": reason}
+
+
+def _pad(rect: dict[str, float], frame: dict[str, float]) -> dict[str, float]:
+    """A margin on a hedged region, kept inside its own window.
+
+    The window is the boundary because the pixels outside it belong to a
+    different application, and under a tiling compositor they are always there.
+    """
+    x = max(rect["x"] - MARGIN * frame["w"], frame["x"])
+    y = max(rect["y"] - MARGIN * frame["h"], frame["y"])
+    right = min(rect["x"] + rect["w"] + MARGIN * frame["w"], frame["x"] + frame["w"])
+    bottom = min(rect["y"] + rect["h"] + MARGIN * frame["h"], frame["y"] + frame["h"])
+    return {"x": x, "y": y, "w": max(right - x, 1.0), "h": max(bottom - y, 1.0)}

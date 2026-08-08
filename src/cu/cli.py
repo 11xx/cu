@@ -179,9 +179,10 @@ def cmd_shot(args: argparse.Namespace) -> int:
         source = {"type": "region", "name": monitor["name"]}
     elif args.landmark:
         # A landmark aims the capture and nothing else. It resolves against the
-        # window's geometry *now*, so a moved window yields a correctly-aimed
-        # strip rather than a confidently wrong one, and the model still reads
-        # the pixels before anything acts on them.
+        # window's geometry *now* and hedges by however much that geometry has
+        # moved on, so what comes back is a region worth reading rather than a
+        # confident guess — and the model still reads the pixels before
+        # anything acts on them.
         app, _, name = args.landmark.partition("/")
         if not name:
             raise ValueError("--landmark takes 'app/name', e.g. 'zen/urlbar'")
@@ -197,10 +198,24 @@ def cmd_shot(args: argparse.Namespace) -> int:
         else:
             window = _resolve_window(app, snap)
         mark = knowledge.get_landmark(app, name, args.context)
-        rect = knowledge.to_logical(mark, window)
+        aim = knowledge.resolve(mark, window)
+        rect = aim["rect"]
         monitor = capture.sole_monitor(rect, monitors)
         rect = capture.clamp(rect, monitor["logical_rect"])
-        source = {"type": "landmark", "name": f"{app}/{name}"}
+        source = {
+            "type": "landmark",
+            "name": f"{app}/{name}",
+            "confidence": aim["confidence"],
+            "why": aim["reason"],
+        }
+        if aim["confidence"] != "exact":
+            # On stderr because the frame is still the answer: a hedged or
+            # abandoned landmark changes how much of the image to search, not
+            # whether the capture happened.
+            print(
+                f"cu: landmark {app}/{name} {aim['confidence']} — {aim['reason']}",
+                file=sys.stderr,
+            )
     else:
         window = _resolve_window(args.window or "active", snap)
         rect = window["logical_rect"]
@@ -264,8 +279,9 @@ def cmd_shot(args: argparse.Namespace) -> int:
     def render(f: Any) -> None:
         i = f["image_size"]
         print(f"{f['id']}  {f['path']}")
+        hedge = f" ({source['confidence']})" if "confidence" in source else ""
         print(
-            f"  depicts {source['type']} {source['name']} "
+            f"  depicts {source['type']} {source['name']}{hedge} "
             f"logical {fmt_rect(f['logical_rect'])}"
         )
         print(
@@ -551,9 +567,16 @@ def cmd_know(args: argparse.Namespace) -> int:
             for key, mark in sorted(r.get("landmarks", {}).items()):
                 rect = mark["rect"]
                 seen = f"{mark.get('confirmed', 0)}✓/{mark.get('missed', 0)}✗"
+                learned = mark.get("learned_rect")
+                at = (
+                    f"@{round(learned['w'])}x{round(learned['h'])}"
+                    if learned
+                    else "@unknown"
+                )
                 print(
                     f"  {key:<28} {rect['x']:.3f},{rect['y']:.3f} "
-                    f"{rect['w']:.3f}x{rect['h']:.3f}  {seen:<8} {mark.get('note', '')}"
+                    f"{rect['w']:.3f}x{rect['h']:.3f} {at:<12} {seen:<8} "
+                    f"{mark.get('note', '')}"
                 )
             for note in r.get("notes", []):
                 scope = f"[{note['context']}] " if note.get("context") else ""
@@ -565,7 +588,14 @@ def cmd_know(args: argparse.Namespace) -> int:
     if args.subcommand == "set":
         rect = _parse_landmark_rect(args.rect)
         mark = knowledge.set_landmark(
-            args.app, args.name, rect, context=args.context, note=args.note or ""
+            args.app,
+            args.name,
+            rect,
+            context=args.context,
+            note=args.note or "",
+            learned_rect=_window_geometry(args.window or args.app),
+            anchor_x=args.anchor_x,
+            anchor_y=args.anchor_y,
         )
         _emit(
             mark,
@@ -599,6 +629,23 @@ def cmd_know(args: argparse.Namespace) -> int:
         return exits.OK
 
     return exits.USAGE
+
+
+def _window_geometry(selector: str) -> dict[str, float] | None:
+    """The window a fraction was measured against, if it can still be found.
+
+    A landmark without it is hedged forever, which is a worse hint but a hint —
+    so a window that has since closed costs precision rather than the record.
+    """
+    try:
+        return _resolve_window(selector, observe.snapshot())["logical_rect"]
+    except (LookupError, OSError, RuntimeError):
+        print(
+            f"cu: no window matches {selector!r}; storing the landmark without "
+            "the geometry it was measured at, so it can only ever be widened",
+            file=sys.stderr,
+        )
+        return None
 
 
 def _parse_landmark_rect(text: str) -> dict[str, float]:
@@ -965,6 +1012,16 @@ def build_parser() -> argparse.ArgumentParser:
             kp.add_argument("--rect", required=True, metavar="X,Y[,W,H]",
                             help="fractions of the window")
             kp.add_argument("--note", help="what it is")
+            kp.add_argument("--window", metavar="SELECTOR",
+                            help="the window measured against (default: the app)")
+            # Naming how a control follows its window narrows what a later
+            # capture has to cover. Unnamed is the honest default: the run that
+            # learned a fraction usually cannot tell either, and covering every
+            # possibility costs pixels rather than correctness.
+            kp.add_argument("--anchor-x", choices=knowledge.ANCHORS["x"],
+                            default="auto", help="how it follows a width change")
+            kp.add_argument("--anchor-y", choices=knowledge.ANCHORS["y"],
+                            default="auto", help="how it follows a height change")
         if name == "note":
             kp.add_argument("text", help="the fact worth keeping")
         kp.add_argument("--context", metavar="NAME", help="scope, e.g. a site")

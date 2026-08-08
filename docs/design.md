@@ -521,11 +521,40 @@ would reintroduce precisely the failure this project exists to prevent — a
 remembered position whose control has moved, clicked confidently, landing on
 something and reporting success.
 
+### A fraction survives a move, not a resize
+
 Positions are stored window-relative for the same reason recipes store them
-that way, and each landmark carries how often it was confirmed or missed. A
-landmark that keeps missing belongs to an application that changed, and the
-counters make that visible rather than letting it quietly cost an extra capture
-on every run.
+that way. But a fraction only survives a *resize* if the control scales with
+the window, and chrome does not: a toolbar is a fixed number of pixels tall at
+any window height. Under a tiling compositor that is the ordinary case rather
+than the exception — the same application is a full screen, a half, and a third
+within one session — so a stored fraction goes wrong by the ratio of the two
+sizes, systematically, and silently.
+
+So a landmark carries the window geometry it was measured at, and resolving it
+projects the fraction under each way the control could have followed the
+change: scaling with the window, or holding its pixel size against the near or
+far edge. The region covers whichever of those the current window still admits
+— a projection landing outside the window refutes itself and is dropped — and
+it widens as they diverge. A run that knows how a control behaves can name the
+anchor per axis and buy back the precision; unnamed is the default, because the
+run that measured a fraction usually cannot tell either.
+
+Past the point where covering them honestly would take most of the window, the
+landmark reports itself **stale** and yields the whole window: the search it
+was supposed to collapse is no longer collapsed, and saying so costs one
+ordinary capture where aiming somewhere plausible costs a wrong answer.
+
+That is the shape of the store as a whole. **Knowledge steers; it does not
+assert.** The desktop it describes is too dynamic to support an assertion, and
+the two failures are not symmetric — a hint that hedges costs a slightly larger
+capture, while a hint that claims precision it does not have costs a confident
+mistake. Every part of `know` is built for the first cost.
+
+Each landmark also carries how often it was confirmed or missed. A landmark
+that keeps missing belongs to an application that changed, and the counters
+make that visible rather than letting it quietly cost an extra capture on every
+run.
 
 ## Telling the user, while it happens
 
