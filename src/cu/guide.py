@@ -144,6 +144,7 @@ BROWSERS
   user configures it is being honest, not broken.
 
 WHAT EARLIER RUNS LEARNED
+  cu know host                   What this machine does differently.
   cu know show zen               Landmarks and notes for an application.
   cu shot --landmark zen/urlbar  Aim a capture from a remembered position.
   cu know set zen urlbar --rect 0.1,0.02,0.6,0.04 --note 'the address field'
@@ -164,6 +165,11 @@ WHAT EARLIER RUNS LEARNED
 
   Record what you learn as you go, and score a landmark after using it. That is
   what makes the next run cheaper.
+
+  Some of what you learn is not about any application — that keystrokes pass
+  through a remapping layer here, that one output reports a scale the others do
+  not. `cu know host '<fact>'` keeps those. What cu can measure for itself is
+  `cu doctor`'s answer, not something to record.
 
 WHEN A CAPTURE SURPRISES YOU, WIDEN
   A narrow crop aimed at the wrong place returns a perfectly sharp image of

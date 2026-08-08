@@ -95,8 +95,68 @@ def validate_key(key: str, what: str = "name") -> str:
     return key
 
 
+#: Where facts about the machine itself live, rather than about one
+#: application. The leading underscore is what makes the separation real:
+#: KEY_PATTERN requires an application key to start alphanumeric, so no
+#: application can ever resolve to this file, and an application genuinely
+#: named "host" keeps its own.
+HOST_FILENAME = "_host.json"
+
+
 def path_for(app: str) -> Path:
     return store_dir() / f"{validate_key(app, 'application')}.json"
+
+
+def host_path() -> Path:
+    return store_dir() / HOST_FILENAME
+
+
+def load_host() -> dict[str, Any]:
+    """What runs have learned about this machine.
+
+    Notes only, and deliberately so: a landmark is a fraction of a window, and
+    the host is not a window. What belongs here is behaviour no application
+    owns — that keystrokes pass through a remapping layer before any client
+    sees them, that one output reports a scale the others do not.
+    """
+    path = host_path()
+    if not path.is_file():
+        return {"notes": []}
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise KnowledgeError(f"{path}: {exc}") from exc
+    if not isinstance(record, dict):
+        raise KnowledgeError(f"{path}: not a record")
+    record.setdefault("notes", [])
+    return record
+
+
+def add_host_note(text: str) -> dict[str, Any]:
+    record = load_host()
+    entry = {"text": text, "at": time.time()}
+    record["notes"].append(entry)
+    host_path().write_text(json.dumps(record, indent=2, sort_keys=True))
+    return entry
+
+
+def forget_host(index: int | None = None) -> str:
+    """Drop one note, or everything known about the host.
+
+    Notes are addressed by the position `cu know host` prints, because a fact
+    about a machine has no name to key it by.
+    """
+    if index is None:
+        host_path().unlink(missing_ok=True)
+        return "forgot everything about this host"
+    record = load_host()
+    if not 1 <= index <= len(record["notes"]):
+        raise KnowledgeError(
+            f"no host note {index}; there are {len(record['notes'])}"
+        )
+    dropped = record["notes"].pop(index - 1)
+    host_path().write_text(json.dumps(record, indent=2, sort_keys=True))
+    return f"forgot: {dropped['text']}"
 
 
 def load(app: str) -> dict[str, Any]:
@@ -237,6 +297,8 @@ def forget(app: str, name: str | None = None, context: str | None = None) -> str
 def listing() -> list[dict[str, Any]]:
     out = []
     for path in sorted(store_dir().glob("*.json")):
+        if path.name == HOST_FILENAME:
+            continue  # not an application; `cu know host` reads it
         try:
             record = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
