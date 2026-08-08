@@ -1,16 +1,19 @@
-# Host baseline
+# How this compositor behaves
 
-The verified capabilities this project builds on. Each fact carries the probe
-that establishes it, so any claim can be re-checked on a new machine. `cu
-doctor` automates these checks; this document explains what they mean.
+Why `cu` is built the way it is: the interfaces it drives, the ways they fail,
+and the probe that settles each claim. Every fact here is about Hyprland and
+Wayland rather than about one machine, so it holds anywhere the tool runs.
 
-## Session
+**Readings are not in this document, deliberately.** Which compositor version
+is running, how many outputs there are and at what scales, which tools are
+installed — these change per machine and go stale silently in a file. `cu
+doctor` measures them at runtime and is the answer to all of them. What a run
+*learns* about a particular host, and cannot probe for, belongs in
+`cu know host`.
 
-| Property | Value | Probe |
-| --- | --- | --- |
-| Compositor | Hyprland 0.56.1 | `hyprctl version` |
-| Session type | Wayland (`wayland-1`), XWayland present on `:0` | `env \| grep -E 'WAYLAND\|DISPLAY'` |
-| Outputs | 2, mixed scale (see below) | `hyprctl monitors -j` |
+The distinction is worth keeping sharp while editing here. A sentence naming a
+version, an output, a path under someone's home directory, or a specific
+keybinding is a reading, and it belongs in one of those two places instead.
 
 ## Hyprland speaks Lua, not dispatcher strings
 
@@ -86,41 +89,48 @@ reboot or a udev change.
 
 ### xremap does not intercept virtual devices
 
-A key remapper runs in this session, bound to one named physical device:
+A key remapper such as xremap is typically launched bound to one named physical
+device:
 
 ```
-xremap /home/lobo/.config/xremap/browser-emacs.yaml --device SINO WEALTH USB KEYBOARD
+xremap <config> --device '<physical keyboard>'
 ```
 
-Because the binding is device-scoped, keys injected through a new virtual
-keyboard reach applications unremapped. Were the `--device` filter ever
-dropped, xremap would grab all keyboards including the virtual one, and every
-injected keystroke would be silently rewritten. `cu doctor` checks for a
-device-scoped filter and warns when it cannot find one.
+Because the binding is device-scoped, keys injected through a *new* virtual
+keyboard are not that device and reach applications unremapped — which is what
+makes direct injection viable at all. Were the `--device` filter ever dropped,
+the remapper would grab every keyboard including the virtual one, and each
+injected keystroke would be silently rewritten. `cu doctor` checks the running
+process for a device-scoped filter and warns when it cannot find one.
 
 ## Coordinates: three spaces, two scales
 
+Worked through a two-output example, since one scale hides every mistake this
+section is about. `cu doctor` and `cu observe` report what any given machine
+actually has.
+
 ```
-DP-2   2560x1440 physical   scale 1.25   logical 2048x1152 at (0,0)
-DP-1   2560x1440 physical   scale 1.00   logical 2560x1440 at (2048,0)
+OUT-A   2560x1440 physical   scale 1.25   logical 2048x1152 at (0,0)
+OUT-B   2560x1440 physical   scale 1.00   logical 2560x1440 at (2048,0)
 ```
 
-The logical desktop is 4608x1440. Hyprland reports window geometry, cursor
-position, and accepts cursor moves in this logical space — `hyprctl
-activewindow` on DP-2 returns `at: [3,29] size: [2042,1120]`, which fits inside
-2048x1152 and would overflow the physical 2560x1440.
+The logical desktop is then 4608x1440. Hyprland reports window geometry, cursor
+position, and accepts cursor moves in this logical space — a maximized window on
+OUT-A reports a size near 2048x1152, which would overflow its physical
+2560x1440. Logical and physical are different numbers for the same window, and
+nothing in either says which one it is.
 
 Capture works in physical pixels, and the two forms differ sharply:
 
 | Command | Output | Notes |
 | --- | --- | --- |
-| `grim -o DP-1` | 2560x1440 | Native pixels of that output |
-| `grim -o DP-2` | 2560x1440 | Native pixels; 2048x1152 logical |
+| `grim -o OUT-B` | 2560x1440 | Native pixels of that output |
+| `grim -o OUT-A` | 2560x1440 | Native pixels; 2048x1152 logical |
 | `grim` (whole desktop) | 5760x1800 | Logical bounding box times the **largest** scale |
 
-Full-desktop capture composites at scale 1.25, so DP-1's native 2560x1440 is
-upscaled to 3200x1800 — 10.4 megapixels that carry less detail than the two
-native captures totalling 7.4. Per-output capture is therefore the primitive,
+Full-desktop capture composites at the largest scale in play, so OUT-B's native
+2560x1440 is upscaled to 3200x1800 — 10.4 megapixels carrying less detail than
+the two native captures totalling 7.4. Per-output capture is therefore the primitive,
 and whole-desktop capture is never used.
 
 ### Region capture speaks logical coordinates
@@ -132,48 +142,51 @@ the scale of the output the region lands on:
 
 | Region | Lands on | Output |
 | --- | --- | --- |
-| `0,0 100x100` | DP-2, scale 1.25 | 125x125 |
-| `2100,100 100x100` | DP-1, scale 1.00 | 100x100 |
+| `0,0 100x100` | OUT-A, scale 1.25 | 125x125 |
+| `2100,100 100x100` | OUT-B, scale 1.00 | 100x100 |
 | `2000,100 200x100` | spans both | 250x125 |
 
 The spanning case follows the whole-desktop rule: it composites at the largest
-scale of the outputs it touches, so the DP-1 portion is upscaled. A region is
+scale of the outputs it touches, so the OUT-B portion is upscaled. A region is
 therefore always clamped to a single output.
 
 Because pixel dimensions vary by output, they are read from the captured file
 rather than computed — which is what keeps the frame transform correct without
 the caller tracking scales.
 
-## Available tooling
+## External tooling
 
-Present: `hyprctl`, `grim`, `slurp`, `wl-copy`/`wl-paste`, `hyprpicker`, `wev`,
-`magick`, `jq`, `socat`, `python3`, `uv`, `node`, `wf-recorder`, `pipewire`,
-`xdg-desktop-portal-hyprland`.
+`cu` shells out for three things: `hyprctl` for compositor state and dispatch,
+`grim` for capture, and `wl-copy`/`wl-paste` for the clipboard path that
+`cu type` uses by default. Each is checked by `cu doctor`, which reports what is
+actually present rather than what a document once recorded.
 
-Absent: `wtype`, `ydotool`, `dotool`, `xdotool` — no input-injection tool is
-installed, which the direct `/dev/uinput` path makes unnecessary.
+It deliberately does **not** depend on an input-injection tool — `wtype`,
+`ydotool`, `dotool`, `xdotool`. Writing to `/dev/uinput` directly produces
+genuine libinput events, which is what makes injected input indistinguishable
+from a human's and is why no such dependency is wanted.
 
 ## Headless outputs work, and are the safe test target
 
 `hyprctl output create headless` adds a real output the compositor treats like
-any other, and `hyprctl output remove HEADLESS-1` takes it away. Measured
-end to end:
+any other, and `hyprctl output remove <name>` takes it away. Measured end to
+end:
 
-- It appears as `HEADLESS-1` at 1920x1080, **scale 2.00**, placed to the right
-  of the real outputs at logical x=4608, on its own workspace.
+- It appears as a named `HEADLESS-<n>` output with its own resolution, scale,
+  and workspace, placed beyond the real outputs.
 - Existing outputs keep their geometry, scale, and active workspace exactly.
-- A window launched with `[workspace 11 silent]` lands on it and reports
-  logical geometry inside its 960x540 logical bounds.
-- `grim -o HEADLESS-1` captures 1920x1080 of real rendered content, and a
-  region crop of the window's logical 954x534 yields 1908x1068 physical —
-  the scale-2.0 case of the region rule above.
+- A window directed to its workspace lands on it and reports logical geometry
+  inside its logical bounds.
+- `grim -o <name>` captures real rendered content from it, and a region crop
+  obeys the same scale rule as any other output.
 - After removal, `hyprctl monitors` and `hyprctl workspaces` match their
   pre-probe snapshots byte for byte.
 
 So the input and capture paths can be developed against a screen that does not
 physically exist, on the live compositor, without touching the user's displays.
-The scale of 2.00 is a bonus: it is a third distinct scale, so a test suite
-running there exercises coordinate math that 1.0 and 1.25 alone would not.
+A headless output also tends to carry a scale the physical ones do not, which
+makes it worth testing against: coordinate math that is wrong for a third
+distinct scale stays hidden while only two are in play.
 
 ## Sleeping monitors: what still works, and what wakes them
 
@@ -225,92 +238,78 @@ hl.dispatch(hl.dsp.send_key_state({mods = "CTRL SHIFT", key = "v", state = "down
 
 ## Browsers
 
-Six, across both engine families:
+Browsers fall into two engine families, Gecko and Chromium, and the family
+decides where the keymap lives. Which are installed on any given machine is a
+reading: `cu browser list` enumerates them, with what each resolves.
 
-| Browser | Family | Executable | Window class |
-| --- | --- | --- | --- |
-| Zen | Gecko | `/opt/zen-browser-bin/zen-bin` (wrapper on `PATH` as `zen-browser`) | `zen` |
-| Firefox | Gecko | wrapper on `PATH` | — |
-| Floorp | Gecko | `/usr/bin/floorp` | — |
-| Thorium | Chromium | `/usr/bin/thorium-browser` | — |
-| Helium | Chromium | `helium-browser` → `/opt/helium-browser-bin/helium-wrapper` | `helium` |
-| Vivaldi | Chromium | `/usr/bin/vivaldi` | — |
+**Binary names do not follow the product name.** A browser is routinely on
+`PATH` under a name its users would not guess — a `-browser` suffix, a wrapper
+around a differently-named binary. Probing a guessed name and reading absence
+as "not installed" is how a browser goes missing from an inventory, so
+discovery reads the `Exec=` line of desktop entries, which is authoritative,
+and treats `PATH` name-matching as a hint only.
 
-Window classes are recorded as they are observed; `zen` and `helium` are
-confirmed from `hyprctl clients -j` with both running as native Wayland clients
-(`xwayland: false`).
+**A window class is not the product name either**, and is recorded as observed
+from `hyprctl clients -j` rather than assumed. A desktop entry may declare one;
+several do not, which is why the executable name is the fallback.
 
-**Binary names do not follow the product name.** Helium is on `PATH` as
-`helium-browser`, not `helium`; Thorium likewise. Probing a guessed name and
-reading absence as "not installed" is how a browser goes missing from an
-inventory. Discovery reads the `Exec=` line of desktop entries, which is
-authoritative, and treats `PATH` name-matching as a hint only.
+Browsers are assumed to be launched with no remote-debugging or automation
+flags. That is the normal case, and the one the design has to accommodate.
 
-Both running browsers were launched with no remote-debugging or automation
-flags, which is the normal case and the one the design has to accommodate.
-
-No `playwright`, `geckodriver`, or `chromedriver` is installed. Chromium's
-bundled `chromedriver` ships inside `/opt/helium-browser-bin/`.
+A WebDriver stack — `playwright`, `geckodriver`, `chromedriver` — is not
+assumed to be present, and `cu` does not require one. Chromium builds often
+ship a bundled `chromedriver` beside the browser, which is worth knowing exists
+but is not a dependency: driving through one would mean a separate browser
+session rather than the user's own.
 
 ## The keyboard is a three-stage pipeline, not a constant
 
-This desktop rebinds keys twice before an application sees them, so no default
-shortcut can be assumed.
+A keystroke can be rewritten more than once before an application acts on it,
+so **no default shortcut can be assumed** — which is the reason `cu key`
+refuses an unmapped action rather than falling back to a documented default.
 
-**Stage 1 — xremap.** `~/.config/xremap/browser-emacs.yaml` applies an
-Emacs-style editing layer, scoped by window class to browsers and two other
-applications:
+**Stage 1 — a device-bound remapper.** A tool such as xremap grabs a physical
+keyboard and rewrites chords before anything else sees them, typically scoped
+by window class so the layer applies to some applications and not others.
+Within its scope, familiar chords can mean something entirely different, and
+some become prefix keys that open a submap.
 
-```yaml
-application:
-  only: [firefox, vivaldi-stable, thorium-browser, zen, helium, ...]
-```
-
-Floorp is absent from that list and so receives no layer. Within it, familiar
-chords mean something else entirely: `C-f` becomes `right`, `C-a` becomes
-`home`, `C-s` becomes `f3` (find-again), `C-w` becomes cut. `C-x` and `C-c` are
-prefix keys opening submaps.
-
-**Stage 2 — the browser's own bindings.** The Emacs layer deliberately targets
-unusual chords that the browser is then configured to recognize.
-`~/.zen/customKeys.json` completes the chain:
-
-| Action | Zen binding | Reached from |
-| --- | --- | --- |
-| Focus URL bar | `Ctrl+Alt+Shift+F4` | — |
-| Close tab | `Ctrl+Alt+Shift+Delete` | `C-M-k` |
-| Save page as | `Ctrl+Alt+Shift+Insert` | `C-x C-w` |
-| Close window | `Ctrl+Alt+Shift+End` | `C-x 4 0` |
-| Back / forward | `Ctrl+Alt+Shift+B` / `+F` | `C-x M-b` / `C-x M-f` |
-| **New tab** | `Ctrl+T` | — |
-
-The last row is the point: **some bindings are customized and some are not**,
-and the difference is not predictable. Of the four chords one would reflexively
-call universal, `Ctrl+T` survives, `Ctrl+L` and `Ctrl+W` do not, and `Ctrl+F`
-is consumed upstream by stage 1. Firefox carries its own `customKeys.json`;
-Vivaldi's `Preferences` has no `keyboard` key, so it is unmodified.
+**Stage 2 — the application's own bindings.** A remapping layer usually targets
+deliberately unusual chords that the application is then configured to
+recognize, which is what completes the chain.
 
 **Stage 3 — the application acts.**
 
+The consequence is the part that generalizes: **some bindings are customized
+and some are not, and which is which is not predictable from the chord.** Two
+chords that look equally universal can differ — one surviving untouched, the
+other consumed at stage 1 and never reaching the application at all. Nothing
+about a chord reveals which case it is, so the only sound answer is to read the
+configuration rather than to reason about the shortcut.
+
+Which chords a particular host actually rewrites is a reading, not a fact about
+the compositor. `cu browser` reads each browser's own keymap where it can, the
+`[keys]` table in the user's config states the rest, and anything learned the
+hard way belongs in `cu know host`.
+
 ### What this means for injected input
 
-Injected keys enter the pipeline *after* xremap, because xremap is bound to one
-physical device. So the correct thing to inject is the **stage-2 chord the
-browser actually listens for** — `Ctrl+Alt+Shift+F4` to focus Zen's URL bar —
-never the physical chord a human would press, and never a documented default.
+Injected keys enter the pipeline *after* stage 1, because the remapper is bound
+to one physical device and the injected device is not it. So the correct thing
+to inject is the **stage-2 chord the application actually listens for**, never
+the physical chord a human would press, and never a documented default.
 
-### The xremap fallback is a live hazard
+### An unfiltered remapper is a live hazard
 
-`~/.local/bin/xremap-default` degrades to running xremap with **no device
-filter** when the keyboard is absent:
+A device-bound remapper is only device-bound while its filter is actually in
+effect. A launcher that degrades to running without one — when the keyboard it
+names is absent, say — leaves the remapper grabbing *every* keyboard, including
+the virtual one `cu` creates. Injected keys are then silently rewritten on
+their way out, and the failure is invisible: the keystroke arrives, and does
+something else.
 
-```sh
-notify-send ... "Device not found, running without --device filter"
-xremap ~/.config/xremap/browser-emacs.yaml
-```
-
-In that state xremap grabs every keyboard including a virtual one, and injected
-keys are silently remapped — `C-f` would arrive as `right`. The device filter
-is therefore a property of the *running process*, not of the config, so
-`cu doctor` reads `/proc/<pid>/cmdline` of the live xremap rather than trusting
-the launcher's intent.
+The filter is therefore a property of the **running process**, not of the
+config file, and the two disagree exactly when it matters. `cu doctor` reads
+the live process's `/proc/<pid>/cmdline` rather than trusting a launcher's
+intent, because a config that specifies a filter proves nothing about the
+process currently holding the keyboard.

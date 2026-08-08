@@ -580,6 +580,33 @@ def cmd_sandbox(args: argparse.Namespace) -> int:
 
 
 def cmd_know(args: argparse.Namespace) -> int:
+    if args.subcommand == "host":
+        if args.text:
+            entry = knowledge.add_host_note(args.text)
+            _emit(entry, args.json, lambda e: print(f"noted about this host: {e['text']}"))
+            return exits.OK
+        if args.forget is not None:
+            # 0 is the "all" sentinel: an index the listing never prints, so it
+            # cannot be reached by miscounting a line.
+            outcome = knowledge.forget_host(args.forget or None)
+            _emit({"outcome": outcome}, args.json, lambda d: print(d["outcome"]))
+            return exits.OK
+        record = knowledge.load_host()
+
+        def render(r: Any) -> None:
+            if not r["notes"]:
+                # What cu measures about the machine is `cu doctor`'s answer,
+                # and saying so here stops an empty store reading as a claim
+                # that nothing is known about the host at all.
+                print("nothing learned about this host yet")
+                print("what cu can probe for itself is in `cu doctor`")
+                return
+            for index, note in enumerate(r["notes"], start=1):
+                print(f"{index:>3}. {note['text']}")
+
+        _emit(record, args.json, render)
+        return exits.OK
+
     if args.subcommand == "list":
         rows = knowledge.listing()
         _emit(
@@ -1059,10 +1086,11 @@ def build_parser() -> argparse.ArgumentParser:
         ("confirm", "the landmark pointed at the right thing"),
         ("miss", "it did not"),
         ("forget", "drop a landmark, or everything for an application"),
+        ("host", "what runs learned about this machine, not about an application"),
     ):
         kp = ksub.add_parser(name, help=help_text)
         kp.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
-        if name != "list":
+        if name not in {"list", "host"}:
             kp.add_argument("app", help="window class, or any name you key it by")
         if name in {"set", "confirm", "miss"}:
             kp.add_argument("name", help="what the landmark is called")
@@ -1084,7 +1112,16 @@ def build_parser() -> argparse.ArgumentParser:
                             default="auto", help="how it follows a height change")
         if name == "note":
             kp.add_argument("text", help="the fact worth keeping")
-        kp.add_argument("--context", metavar="NAME", help="scope, e.g. a site")
+        if name == "host":
+            # Host facts are notes only, and are addressed by the position the
+            # listing prints: a machine has no name to key a fact by.
+            kp.add_argument("text", nargs="?", help="a fact about this machine")
+            kp.add_argument(
+                "--forget", nargs="?", type=int, const=0, metavar="N",
+                help="drop note N, or every host note when given no number",
+            )
+        else:
+            kp.add_argument("--context", metavar="NAME", help="scope, e.g. a site")
 
     waiting = add("wait", "block until a compositor event happens", cmd_wait)
     waiting.add_argument(

@@ -38,10 +38,12 @@ targeting Hyprland. Non-goals: no daemon, no overlay, no prompt layer.
   more than the tool does is worse than none, because it is believed. Check the
   claim against the source before writing it, and cut what cannot be traced
   rather than softening it.
-- **State the invariant, not this host's reading.** Documentation describes how
-  the compositor behaves and why the code is shaped around it. What *this*
-  machine measures — versions, outputs, installed tooling — is what `cu doctor`
-  reports at runtime; it does not belong in a tracked file.
+- **State the invariant, not this host's reading.** `docs/` describes how the
+  compositor behaves and why the code is shaped around it, and holds anywhere
+  the tool runs. A sentence naming a version, an output, a path under someone's
+  home directory, or a specific keybinding is a reading and belongs elsewhere:
+  what cu can measure is `cu doctor`'s answer, and what a run learned about a
+  particular machine and cannot probe for is `cu know host`.
 - **The gates.** `uv run pytest` and `uv run ruff check .`; both tools and the
   rules they enforce are pinned in `pyproject.toml` so they report the same
   thing on any host.
