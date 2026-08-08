@@ -383,29 +383,29 @@ def _capture_window(window: dict[str, Any], cfg: dict[str, Any]) -> dict[str, An
         capture.sole_monitor(window["logical_rect"], monitors)["logical_rect"],
     )
     monitor = capture.sole_monitor(rect, monitors)
-    scratch = frames.store_dir() / ".pending.png"
     profile = capture.PROFILES["claude"]
     scale = capture.scale_for(rect, monitor["scale"], profile["max_long_edge"])
-    capture.grab_region(rect, scratch, scale)
-    return frames.new(
-        source={"type": "window", "name": window["class"]},
-        logical_rect=rect,
-        image_size=capture.size_of(scratch),
-        scratch=scratch,
-        native_size={
-            "w": round(rect["w"] * monitor["scale"]),
-            "h": round(rect["h"] * monitor["scale"]),
-        },
-        digest_native=capture.digest(scratch),
-        monitor={"name": monitor["name"], "scale": monitor["scale"]},
-        profile="claude",
-        window={
-            "address": window["address"],
-            "class": window["class"],
-            "title": window["title"],
-            "logical_rect": window["logical_rect"],
-        },
-    )
+    with frames.capture_scratch() as scratch:
+        capture.grab_region(rect, scratch, scale)
+        return frames.new(
+            source={"type": "window", "name": window["class"]},
+            logical_rect=rect,
+            image_size=capture.size_of(scratch),
+            scratch=scratch,
+            native_size={
+                "w": round(rect["w"] * monitor["scale"]),
+                "h": round(rect["h"] * monitor["scale"]),
+            },
+            digest_native=capture.digest(scratch),
+            monitor={"name": monitor["name"], "scale": monitor["scale"]},
+            profile="claude",
+            window={
+                "address": window["address"],
+                "class": window["class"],
+                "title": window["title"],
+                "logical_rect": window["logical_rect"],
+            },
+        )
 
 
 def check(verify: dict[str, Any] | None) -> bool | None:

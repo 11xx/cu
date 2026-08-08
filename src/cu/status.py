@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -77,7 +78,9 @@ def _write(record: dict[str, Any]) -> None:
     path = status_path()
     if path is None:
         return
-    scratch = path.with_suffix(".json.new")
+    fd, temporary = tempfile.mkstemp(prefix=".status-", suffix=".new", dir=path.parent)
+    os.close(fd)
+    scratch = Path(temporary)
     try:
         scratch.write_text(json.dumps(record))
         scratch.replace(path)

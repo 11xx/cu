@@ -225,55 +225,54 @@ def cmd_shot(args: argparse.Namespace) -> int:
 
     frames.collect()
     profile = capture.PROFILES[args.profile]
-    scratch = frames.store_dir() / ".pending.png"
     scale = capture.scale_for(rect, monitor["scale"], profile["max_long_edge"])
     native = {
         "w": round(rect["w"] * monitor["scale"]),
         "h": round(rect["h"] * monitor["scale"]),
     }
 
-    if source["type"] == "output":
-        capture.grab_output(source["name"], scratch, scale)
-    else:
-        capture.grab_region(rect, scratch, scale)
+    with frames.capture_scratch() as scratch:
+        if source["type"] == "output":
+            capture.grab_output(source["name"], scratch, scale)
+        else:
+            capture.grab_region(rect, scratch, scale)
 
-    digest = capture.digest(scratch)
+        digest = capture.digest(scratch)
 
-    if args.if_changed:
-        previous = _last_frame_like(source, rect)
-        if previous and previous.get("digest_native") == digest:
-            scratch.unlink(missing_ok=True)
-            # The pixels were just re-read and match, which is the evidence
-            # staleness is a proxy for. Keeping the original timestamp would
-            # let a frame proven current a moment ago be refused as too old.
-            previous["captured_at"] = time.time()
-            frames.save(previous)
-            payload = {**previous, "changed": False}
-            _emit(payload, args.json, lambda p: print(f"unchanged; reusing {p['id']}"))
-            return exits.OK
+        if args.if_changed:
+            previous = _last_frame_like(source, rect)
+            if previous and previous.get("digest_native") == digest:
+                # The pixels were just re-read and match, which is the evidence
+                # staleness is a proxy for. Keeping the original timestamp would
+                # let a frame proven current a moment ago be refused as too old.
+                previous["captured_at"] = time.time()
+                frames.save(previous)
+                payload = {**previous, "changed": False}
+                _emit(payload, args.json, lambda p: print(f"unchanged; reusing {p['id']}"))
+                return exits.OK
 
-    image_size = capture.size_of(scratch)
-    frame = frames.new(
-        source=source,
-        logical_rect=rect,
-        image_size=image_size,
-        scratch=scratch,
-        native_size=native,
-        digest_native=digest,
-        monitor={"name": monitor["name"], "scale": monitor["scale"]},
-        profile=args.profile,
-        cursor_logical=snap["cursor_logical"],
-        window=(
-            {
-                "address": window["address"],
-                "class": window["class"],
-                "title": window["title"],
-                "logical_rect": window["logical_rect"],
-            }
-            if window
-            else None
-        ),
-    )
+        image_size = capture.size_of(scratch)
+        frame = frames.new(
+            source=source,
+            logical_rect=rect,
+            image_size=image_size,
+            scratch=scratch,
+            native_size=native,
+            digest_native=digest,
+            monitor={"name": monitor["name"], "scale": monitor["scale"]},
+            profile=args.profile,
+            cursor_logical=snap["cursor_logical"],
+            window=(
+                {
+                    "address": window["address"],
+                    "class": window["class"],
+                    "title": window["title"],
+                    "logical_rect": window["logical_rect"],
+                }
+                if window
+                else None
+            ),
+        )
     frame["changed"] = True
 
     def render(f: Any) -> None:

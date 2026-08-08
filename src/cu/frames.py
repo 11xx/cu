@@ -15,7 +15,11 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
+import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +29,8 @@ DEFAULT_MAX_AGE = 60.0
 #: Retention for the store as a whole, independent of usability.
 GC_MAX_AGE = 900.0
 GC_MAX_FRAMES = 60
+
+FRAME_ID_PATTERN = re.compile(r"^f[1-9][0-9]*$")
 
 
 class FrameError(RuntimeError):
@@ -61,12 +67,26 @@ def _next_id() -> str:
         os.close(fd)
 
 
+def validate_id(frame_id: str) -> str:
+    if not FRAME_ID_PATTERN.fullmatch(frame_id):
+        raise FrameError(f"invalid frame id: {frame_id!r}")
+    return frame_id
+
+
 def path_for(frame_id: str, suffix: str) -> Path:
+    validate_id(frame_id)
     return store_dir() / f"{frame_id}{suffix}"
 
 
 def save(descriptor: dict[str, Any]) -> dict[str, Any]:
-    path_for(descriptor["id"], ".json").write_text(json.dumps(descriptor, indent=2))
+    path = path_for(descriptor["id"], ".json")
+    fd, temporary = tempfile.mkstemp(prefix=f".{descriptor['id']}-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(descriptor, handle, indent=2)
+        Path(temporary).replace(path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
     return descriptor
 
 
@@ -74,7 +94,25 @@ def load(frame_id: str) -> dict[str, Any]:
     meta = path_for(frame_id, ".json")
     if not meta.exists():
         raise FrameError(f"no such frame: {frame_id}")
-    return json.loads(meta.read_text())
+    try:
+        descriptor = json.loads(meta.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FrameError(f"cannot read frame {frame_id}: {exc}") from exc
+    if not isinstance(descriptor, dict) or descriptor.get("id") != frame_id:
+        raise FrameError(f"frame {frame_id} has an invalid descriptor")
+    return descriptor
+
+
+@contextmanager
+def capture_scratch() -> Iterator[Path]:
+    """A private path for one capture, removed unless `new` consumes it."""
+    fd, name = tempfile.mkstemp(prefix=".pending-", suffix=".png", dir=store_dir())
+    os.close(fd)
+    path = Path(name)
+    try:
+        yield path
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def new(

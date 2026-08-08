@@ -97,6 +97,19 @@ def test_ids_are_monotonic_and_never_reused():
     assert seen == ["f1", "f2", "f3"]
 
 
+@pytest.mark.parametrize("bad", ["../other", "f0", "f-1", "1", "f1/extra"])
+def test_frame_ids_cannot_escape_the_store(bad):
+    with pytest.raises(frames.FrameError, match="invalid frame id"):
+        frames.load(bad)
+
+
+def test_each_capture_gets_a_private_scratch_path():
+    with frames.capture_scratch() as first, frames.capture_scratch() as second:
+        assert first != second
+        assert first.parent == second.parent == frames.store_dir()
+    assert not first.exists() and not second.exists()
+
+
 def test_region_on_one_output_resolves():
     rect = {"x": 100, "y": 100, "w": 400, "h": 200}
     assert capture.sole_monitor(rect, MONITORS)["name"] == "DP-2"
