@@ -236,8 +236,96 @@ def test_a_click_on_an_unfocused_window_is_allowed():
     safety.check_target(frame, window("0x1"))
 
 
+def test_a_click_rechecks_the_target_after_device_settlement(monkeypatch):
+    target = at(0, 0, 100, 100)
+    overlay = at(0, 0, 100, 100, address="0x2", cls="zen")
+    frame = {
+        "id": "f1",
+        "captured_at": __import__("time").time(),
+        "logical_rect": target["logical_rect"],
+        "image_size": {"w": 100, "h": 100},
+        "window": {"address": target["address"], "class": target["class"],
+                   "logical_rect": target["logical_rect"]},
+    }
+    snapshot = {
+        "windows": [target], "monitors": [], "focused": target,
+        "cursor_logical": {"x": 10, "y": 10},
+    }
+    monkeypatch.setattr(actions.frames, "load", lambda _id: frame)
+    monkeypatch.setattr(observe, "snapshot", lambda: snapshot)
+    monkeypatch.setattr(observe, "windows", lambda _monitors: [overlay])
+    monkeypatch.setattr(observe, "cursor", lambda: {"x": 10, "y": 10})
+    monkeypatch.setattr(actions, "warp", lambda *a, **k: {"x": 10, "y": 10})
+    monkeypatch.setattr(safety, "_common", lambda *a, **k: None)
+
+    clicks = []
+
+    class Device:
+        def __init__(self, **_kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def click(self, *_args): clicks.append(True)
+
+    monkeypatch.setattr(uinput, "Device", Device)
+    with pytest.raises(Refused) as caught:
+        actions.click(CFG, "f1", (10, 10), dry_run=False)
+    assert caught.value.code == exits.FOCUS_CHANGED
+    assert clicks == []
+
+
+def test_focus_confirms_the_dispatch_took_effect(monkeypatch):
+    wanted = window("0x1")
+    monkeypatch.setattr(safety, "check_abort", lambda: None)
+    monkeypatch.setattr(safety, "check_session", lambda: None)
+    monkeypatch.setattr(safety, "check_denylist", lambda *a: None)
+    monkeypatch.setattr(actions.hypr, "lua", lambda _code: "")
+    monkeypatch.setattr(observe, "focused", lambda: window("0x2", cls="zen"))
+    with pytest.raises(Refused) as caught:
+        actions.focus(CFG, wanted, dry_run=False)
+    assert caught.value.code == exits.FOCUS_CHANGED
+
+
 def test_an_output_frame_asserts_no_particular_window():
     safety.check_target({"id": "f1", "window": None}, window("0xanything"))
+
+
+def test_closing_a_device_writes_explicit_releases(monkeypatch):
+    writes = []
+    device = uinput.Device(settle_ms=0)
+    device._fd = 123
+    device._held = {uinput.KEYS["ctrl"]}
+    monkeypatch.setattr(uinput.os, "write", lambda fd, data: writes.append((fd, data)) or len(data))
+    monkeypatch.setattr(uinput.os, "close", lambda _fd: None)
+    monkeypatch.setattr(uinput.fcntl, "ioctl", lambda *_args: None)
+    device.close()
+    assert len(writes) == 2  # key-up, then SYN_REPORT
+    assert device._fd is None
+
+
+def test_typing_restores_an_initially_empty_clipboard(monkeypatch):
+    focused = window(cls="zen")
+    writes = []
+    cleared = []
+    monkeypatch.setattr(observe, "snapshot", lambda: {"focused": focused, "windows": [focused]})
+    monkeypatch.setattr(safety, "preflight_keyboard", lambda *a: None)
+    monkeypatch.setattr(actions.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(actions, "_clipboard_read", lambda: None)
+    monkeypatch.setattr(actions, "_clipboard_write", writes.append)
+    monkeypatch.setattr(actions, "_clipboard_clear", lambda: cleared.append(True))
+    monkeypatch.setattr(actions, "send_chords", lambda *a: None)
+    monkeypatch.setattr(actions.time, "sleep", lambda _seconds: None)
+    actions.type_text(CFG, "private text", dry_run=False)
+    assert writes == [b"private text"]
+    assert cleared == [True]
+
+
+@pytest.mark.parametrize("call", [
+    lambda: actions.click(CFG, "f1", (1, 1), count=0, dry_run=True),
+    lambda: actions.key(CFG, action=None, chord="a", repeat=0, dry_run=True),
+])
+def test_non_positive_action_counts_are_usage_errors(call):
+    with pytest.raises(ValueError):
+        call()
 
 
 # --- what is under a point ------------------------------------------------

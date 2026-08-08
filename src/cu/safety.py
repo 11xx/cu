@@ -98,6 +98,11 @@ def check_focus(cfg: dict[str, Any], expected: dict[str, Any] | None, live_focus
     """
     if not cfg["safety"]["require_focus"] or expected is None:
         return
+    confirm_focus(expected, live_focus)
+
+
+def confirm_focus(expected: dict[str, Any], live_focus: dict[str, Any] | None) -> None:
+    """Confirm a focus request took effect, regardless of injection policy."""
     if live_focus is None or live_focus["address"] != expected["address"]:
         got = (
             f"{live_focus['class']} ({live_focus['title'][:40]!r})"

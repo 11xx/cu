@@ -232,7 +232,7 @@ class Device:
     def close(self) -> None:
         if self._fd is None:
             return
-        fd, self._fd = self._fd, None
+        fd = self._fd
         try:
             for code in sorted(self._held):
                 self._write(EV_KEY, code, 0)
@@ -244,6 +244,7 @@ class Device:
             with contextlib.suppress(OSError):
                 fcntl.ioctl(fd, UI_DEV_DESTROY)
             os.close(fd)
+            self._fd = None
             for sig, handler in self._restore:
                 with contextlib.suppress(ValueError, OSError, TypeError):
                     signal.signal(sig, handler)

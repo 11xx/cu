@@ -99,6 +99,7 @@ def focus(cfg: dict[str, Any], window: dict[str, Any], *, dry_run: bool) -> dict
     safety.check_denylist(cfg, window)
     if not dry_run:
         hypr.lua(f'hl.dispatch(hl.dsp.focus({{window = "address:{window["address"]}"}}))')
+        safety.confirm_focus(window, observe.focused())
     result = {"action": "focus", "window": _describe(window), "dry_run": dry_run}
     safety.record(cfg, result)
     return result
@@ -154,6 +155,8 @@ def click(
     count: int = 1,
     dry_run: bool,
 ) -> dict[str, Any]:
+    if count < 1:
+        raise ValueError("click count must be at least 1")
     target = resolve_target(frame_id, at, cfg)
     aimed = target["aimed"]
     under = aimed["window_under_point"]
@@ -162,16 +165,15 @@ def click(
     landed = warp(cfg, point["x"], point["y"], dry_run=dry_run)
 
     if not dry_run:
-        # Re-read what sits under the pointer after the warp. Focus can follow
-        # the pointer into another window, and the denylist check that counts
-        # is the one closest to the injection rather than the one made while
-        # planning it.
-        arrived = observe.window_at(
-            point["x"], point["y"], observe.windows(target["snapshot"]["monitors"])
-        )
-        safety.check_denylist(cfg, arrived)
         with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
+            # Device enumeration is most of this command's latency. Re-read
+            # after it, immediately before the button event, so a window that
+            # appeared during the wait cannot inherit a click aimed at another.
+            arrived, landed = _live_pointer_target(
+                cfg, target["frame"], point, target["snapshot"]["monitors"]
+            )
             device.click(button, cfg["input"]["press_ms"], count)
+        under = arrived
 
     result = {
         "action": "click",
@@ -217,6 +219,10 @@ def scroll(
         landed = warp(cfg, aimed["logical"]["x"], aimed["logical"]["y"], dry_run=dry_run)
     if not dry_run:
         with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
+            point = aimed["logical"] if aimed else None
+            under, landed = _live_pointer_target(
+                cfg, target["frame"], point, target["snapshot"]["monitors"]
+            )
             device.scroll(dy=dy, dx=dx)
     result = {
         "action": "scroll",
@@ -269,6 +275,21 @@ def _clipboard_write(data: bytes) -> None:
     )
     if proc.returncode != 0:
         raise ClipboardError(f"wl-copy exited {proc.returncode}")
+
+
+def _clipboard_clear() -> None:
+    """Restore the absence of a selection rather than leaving typed text behind."""
+    if not shutil.which("wl-copy"):
+        raise ClipboardError("wl-copy is not installed; cannot clear the clipboard")
+    proc = subprocess.run(
+        ["wl-copy", "--clear"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=5,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise ClipboardError(f"wl-copy --clear exited {proc.returncode}")
 
 
 def type_text(
@@ -324,7 +345,8 @@ def type_text(
         return result
 
     if method == "clipboard":
-        previous = _clipboard_read() if restore_clipboard else None
+        can_restore = restore_clipboard and shutil.which("wl-paste") is not None
+        previous = _clipboard_read() if can_restore else None
         _clipboard_write(text.encode())
         try:
             send_chords(cfg, [chord], backend)
@@ -334,8 +356,8 @@ def type_text(
             if verify:
                 result["verified"] = read_back(cfg, window, text, backend)
         finally:
-            if previous is not None:
-                _clipboard_write(previous)
+            if can_restore:
+                _clipboard_write(previous) if previous is not None else _clipboard_clear()
     else:
         unmapped = [c for c in text if uinput.char_to_key(c) is None]
         if unmapped:
@@ -479,6 +501,8 @@ def key(
     back to a documented default is the failure this project exists to
     prevent: the keystroke would arrive, and would do something else.
     """
+    if repeat < 1:
+        raise ValueError("key repeat must be at least 1")
     backend = backend or cfg["input"]["key_backend"]
     snap = observe.snapshot()
     focus = snap["focused"]
@@ -526,6 +550,21 @@ def _relative_to(
     if rect["w"] <= 0 or rect["h"] <= 0:
         return None
     return {"x": (x - rect["x"]) / rect["w"], "y": (y - rect["y"]) / rect["h"]}
+
+
+def _live_pointer_target(
+    cfg: dict[str, Any],
+    frame: dict[str, Any] | None,
+    expected: dict[str, float] | None,
+    monitors: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, dict[str, float]]:
+    """Reassert pointer position and target immediately before an event."""
+    cursor = observe.cursor()
+    if expected is not None:
+        safety.confirm_pointer(cfg, (expected["x"], expected["y"]), cursor)
+    under = observe.window_at(cursor["x"], cursor["y"], observe.windows(monitors))
+    safety.preflight_pointer(cfg, under, frame)
+    return under, cursor
 
 
 def _describe(window: dict[str, Any] | None) -> dict[str, Any] | None:
