@@ -92,6 +92,35 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return exits.PRECONDITION_FAILED if overall == checks.FAIL else exits.OK
 
 
+def cmd_profiles(args: argparse.Namespace) -> int:
+    """What each configured consumer costs, resolved rather than as written.
+
+    A profile states only its deltas, so the file does not show what any of
+    them actually resolves to. This does, which is what makes a new stanza
+    checkable without reading the merge.
+    """
+    cfg = config.load()
+    default = cfg["capture"]["profile"]
+    rows = [
+        {"name": n, "default": n == default, **capture.resolve(n, cfg)}
+        for n in capture.names(cfg)
+    ]
+
+    def render(data: Any) -> None:
+        for row in data["profiles"]:
+            mark = "*" if row["default"] else " "
+            budget = row["token_budget"] or "none"
+            print(
+                f"{mark} {row['name']:<10} long edge {row['max_long_edge']:>5} "
+                f"(ceiling {row['ceiling']})  {row['patch_px']}px patches  "
+                f"budget {budget}"
+            )
+        print(f"\nconfigure under [capture.profiles] in {config.config_path()}")
+
+    _emit({"profiles": rows}, args.json, render)
+    return exits.OK
+
+
 def cmd_observe(args: argparse.Namespace) -> int:
     snap = observe.snapshot()
 
@@ -156,6 +185,7 @@ def _parse_region(text: str) -> dict[str, float]:
 
 
 def cmd_shot(args: argparse.Namespace) -> int:
+    cfg = config.load()
     snap = observe.snapshot()
     monitors = snap["monitors"]
     source: dict[str, Any]
@@ -225,7 +255,8 @@ def cmd_shot(args: argparse.Namespace) -> int:
         source = {"type": "window", "name": window["class"]}
 
     frames.collect()
-    profile = capture.PROFILES[args.profile]
+    name = args.profile or cfg["capture"]["profile"]
+    profile = capture.resolve(name, cfg)
     scale = capture.scale_for(rect, monitor["scale"], profile["max_long_edge"])
     native = {
         "w": round(rect["w"] * monitor["scale"]),
@@ -261,7 +292,10 @@ def cmd_shot(args: argparse.Namespace) -> int:
             native_size=native,
             digest_native=digest,
             monitor={"name": monitor["name"], "scale": monitor["scale"]},
-            profile=args.profile,
+            profile=name,
+            visual_tokens=capture.visual_tokens(
+                image_size["w"], image_size["h"], profile
+            ),
             cursor_logical=snap["cursor_logical"],
             window=(
                 {
@@ -286,7 +320,7 @@ def cmd_shot(args: argparse.Namespace) -> int:
         )
         print(
             f"  image {i['w']}x{i['h']} (native {native['w']}x{native['h']}, "
-            f"profile {args.profile})"
+            f"profile {name}, ~{f['visual_tokens']} visual tokens)"
         )
 
     _emit(frame, args.json, render)
@@ -377,7 +411,13 @@ def cmd_recipe(args: argparse.Namespace) -> int:
 
     if args.subcommand == "save":
         entries = _read_log(cfg, args.last)
-        recipe = recipes.from_log(entries, args.name, args.site or "", args.task or "")
+        recipe = recipes.from_log(
+            entries,
+            args.name,
+            args.site or "",
+            args.task or "",
+            args.profile or cfg["capture"]["profile"],
+        )
         path = recipes.save(recipe)
         _emit(
             recipe,
@@ -959,6 +999,7 @@ def build_parser() -> argparse.ArgumentParser:
     ended.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
 
     add("doctor", "verify every environment precondition", cmd_doctor)
+    add("profiles", "what a capture costs each configured consumer", cmd_profiles)
     add("observe", "monitors, windows, focus, cursor", cmd_observe)
 
     shot = add("shot", "capture a frame", cmd_shot)
@@ -980,12 +1021,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="a remembered region of a window; aims the capture, never a click",
     )
     shot.add_argument("--context", metavar="NAME", help="scope a landmark, e.g. a site")
+    # Choices come from the config rather than the code, so a profile added
+    # there is selectable without touching this file. Default is None so the
+    # configured profile is what applies when --for is absent.
     shot.add_argument(
         "--for",
         dest="profile",
-        choices=sorted(capture.PROFILES),
-        default="claude",
-        help="downscale budget of the consuming model (default: claude)",
+        metavar="CONSUMER",
+        help="capture budget of the consuming model; see `cu profiles`",
     )
     shot.add_argument(
         "--if-changed",
@@ -1152,6 +1195,12 @@ def build_parser() -> argparse.ArgumentParser:
     rsave.add_argument("--last", type=int, default=20, help="how many log entries to promote")
     rsave.add_argument("--site", help="what site this is for")
     rsave.add_argument("--task", help="what it accomplishes")
+    rsave.add_argument(
+        "--for",
+        dest="profile",
+        metavar="CONSUMER",
+        help="capture budget the replay should use; see `cu profiles`",
+    )
     for name, help_text in (
         ("show", "print every step"),
         ("review", "read the steps, and approve them with --approve"),

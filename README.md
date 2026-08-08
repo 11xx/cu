@@ -29,6 +29,8 @@ bin/cu shot                          # capture the focused window
 bin/cu shot --output DP-2            # a whole monitor
 bin/cu shot --region '100,100 400x200'
 bin/cu shot --if-changed             # reuse the last frame if nothing moved
+bin/cu shot --for openai             # capture at another consumer's budget
+bin/cu profiles                      # what a capture costs each consumer
 
 bin/cu wait window-open --class zen  # block on a compositor event
 bin/cu focus zen                     # give a window keyboard focus
@@ -64,8 +66,16 @@ where nobody can see is a deliberate, named act.
 All accept `--json`. `bin/cu` is a plain command — it resolves `uv` itself, so
 a caller needs no knowledge of the Python underneath.
 
+Capture budgets are configuration. A **profile** describes a consuming model by
+capability — the long edge to downscale to, the patch size it bills in, its own
+cap — and every profile inherits `generic`, stating only what it changes. So
+teaching `cu` about a new consumer is a stanza under `[capture.profiles]`, and
+a field nobody has measured falls back to a conservative default rather than a
+guess. `cu profiles` shows what each resolves to; `--for` overrides per command.
+
 `shot` writes a PNG plus a **frame descriptor** recording the logical rectangle
-the image depicts and its pixel size. Later commands take coordinates as
+the image depicts, its pixel size, and what it costs the consumer it was
+captured for. Later commands take coordinates as
 `--frame <id> --at x,y` in image pixels, and `cu` maps them back to the screen.
 
 `cu` publishes what it is doing to `$XDG_RUNTIME_DIR/cu/status.json` — one

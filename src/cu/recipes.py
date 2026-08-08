@@ -144,7 +144,11 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def from_log(
-    entries: list[dict[str, Any]], name: str, site: str, task: str
+    entries: list[dict[str, Any]],
+    name: str,
+    site: str,
+    task: str,
+    capture_profile: str,
 ) -> dict[str, Any]:
     steps = [s for s in (step_from_log(e) for e in entries) if s]
     if not steps:
@@ -161,6 +165,11 @@ def from_log(
         "created_at": time.time(),
         "revision": 1,
         "preconditions": [],
+        # Which consumer's budget the replay captures at. Deliberately outside
+        # the reviewed hash: pointer steps are window-relative and map through
+        # whatever image the capture produced, so the profile changes what a
+        # replay costs but never where it clicks. Approval is about the steps.
+        "capture_profile": capture_profile,
         "steps": steps,
         # A recipe without a check cannot tell a working replay from a replay
         # that clicked into empty space, so the field is always present and
@@ -281,6 +290,10 @@ def replay(
     from . import actions, observe
 
     recipe = load(name)
+    # Recipes promoted before profiles were recorded fall back to the
+    # configured consumer rather than refusing: the profile changes cost, not
+    # aim, so an absent one is not a reason to block a reviewed procedure.
+    profile_name = recipe.get("capture_profile") or cfg["capture"]["profile"]
     blocked = unreviewed_reason(recipe)
     if blocked and not dry_run:
         raise RecipeError(
@@ -298,7 +311,7 @@ def replay(
         elif action in {"click", "move"}:
             snap = observe.snapshot()
             window = _window_by_class(step["window_class"], snap)
-            frame = _capture_window(window, cfg)
+            frame = _capture_window(window, cfg, profile_name)
             at = _point_in_frame(step, window, frame)
             if action == "click":
                 performed.append(
@@ -317,7 +330,7 @@ def replay(
             if step.get("relative"):
                 snap = observe.snapshot()
                 window = _window_by_class(step["window_class"], snap)
-                frame = _capture_window(window, cfg)
+                frame = _capture_window(window, cfg, profile_name)
                 frame_id = frame["id"]
                 at = _point_in_frame(step, window, frame)
             performed.append(
@@ -428,7 +441,9 @@ def _point_in_frame(
     )
 
 
-def _capture_window(window: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+def _capture_window(
+    window: dict[str, Any], cfg: dict[str, Any], profile_name: str
+) -> dict[str, Any]:
     from . import capture, frames, observe
 
     # Replays capture per pointer step, so without this the store grows for the
@@ -440,14 +455,15 @@ def _capture_window(window: dict[str, Any], cfg: dict[str, Any]) -> dict[str, An
         capture.sole_monitor(window["logical_rect"], monitors)["logical_rect"],
     )
     monitor = capture.sole_monitor(rect, monitors)
-    profile = capture.PROFILES["claude"]
+    profile = capture.resolve(profile_name, cfg)
     scale = capture.scale_for(rect, monitor["scale"], profile["max_long_edge"])
     with frames.capture_scratch() as scratch:
         capture.grab_region(rect, scratch, scale)
+        image_size = capture.size_of(scratch)
         return frames.new(
             source={"type": "window", "name": window["class"]},
             logical_rect=rect,
-            image_size=capture.size_of(scratch),
+            image_size=image_size,
             scratch=scratch,
             native_size={
                 "w": round(rect["w"] * monitor["scale"]),
@@ -455,7 +471,10 @@ def _capture_window(window: dict[str, Any], cfg: dict[str, Any]) -> dict[str, An
             },
             digest_native=capture.digest(scratch),
             monitor={"name": monitor["name"], "scale": monitor["scale"]},
-            profile="claude",
+            profile=profile_name,
+            visual_tokens=capture.visual_tokens(
+                image_size["w"], image_size["h"], profile
+            ),
             window={
                 "address": window["address"],
                 "class": window["class"],

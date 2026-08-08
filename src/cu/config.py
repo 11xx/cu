@@ -13,6 +13,7 @@ reporting success.
 
 from __future__ import annotations
 
+import copy
 import os
 import tomllib
 from pathlib import Path
@@ -86,6 +87,51 @@ DEFAULTS: dict[str, Any] = {
     "log": {
         # Append-only record of every action, injected or not.
         "path": "~/.local/state/cu/actions.jsonl",
+    },
+    # What a capture is worth to whoever reads it. Every profile inherits
+    # "generic" and states only its deltas, so teaching cu about a new consumer
+    # is a stanza here rather than a change to the code. Values that are not
+    # measured are better left inherited than guessed: the base is deliberately
+    # the most conservative reading of each field.
+    "capture": {
+        "profile": "claude",
+        "profiles": {
+            # Small enough to survive any consumer's own downscaling, and
+            # costed as though patches were the smaller of the two sizes in
+            # use, so an unmeasured consumer is over- rather than under-priced.
+            "generic": {
+                "max_long_edge": 1280,
+                "ceiling": 1568,
+                "patch_px": 28,
+                "token_budget": 1568,
+                "token_multiplier": 1.0,
+                "max_bytes": 5_000_000,
+                "max_images_per_request": 20,
+            },
+            # Anthropic bills 28x28 patches. Claude 4.7 and later read a
+            # 2576px long edge and 4784 visual tokens; older models cap at
+            # 1568 for both, which is what the base already assumes. 1920 is
+            # both the recommended balance for computer use and the largest
+            # capture that reaches those models without being downscaled.
+            "claude": {
+                "max_long_edge": 1920,
+                "ceiling": 2576,
+                "token_budget": 4784,
+                "max_bytes": 10_000_000,
+                "max_images_per_request": 100,
+            },
+            # OpenAI bills 32x32 patches and caps by patch count rather than
+            # by pixels. GPT-5.6 states no budget at all, hence zero; a
+            # 1920x1080 capture is 2040 patches, inside the 2500 the models
+            # that do cap allow.
+            "openai": {
+                "max_long_edge": 1920,
+                "ceiling": 2576,
+                "patch_px": 32,
+                "token_budget": 0,
+                "max_images_per_request": 100,
+            },
+        },
     },
     "input": {
         # Pause between press and release, and between successive keystrokes.
@@ -163,14 +209,20 @@ def _merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
 
 
 def load(path: Path | None = None) -> dict[str, Any]:
+    """The effective configuration: the defaults, with the user's file over them.
+
+    Deep-copied, because a shallow copy hands the caller the module's own
+    nested tables — one caller adding a capture profile to what it was given
+    would be editing the defaults every later caller reads.
+    """
     path = path or config_path()
     if not path.exists():
-        return dict(DEFAULTS)
+        return copy.deepcopy(DEFAULTS)
     try:
         user = tomllib.loads(path.read_text())
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
-    return _merge(DEFAULTS, user)
+    return _merge(copy.deepcopy(DEFAULTS), user)
 
 
 def abort_path() -> Path:

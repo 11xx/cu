@@ -35,10 +35,15 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   cu shot --region '100,100 400x200'
   cu shot --if-changed           Reuse the last frame when the pixels match.
 
-  Every capture prints a frame id and a path. Read the PNG at that path.
+  Every capture prints a frame id and a path. Read the PNG at that path, along
+  with what the image will cost whoever reads it.
 
-  --for names the consuming model's downscale budget, because image size is
-  one of the two things you control that changes cost and latency.
+  cu profiles                    What a capture costs each configured consumer.
+
+  Image size is one of the two things you control that changes cost and
+  latency, and consumers do not price it alike — they bill in patches, and the
+  patch is not the same size everywhere. --for names the consumer, and a new
+  one is a stanza under [capture.profiles] rather than a change to cu.
 
 ACT THROUGH THE FRAME YOU READ
   cu click --frame f3 --at 412,300
