@@ -23,8 +23,8 @@ ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
 NOT_MAPPED = 50
 
-#: What a caller should do on each code. Shipped in `cu doctor --json` and in
-#: the harness adapter so the contract has exactly one source.
+#: What a caller should do on each code. Shipped in `cu doctor --json` and
+#: summarized in the bare-`cu` guide, so the contract has exactly one source.
 RESPONSE = {
     OK: "Proceed.",
     ERROR: "Unexpected failure. Read stderr; do not blindly retry.",
