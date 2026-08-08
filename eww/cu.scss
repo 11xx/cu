@@ -1,0 +1,24 @@
+/* Structure only. Colour belongs to the config that includes this, because a
+   palette is a property of a desktop and not of cu. Style .cu__driver and
+   .cu__aborted there. */
+
+.cu {
+  padding: 0 4px;
+}
+
+.cu__driver {
+  padding: 0 3px;
+  background: transparent;
+  border: 0;
+}
+
+/* A command that named no session is one action, not a stretch of work. It
+   still gets a mark, because something is still driving the desktop. */
+.cu__driver--loose {
+  opacity: 0.6;
+}
+
+.cu__aborted {
+  padding: 0 3px;
+  font-weight: bold;
+}

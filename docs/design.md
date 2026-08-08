@@ -607,10 +607,33 @@ Two artifacts, because there are two questions:
   state, so a reboot cannot leave a stale claim behind.
 - **The action log — what happened.** Unchanged, append-only, read afterwards.
 
-**Records expire.** `cu` has no daemon, so nothing writes "finished" for a
-process killed mid-action. A record carries the moment it stops being true and
-a reader past that reports idle. A stuck "an agent is driving your desktop" is
-the one failure that would teach the user to ignore the indicator.
+**It is a registry, not a record.** Nothing stops two harnesses from driving
+one desktop, and a single last-writer-wins record answers the user's question
+wrongly in exactly that case: the second agent's first command erases the
+first's, and the bar shows one agent while two are typing. Each driver is an
+entry keyed by its session, so the answer is a list and the bar shows how many
+things there are to reckon with. Mutations take a lock: atomic replacement
+keeps a *reader* whole, but does nothing to stop two writers building a new
+registry on the same stale copy and one of them winning.
+
+**A session is named, never inferred.** With two agents present, deriving which
+stretch of work a command belongs to from process ancestry is a guess, and a
+wrong guess files one agent's action under the other's intent — which is worse
+than an unbracketed entry, because it reads as true. `cu session begin` prints
+an id and later commands claim it through `CU_SESSION` or `--session`.
+
+**Entries expire, one at a time.** `cu` has no daemon, so nothing writes
+"finished" for a process killed mid-action. Each entry carries the moment it
+stops being true and a reader drops it past that. A stuck "an agent is driving
+your desktop" is the one failure that would teach the user to ignore the
+indicator.
+
+A session's entry expires on a timeout it renews with every command inside it,
+because the gap between two commands is a model thinking rather than an agent
+that stopped. An unbracketed command instead watches its own process and is
+gone the moment that exits, which is all it honestly claims: each `cu` is a new
+short-lived process, so a timeout would leave one entry behind per invocation
+and grow a row of marks for work that finished seconds ago.
 
 **`--why` is the part worth showing.** `cu click` says an agent is acting;
 `--why "clicking Submit"` says what it is trying to do, which is what decides
@@ -618,8 +641,13 @@ whether to interrupt. `cu session begin` brackets a stretch of work so the
 indicator does not blink out while a model spends longer thinking than one
 action's expiry.
 
-`cu status` prints that line and nothing at all when idle, which is exactly
-what a bar module wants to render for idle:
+**The abort flag rides along.** The user presses their abort and each agent
+stops at its next command. Without it in the payload the bar would show nothing
+changing in between, at the one moment they most need to see that their stop
+landed — and an indicator would have to know where the flag lives.
+
+`cu status` prints one line per driver and nothing at all when nobody is
+driving, which is exactly what a bar module wants to render for idle:
 
 ```jsonc
 // waybar
@@ -630,6 +658,40 @@ what a bar module wants to render for idle:
   "format": "🤖 {}"
 }
 ```
+
+`eww/` carries a ready widget — `cu.yuck` and `cu.scss`, structure only, with
+colour left to the configuration that includes them.
+
+## One desktop, one driver at a time
+
+Every other interlock asks whether *this* action is safe. None of them can see
+the question a second agent raises, and both failures it produces are silent.
+
+`cu click` warps the pointer, then presses. It re-reads the pointer immediately
+before the button event, which catches the user reaching for the mouse — but a
+second `cu` warping in that same window is indistinguishable from nothing
+having happened, and the click lands, at exit 0, on whatever is now under the
+cursor. That is the failure the frame contract exists to prevent, arriving
+through a door the frame contract does not cover. Focus and the clipboard are
+shared the same way: two `type` commands interleave their keystrokes into
+whichever window has focus, and each restores the clipboard the other saved.
+
+So the injecting commands are serialized host-wide by `flock` on
+`$XDG_RUNTIME_DIR/cu/desktop.lock`. Three properties matter and all three come
+from the kernel rather than from this code: the lock is between *processes*,
+the only scope that means anything for a one-shot CLI; it is released when the
+holder exits, so an agent killed mid-action cannot wedge the desktop; and it
+needs no daemon to arbitrate.
+
+Waiting is bounded. Two agents reaching for the desktop at nearly the same
+moment is ordinary traffic and worth absorbing; one holding it for longer is a
+fact the caller needs told rather than a stall to hide. Past the wait the
+answer is exit 42 naming the holder — retryable, because unlike an abort it
+describes someone else's work in progress rather than the user's refusal.
+
+Reading is never serialized. `observe`, `shot`, `wait`, `status`, and `doctor`
+answer while someone else is driving, which is how both the other agent and the
+user find out what is going on.
 
 ## Command surface
 

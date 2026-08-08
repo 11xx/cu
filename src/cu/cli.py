@@ -20,6 +20,7 @@ from . import (
     capture,
     checks,
     config,
+    desktop,
     exits,
     frames,
     guide,
@@ -956,32 +957,44 @@ def cmd_key(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """What cu is doing, for whatever shows the user things.
+    """Who is driving the desktop, for whatever shows the user things.
 
-    Prints nothing at all when idle, because that is what a status bar wants to
-    render for idle — a module whose command outputs an empty string takes up
-    no room.
+    Prints nothing at all when nobody is, because that is what a status bar
+    wants to render for idle — a module whose command outputs an empty string
+    takes up no room. One line per driver, since two agents on one desktop is
+    a thing the user needs to see rather than a case to average away.
     """
     record = status.read()
-    _emit(record, args.json, lambda r: print(status.describe(r)) if r.get("active") else None)
+    _emit(record, args.json, lambda r: print(status.summarize(r)) if r.get("active") else None)
     return exits.OK
 
 
 def cmd_session(args: argparse.Namespace) -> int:
     """Bracket a stretch of work, so the indicator does not blink between steps.
 
-    A single action's record expires on its own, which is what keeps a killed
+    A single action's entry expires on its own, which is what keeps a killed
     process from claiming the desktop forever. But a model deciding what to do
     next routinely takes longer than that, and an indicator that clears while
     the agent is still working reads as "it finished" at the moment the user
     most wants the truth.
+
+    `begin` prints the session id and nothing else, so the shell form that
+    binds every later command to it is the obvious one:
+    `export CU_SESSION=$(cu session begin 'booking a flight')`.
     """
     if args.subcommand == "begin":
         record = status.begin(args.detail, pid=args.pid)
-        _emit(record, args.json, lambda r: print(f"working: {r['detail']}"))
+        _emit(record, args.json, lambda r: print(r["id"]))
         return exits.OK
-    record = status.end()
-    _emit(record, args.json, lambda _r: print("idle"))
+    record = status.end(getattr(args, "session", None))
+    _emit(
+        record,
+        args.json,
+        # A session that had already expired reports that, rather than the
+        # "ended" of one that was live a moment ago. They mean different things
+        # to whoever is reading: one of them says the bracket was too short.
+        lambda r: print(f"ended {r['ended']}" if r["was_open"] else f"{r['ended']} was not open"),
+    )
     return exits.OK
 
 
@@ -1016,10 +1029,19 @@ def build_parser() -> argparse.ArgumentParser:
             default=argparse.SUPPRESS,
             help="a short description of the intent, shown to the user",
         )
-        p.set_defaults(run=run)
+        # Which stretch of work this command belongs to. Never inferred: with
+        # two agents on one desktop, guessing from process ancestry files one
+        # agent's action under the other's intent, which reads as true.
+        p.add_argument(
+            "--session",
+            metavar="ID",
+            default=argparse.SUPPRESS,
+            help=f"session from `cu session begin` (default: ${status.SESSION_ENV})",
+        )
+        p.set_defaults(run=run, injects=False)
         return p
 
-    add("status", "what cu is doing, for a status bar to poll", cmd_status)
+    add("status", "who is driving the desktop, for a status bar to poll", cmd_status)
 
     session = add("session", "bracket a stretch of work as one activity", cmd_session)
     ssub2 = session.add_subparsers(dest="subcommand", required=True)
@@ -1031,6 +1053,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     begin.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     ended = ssub2.add_parser("end", help="say it has stopped")
+    ended.add_argument(
+        "--session",
+        metavar="ID",
+        default=argparse.SUPPRESS,
+        help=f"which session to end (default: ${status.SESSION_ENV}, "
+        "or the only one open)",
+    )
     ended.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
 
     add("doctor", "verify every environment precondition", cmd_doctor)
@@ -1157,6 +1186,10 @@ def build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="check and log the action without injecting it",
         )
+        # Marks the commands that reach the shared pointer, focus, or
+        # clipboard, and so must hold the desktop while they run. `main`
+        # reads it; nothing else needs to know which commands these are.
+        p.set_defaults(injects=True)
         return p
 
     def add_aim(p: argparse.ArgumentParser, required: bool) -> None:
@@ -1227,6 +1260,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     recipe = add_injecting("recipe", "save, review, and replay a procedure", cmd_recipe)
+    # Only `replay` injects; listing and reading recipes must not queue behind
+    # an agent that is driving the desktop. The subparser's default wins over
+    # the one add_injecting set here.
+    recipe.set_defaults(injects=False)
     rsub = recipe.add_subparsers(dest="subcommand", required=True)
 
     def add_recipe(name: str, help_text: str) -> argparse.ArgumentParser:
@@ -1262,6 +1299,7 @@ def build_parser() -> argparse.ArgumentParser:
                 "--approve", action="store_true", help="record that you have read every step"
             )
         if name == "replay":
+            sub_parser.set_defaults(injects=True)
             sub_parser.add_argument(
                 "--param", action="append", metavar="NAME=VALUE",
                 help="supply a typed value; recipes never store the text itself",
@@ -1296,12 +1334,23 @@ def main(argv: list[str] | None = None) -> int:
         # has no command to dispatch to.
         print(guide.render(), end="")
         return exits.OK
+    why = getattr(args, "why", "") or ""
+    session = getattr(args, "session", None)
     # Published before the command runs rather than after, because the point is
     # to say what is happening while it happens. `status` is excluded: a reader
     # asking what is going on is not itself something going on.
     if args.command not in {"status", "session"}:
-        status.publish(args.command, detail=getattr(args, "why", "") or "")
+        status.publish(args.command, detail=why, session=session)
     try:
+        # The desktop's pointer, focus, and clipboard are one shared resource,
+        # and nothing an injecting command checks can see a second agent using
+        # them. Holding it here rather than inside each action keeps the whole
+        # command — warp, settle, and event — indivisible, which is the unit
+        # that has to be, and keeps the read-only loop free of the lock.
+        if getattr(args, "injects", False):
+            busy_wait = config.load()["safety"]["busy_wait_ms"] / 1000
+            with desktop.held(args.command, why, wait=busy_wait):
+                return args.run(args)
         return args.run(args)
     except Refused as exc:
         # An interlock, not a fault. The code is what the caller acts on, so

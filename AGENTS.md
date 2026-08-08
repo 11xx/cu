@@ -23,6 +23,12 @@ targeting Hyprland. Non-goals: no daemon, no overlay, no prompt layer.
   `cu sandbox`, which is a deliberate, named act.
 - **The abort flag is the user's alone.** Exit 40 is never retryable and
   nothing in this repository clears it on their behalf.
+- **The desktop is one resource with possibly many agents on it.** Injection
+  holds a host-wide lock; observation never does. Anything that reaches the
+  shared pointer, focus, or clipboard goes through `desktop.held`, and anything
+  that reports who is driving is a registry keyed by session, not a record —
+  a second agent must never be able to erase the first's claim, or land a click
+  inside the first's warp.
 - **State lives outside the repository.** Config in `$XDG_CONFIG_HOME/cu/`,
   recipes and learned knowledge in `$XDG_DATA_HOME/cu/`, frames, status, and
   the abort flag in `$XDG_RUNTIME_DIR/cu/`. Nothing host-shaped is committed.

@@ -83,6 +83,12 @@ DEFAULTS: dict[str, Any] = {
         "cursor_drift_tolerance": 12.0,
         # Whether input commands assert the expected window still has focus.
         "require_focus": True,
+        # How long an injecting command waits for another agent to release the
+        # desktop before refusing with exit 42. Two agents reaching for it at
+        # nearly the same moment is ordinary and worth absorbing; one holding
+        # it for longer than this is a fact the caller needs told rather than
+        # a stall to hide.
+        "busy_wait_ms": 5000,
     },
     "log": {
         # Append-only record of every action, injected or not.

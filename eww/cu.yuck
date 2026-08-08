@@ -1,0 +1,62 @@
+;; An indicator for a desktop an agent is driving.
+;;
+;; `cu` publishes state and does not draw: an overlay would land in the frames
+;; the model reads, because grim captures layer surfaces. A bar is already in
+;; every frame, so an indicator here adds no interference at all.
+;;
+;; Nothing in this file names a path, a colour, or a monitor. Include it and
+;; place `(cu-indicator)` in a bar; colours come from the config's own palette
+;; against the classes below.
+
+;; One tick per second is what makes a status honest. It is a small JSON read
+;; from tmpfs, and the alternative — a slower poll — leaves the user watching
+;; an indicator that no longer describes their desktop.
+(defpoll cu-status
+  :interval "1s"
+  :initial '{"active":false,"aborted":false,"drivers":[]}'
+  "cu status --json")
+
+;; Elapsed time needs a now to subtract from. Coarse on purpose: the display is
+;; in minutes, so a faster clock would redraw without ever changing.
+(defpoll cu-clock
+  :interval "15s"
+  :initial "0"
+  "date +%s")
+
+(deflisten cu-spinner
+  :initial "◐"
+  `while :; do for frame in ◐ ◓ ◑ ◒; do printf '%s\\n' "$frame"; sleep 0.25; done; done`)
+
+;; One agent. The tooltip carries what the glance cannot: the agent's own --why,
+;; the command in flight, and how long it has been at it.
+(defwidget cu-driver [driver spinner]
+  (button
+    :class "cu__driver cu__driver--${driver.session ? "session" : "loose"}"
+    :tooltip "cu: ${driver.detail} · ${driver.command} · ${cu-clock > driver.started_at ? round((cu-clock - driver.started_at) / 60, 0) : 0}m"
+    :onclick "touch \"$XDG_RUNTIME_DIR/cu/abort\""
+    spinner))
+
+;; Hidden entirely when nothing is happening. An always-present idle icon is
+;; noise, and worse, it trains the user to stop reading the one that matters.
+;;
+;; The abort state outranks the drivers. Once the flag is set the agents are
+;; stopping rather than working, and showing them still spinning would deny the
+;; user the confirmation that their stop landed.
+(defwidget cu-indicator []
+  (box
+    :class "cu"
+    :visible {cu-status.active || cu-status.aborted}
+    :space-evenly false
+    ;; A hidden label so eww keeps the spinner listener alive while the box
+    ;; itself is collapsed; without it the first driver appears frozen.
+    (label :visible false :text "${cu-spinner}")
+    (label
+      :class "cu__aborted"
+      :visible {cu-status.aborted}
+      :tooltip "you aborted; agents stop at their next command. Clear it with your abort-release keybind."
+      :text "■")
+    (box
+      :visible {!cu-status.aborted}
+      :space-evenly false
+      (for driver in {cu-status.drivers}
+        (cu-driver :driver driver :spinner cu-spinner)))))
