@@ -25,7 +25,7 @@ def log(**extra):
 
 
 def build(entries=None, name="demo"):
-    return recipes.from_log(entries or [log()], name, "example.com", "a task")
+    return recipes.from_log(entries or [log()], name, "example.com", "a task", "claude")
 
 
 # --- names become filenames ----------------------------------------------
@@ -150,7 +150,7 @@ def test_typed_text_becomes_a_parameter():
 
 def test_a_log_slice_with_nothing_replayable_is_an_error():
     with pytest.raises(recipes.RecipeError):
-        recipes.from_log([log(dry_run=True)], "demo", "", "")
+        recipes.from_log([log(dry_run=True)], "demo", "", "", "claude")
 
 
 # --- the review gate ------------------------------------------------------

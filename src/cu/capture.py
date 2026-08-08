@@ -18,13 +18,84 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-#: Downscale targets by consumer. The long-edge figure is what actually drives
-#: image token cost; the ceiling is where a provider stops accepting detail.
-PROFILES = {
-    "claude": {"max_long_edge": 1920, "ceiling": 2576},
-    "openai": {"max_long_edge": 1536, "ceiling": 2048},
-    "generic": {"max_long_edge": 1280, "ceiling": 1568},
+from .config import ConfigError
+
+#: The name every profile inherits from, and the one that must always exist.
+BASE_PROFILE = "generic"
+
+#: Fields a profile may declare. A consumer is described by capability rather
+#: than by a single number because the vendors do not share a unit: an image
+#: costs whole patches, and the patch is 28px on one side and 32px on another,
+#: so one long edge cannot express both. `generic` holds the most conservative
+#: value for each, and a named profile states only what it changes — which is
+#: what makes adding a consumer configuration rather than code.
+PROFILE_FIELDS = {
+    # Long edge cu downscales to. The figure that actually drives token cost.
+    "max_long_edge": int,
+    # The largest long edge the consumer accepts before downscaling itself.
+    "ceiling": int,
+    # Side of the square the consumer bills in. Anthropic bills 28px patches,
+    # OpenAI 32px. Carrying it is what makes a cost estimate computable rather
+    # than guessed.
+    "patch_px": int,
+    # The consumer's own cap on patches per image. Zero means it states none,
+    # which is how a model that resizes nothing says so — TOML has no null, and
+    # a budget of zero patches is not a thing anyone could otherwise mean.
+    "token_budget": int,
+    # Some models bill a patch at a rate rather than one-for-one.
+    "token_multiplier": float,
+    "max_bytes": int,
+    "max_images_per_request": int,
 }
+
+
+def resolve(name: str, cfg: dict[str, Any]) -> dict[str, Any]:
+    """One consumer's capabilities: the base, with that consumer's deltas.
+
+    A field the base does not carry cannot be introduced by a profile, so a
+    typo in a user's config is a refusal rather than a silently ignored key.
+    """
+    table = cfg["capture"]["profiles"]
+    if name not in table:
+        # A name the caller typed, so this is a usage error rather than a
+        # capture that went wrong — the two ask different things of the caller.
+        raise ValueError(
+            f"unknown capture profile: {name!r}; configured: {', '.join(sorted(table))}"
+        )
+    resolved = {**table[BASE_PROFILE], **table[name]}
+    unknown = set(resolved) - set(PROFILE_FIELDS)
+    if unknown:
+        raise ConfigError(
+            f"capture profile {name!r} declares unknown field(s): "
+            f"{', '.join(sorted(unknown))}"
+        )
+    missing = set(PROFILE_FIELDS) - set(resolved)
+    if missing:
+        raise ConfigError(
+            f"capture profile {BASE_PROFILE!r} is missing {', '.join(sorted(missing))}; "
+            "every field must have a conservative default to inherit"
+        )
+    return resolved
+
+
+def names(cfg: dict[str, Any]) -> list[str]:
+    return sorted(cfg["capture"]["profiles"])
+
+
+def visual_tokens(width: int, height: int, profile: dict[str, Any]) -> int:
+    """What an image of this size costs the consuming model.
+
+    An image is billed in whole patches, so a pixel past a boundary costs a
+    whole row. Reported rather than enforced: cu has already downscaled to the
+    profile's long edge, and a consumer that resizes further does so on its own
+    terms — the number is here so a caller can see what a capture spends.
+    """
+    side = profile["patch_px"]
+    patches = math.ceil(width / side) * math.ceil(height / side)
+    budget = profile["token_budget"]
+    if budget:
+        patches = min(patches, budget)
+    return round(patches * profile["token_multiplier"])
 
 
 class CaptureError(RuntimeError):

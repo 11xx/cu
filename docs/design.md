@@ -187,21 +187,36 @@ budgeted rather than literal:
   fewer tokens *and* more detail per token than a full output.
 - `cu shot --region <x>,<y> <w>x<h>` captures an arbitrary strip.
 - `cu shot --output DP-2` for a whole monitor.
-- `--for claude|openai|generic` selects a provider profile that sets the
-  downscale target and format.
+- `--for <consumer>` selects a capture profile, which sets the downscale
+  target. Profiles are configuration, not code — see below.
 - `--if-changed` hashes the region and skips re-sending an unchanged screen,
   which is the common case in a wait loop. The reused frame is re-dated by the
   capture that confirmed it: the pixels were just read back and matched, which
   is the evidence the staleness threshold stands in for, so a frame proven
   current must not then be refused as too old.
 
-For the Claude profile: current models accept up to 2576px on the long edge and
-charge up to ~4784 tokens for a single image at that size, with returned
-coordinates mapping 1:1 to image pixels — so no scale-factor correction is
-needed on the model's output, only the frame transform above. 1080p is the
-recommended balance of accuracy and cost for interactive driving; 1366x768 is
-the cost-sensitive setting. The profile encodes these; the agent does not do
-arithmetic about them.
+A profile describes a consumer by **capability rather than by one number**,
+because consumers do not share a unit. An image is billed in whole square
+patches, and the patch is 28px on one side and 32px on another, so a single
+long edge cannot express both — and a model that caps by patch count rather
+than by pixels has no long edge to state at all. A profile therefore carries
+the long edge to downscale to, the ceiling the consumer accepts, the patch size
+it bills in, its own budget, and the per-image limits, and `cu` computes what a
+capture costs rather than the agent doing arithmetic about it.
+
+Every profile inherits one base, `generic`, and states only what it changes.
+That is what keeps a new consumer a stanza under `[capture.profiles]` instead
+of a change here — and it makes the base load-bearing: it holds the most
+conservative reading of each field, so an unmeasured consumer is over-priced
+rather than under-priced, and a typo resolves to a refusal rather than to a
+silently ignored key.
+
+The shipped profiles record measurements, not preferences, and the measurement
+belongs in the config comment beside each. `claude` downscales to 1080p because
+that is both the recommended balance for computer use and the largest capture
+the high-resolution tier accepts without downscaling it again; returned
+coordinates map 1:1 to image pixels there, so no scale-factor correction is
+needed on the model's output, only the frame transform above.
 
 Frames are written to disk and the path is printed with the descriptor. Both
 Claude Code and Codex read image files natively, which makes the filesystem the
