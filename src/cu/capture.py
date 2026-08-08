@@ -59,12 +59,20 @@ def _check_field(profile: str, field: str, value: Any) -> None:
 
     Booleans are refused explicitly because `True` is an `int` in Python: a
     patch size of one pixel is not a refusal anyone would recognise as one.
+    Non-finite floats are refused for the same reason one step further on: TOML
+    spells `nan` and `inf`, and both pass an ordering check — `nan` compares
+    false against every bound — before failing inside `round()`.
     """
     accepted = int if PROFILE_FIELDS[field] is int else (int, float)
     if isinstance(value, bool) or not isinstance(value, accepted):
         raise ConfigError(
             f"capture profile {profile!r} sets {field} to {value!r}; "
             f"it must be {'an integer' if accepted is int else 'a number'}"
+        )
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ConfigError(
+            f"capture profile {profile!r} sets {field} to {value!r}; "
+            "it must be a finite number"
         )
     floor = 0 if field in UNBOUNDED_AT_ZERO else 1
     if value < floor:

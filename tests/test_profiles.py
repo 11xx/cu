@@ -104,6 +104,16 @@ def test_a_field_that_is_not_a_number_is_refused_rather_than_carried(cfg, value)
         capture.resolve("broken", cfg)
 
 
+@pytest.mark.parametrize("literal", ["nan", "inf"])
+def test_a_non_finite_multiplier_is_refused_rather_than_carried(cfg, literal):
+    """TOML spells these, and no bound catches them: `nan` compares false
+    against everything and `inf` exceeds nothing. Both reach `round()`."""
+    cfg["capture"]["profiles"]["broken"] = {"token_multiplier": float(literal)}
+    with pytest.raises(config.ConfigError) as err:
+        capture.resolve("broken", cfg)
+    assert "token_multiplier" in str(err.value)
+
+
 def test_zero_stays_a_budget_of_none_rather_than_becoming_a_refusal(cfg):
     cfg["capture"]["profiles"]["frugal"] = {"token_budget": 0}
     assert capture.resolve("frugal", cfg)["token_budget"] == 0
