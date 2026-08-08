@@ -1,0 +1,4 @@
+#!/bin/sh
+# Callable as a plain command from any harness, with no knowledge of uv.
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 1
+exec uv run --quiet --project "$root" cu "$@"

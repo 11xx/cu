@@ -1,0 +1,316 @@
+# Host baseline
+
+The verified capabilities this project builds on. Each fact carries the probe
+that establishes it, so any claim can be re-checked on a new machine. `cu
+doctor` automates these checks; this document explains what they mean.
+
+## Session
+
+| Property | Value | Probe |
+| --- | --- | --- |
+| Compositor | Hyprland 0.56.1 | `hyprctl version` |
+| Session type | Wayland (`wayland-1`), XWayland present on `:0` | `env \| grep -E 'WAYLAND\|DISPLAY'` |
+| Outputs | 2, mixed scale (see below) | `hyprctl monitors -j` |
+
+## Hyprland speaks Lua, not dispatcher strings
+
+Hyprland 0.56 replaced the classic `hyprctl dispatch <name> <args>` string form
+with a Lua API. The old syntax is a parse error, not a silent no-op:
+
+```
+$ hyprctl dispatch movecursor 173 627
+error: [string "return hl.dispatch(movecursor 173 627)"]:1: ')' expected near '173'
+```
+
+The interfaces this project uses:
+
+| Call | Semantics |
+| --- | --- |
+| `hl.dsp.*` | **Constructs** a dispatcher object; does not perform anything |
+| `hl.dispatch(<dispatcher>)` | Executes one |
+| `hl.get_cursor_pos()` | Returns `{x, y}` as floats in global logical coordinates |
+| `hl.get_windows()`, `hl.get_monitors()` | Structured introspection; return userdata, not plain tables |
+| `hl.dsp.send_key_state`, `hl.dsp.send_shortcut` | Keybind-oriented key injection |
+
+Reach them with `hyprctl repl '<lua>'` (or `hyprctl eval`). Enumerate any
+namespace with `hyprctl repl 'for k,v in pairs(hl.dsp) do ... end'`.
+
+### Cursor movement, and how easily it looks like it works
+
+The working form takes a **table**, and must be dispatched:
+
+```lua
+hl.dispatch(hl.dsp.cursor.move({x = 900, y = 500}))
+```
+
+Every plausible variant fails *silently* — `pcall` reports success, no error is
+raised, and the cursor does not move:
+
+| Call | Result |
+| --- | --- |
+| `hl.dsp.cursor.move({x=900,y=500})` without `hl.dispatch` | constructs and discards a dispatcher |
+| `hl.dispatch(hl.dsp.cursor.move(900, 500))` | positional numbers ignored |
+| `hl.dispatch(hl.dsp.cursor.move("900 500"))` | old string form ignored |
+| `hl.dispatch(hl.dsp.cursor.move("exact 900 500"))` | ignored |
+
+So a probe must move the cursor to a coordinate it is **not already at**.
+Verifying with the cursor's own current position cannot distinguish a working
+call from a no-op, and will report success for all five forms above.
+
+Measured with the correct form: movement is absolute (`move(700,400)` twice is
+idempotent), crosses output boundaries into the neighbouring monitor's logical
+range, and preserves fractional coordinates exactly — `move(1234.5, 678.25)`
+reads back as `(1234.50, 678.25)`.
+
+The event stream lives at
+`$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock`. It is a
+dotfile, so a bare `ls` of that directory does not show it.
+
+## Input injection needs no root
+
+`/dev/uinput` is `crw-rw----+ root input`, and the desktop user is in `input`,
+so a plain uid-1000 process opens it for writing:
+
+```
+$ python3 -c 'import os; os.close(os.open("/dev/uinput", os.O_WRONLY))' && echo ok
+ok
+```
+
+This removes the usual `ydotoold`-style root daemon from the design. A virtual
+keyboard and pointer are created directly by the unprivileged process that
+needs them, and disappear when it exits.
+
+The permission comes from an ACL on the device node. It is a precondition, not
+an invariant: `cu doctor` re-checks it rather than assuming it survives a
+reboot or a udev change.
+
+### xremap does not intercept virtual devices
+
+A key remapper runs in this session, bound to one named physical device:
+
+```
+xremap /home/lobo/.config/xremap/browser-emacs.yaml --device SINO WEALTH USB KEYBOARD
+```
+
+Because the binding is device-scoped, keys injected through a new virtual
+keyboard reach applications unremapped. Were the `--device` filter ever
+dropped, xremap would grab all keyboards including the virtual one, and every
+injected keystroke would be silently rewritten. `cu doctor` checks for a
+device-scoped filter and warns when it cannot find one.
+
+## Coordinates: three spaces, two scales
+
+```
+DP-2   2560x1440 physical   scale 1.25   logical 2048x1152 at (0,0)
+DP-1   2560x1440 physical   scale 1.00   logical 2560x1440 at (2048,0)
+```
+
+The logical desktop is 4608x1440. Hyprland reports window geometry, cursor
+position, and accepts cursor moves in this logical space — `hyprctl
+activewindow` on DP-2 returns `at: [3,29] size: [2042,1120]`, which fits inside
+2048x1152 and would overflow the physical 2560x1440.
+
+Capture works in physical pixels, and the two forms differ sharply:
+
+| Command | Output | Notes |
+| --- | --- | --- |
+| `grim -o DP-1` | 2560x1440 | Native pixels of that output |
+| `grim -o DP-2` | 2560x1440 | Native pixels; 2048x1152 logical |
+| `grim` (whole desktop) | 5760x1800 | Logical bounding box times the **largest** scale |
+
+Full-desktop capture composites at scale 1.25, so DP-1's native 2560x1440 is
+upscaled to 3200x1800 — 10.4 megapixels that carry less detail than the two
+native captures totalling 7.4. Per-output capture is therefore the primitive,
+and whole-desktop capture is never used.
+
+### Region capture speaks logical coordinates
+
+`grim -g "<x>,<y> <w>x<h>"` takes the same logical coordinates Hyprland reports
+and accepts, which makes a window's reported geometry directly usable as a
+capture argument. The resulting *pixel* dimensions are the logical size times
+the scale of the output the region lands on:
+
+| Region | Lands on | Output |
+| --- | --- | --- |
+| `0,0 100x100` | DP-2, scale 1.25 | 125x125 |
+| `2100,100 100x100` | DP-1, scale 1.00 | 100x100 |
+| `2000,100 200x100` | spans both | 250x125 |
+
+The spanning case follows the whole-desktop rule: it composites at the largest
+scale of the outputs it touches, so the DP-1 portion is upscaled. A region is
+therefore always clamped to a single output.
+
+Because pixel dimensions vary by output, they are read from the captured file
+rather than computed — which is what keeps the frame transform correct without
+the caller tracking scales.
+
+## Available tooling
+
+Present: `hyprctl`, `grim`, `slurp`, `wl-copy`/`wl-paste`, `hyprpicker`, `wev`,
+`magick`, `jq`, `socat`, `python3`, `uv`, `node`, `wf-recorder`, `pipewire`,
+`xdg-desktop-portal-hyprland`.
+
+Absent: `wtype`, `ydotool`, `dotool`, `xdotool` — no input-injection tool is
+installed, which the direct `/dev/uinput` path makes unnecessary.
+
+## Headless outputs work, and are the safe test target
+
+`hyprctl output create headless` adds a real output the compositor treats like
+any other, and `hyprctl output remove HEADLESS-1` takes it away. Measured
+end to end:
+
+- It appears as `HEADLESS-1` at 1920x1080, **scale 2.00**, placed to the right
+  of the real outputs at logical x=4608, on its own workspace.
+- Existing outputs keep their geometry, scale, and active workspace exactly.
+- A window launched with `[workspace 11 silent]` lands on it and reports
+  logical geometry inside its 960x540 logical bounds.
+- `grim -o HEADLESS-1` captures 1920x1080 of real rendered content, and a
+  region crop of the window's logical 954x534 yields 1908x1068 physical —
+  the scale-2.0 case of the region rule above.
+- After removal, `hyprctl monitors` and `hyprctl workspaces` match their
+  pre-probe snapshots byte for byte.
+
+So the input and capture paths can be developed against a screen that does not
+physically exist, on the live compositor, without touching the user's displays.
+The scale of 2.00 is a bonus: it is a third distinct scale, so a test suite
+running there exercises coordinate math that 1.0 and 1.25 alone would not.
+
+## Sleeping monitors: what still works, and what wakes them
+
+`hypridle` powers the displays down after 5.5 minutes idle and restores them on
+activity. Whether an agent can work against a dark desktop depends on which of
+its actions count as activity, and the answer splits cleanly. Measured by
+disabling DPMS, performing one action, and re-reading `dpmsStatus`:
+
+| Action | Wakes the monitors | Works while asleep |
+| --- | --- | --- |
+| `hyprctl` queries — `observe` | no | yes |
+| Cursor warp — `hl.dsp.cursor.move` | no | yes |
+| Keys via `hl.dsp.send_key_state` | **no** | yes |
+| `grim -o` on a **physical** output | no | **no — fails** |
+| `grim -o` on a **headless** output | no | yes |
+| Any `/dev/uinput` event | **yes** | yes |
+
+The dividing line is libinput. A uinput device produces genuine kernel input
+events, which is exactly what makes them indistinguishable from a human — and
+is also why they reset the session idle timer and turn every panel back on. The
+compositor's own dispatchers never enter that path, so they leave a sleeping
+desktop asleep.
+
+Capture is the other half. A physical output that is powered down is not
+rendering, and `grim -o` on it fails outright rather than returning a black
+image — a loud failure, which is the good kind. A headless output has no panel
+to power down and keeps rendering regardless, so it captures normally.
+
+So a **keyboard-driven agent can run entirely against sleeping displays**:
+observe, warp, capture from a headless output, and inject keys through
+`--backend compositor`. What cannot join it is the pointer. The compositor
+exposes no button or wheel dispatcher, so clicks and scrolls must use uinput
+and will always wake the screen.
+
+### The dispatcher's argument shapes, both of which fail silently
+
+```lua
+hl.dispatch(hl.dsp.send_key_state({mods = "CTRL SHIFT", key = "v", state = "down"}))
+```
+
+- **`mods` is a name, not a bitmask.** `mods = 4` is accepted and produces an
+  *unmodified* keystroke. Several names separate with a space, `+`, or `,` —
+  all three were verified to work.
+- **`key` is an X11 keysym name** (`"a"`, `"Return"`, `"F4"`) **or an xkb
+  keycode**, which is the evdev code plus 8 — so `key = 30` types `u`, not `a`.
+  A kernel constant such as `"KEY_A"` is accepted and does nothing.
+- **`state` must be `"down"`, `"up"`, or `"repeat"`.** Unlike the other two, a
+  wrong value here is a real error rather than a silent no-op.
+
+## Browsers
+
+Six, across both engine families:
+
+| Browser | Family | Executable | Window class |
+| --- | --- | --- | --- |
+| Zen | Gecko | `/opt/zen-browser-bin/zen-bin` (wrapper on `PATH` as `zen-browser`) | `zen` |
+| Firefox | Gecko | wrapper on `PATH` | — |
+| Floorp | Gecko | `/usr/bin/floorp` | — |
+| Thorium | Chromium | `/usr/bin/thorium-browser` | — |
+| Helium | Chromium | `helium-browser` → `/opt/helium-browser-bin/helium-wrapper` | `helium` |
+| Vivaldi | Chromium | `/usr/bin/vivaldi` | — |
+
+Window classes are recorded as they are observed; `zen` and `helium` are
+confirmed from `hyprctl clients -j` with both running as native Wayland clients
+(`xwayland: false`).
+
+**Binary names do not follow the product name.** Helium is on `PATH` as
+`helium-browser`, not `helium`; Thorium likewise. Probing a guessed name and
+reading absence as "not installed" is how a browser goes missing from an
+inventory. Discovery reads the `Exec=` line of desktop entries, which is
+authoritative, and treats `PATH` name-matching as a hint only.
+
+Both running browsers were launched with no remote-debugging or automation
+flags, which is the normal case and the one the design has to accommodate.
+
+No `playwright`, `geckodriver`, or `chromedriver` is installed. Chromium's
+bundled `chromedriver` ships inside `/opt/helium-browser-bin/`.
+
+## The keyboard is a three-stage pipeline, not a constant
+
+This desktop rebinds keys twice before an application sees them, so no default
+shortcut can be assumed.
+
+**Stage 1 — xremap.** `~/.config/xremap/browser-emacs.yaml` applies an
+Emacs-style editing layer, scoped by window class to browsers and two other
+applications:
+
+```yaml
+application:
+  only: [firefox, vivaldi-stable, thorium-browser, zen, helium, ...]
+```
+
+Floorp is absent from that list and so receives no layer. Within it, familiar
+chords mean something else entirely: `C-f` becomes `right`, `C-a` becomes
+`home`, `C-s` becomes `f3` (find-again), `C-w` becomes cut. `C-x` and `C-c` are
+prefix keys opening submaps.
+
+**Stage 2 — the browser's own bindings.** The Emacs layer deliberately targets
+unusual chords that the browser is then configured to recognize.
+`~/.zen/customKeys.json` completes the chain:
+
+| Action | Zen binding | Reached from |
+| --- | --- | --- |
+| Focus URL bar | `Ctrl+Alt+Shift+F4` | — |
+| Close tab | `Ctrl+Alt+Shift+Delete` | `C-M-k` |
+| Save page as | `Ctrl+Alt+Shift+Insert` | `C-x C-w` |
+| Close window | `Ctrl+Alt+Shift+End` | `C-x 4 0` |
+| Back / forward | `Ctrl+Alt+Shift+B` / `+F` | `C-x M-b` / `C-x M-f` |
+| **New tab** | `Ctrl+T` | — |
+
+The last row is the point: **some bindings are customized and some are not**,
+and the difference is not predictable. Of the four chords one would reflexively
+call universal, `Ctrl+T` survives, `Ctrl+L` and `Ctrl+W` do not, and `Ctrl+F`
+is consumed upstream by stage 1. Firefox carries its own `customKeys.json`;
+Vivaldi's `Preferences` has no `keyboard` key, so it is unmodified.
+
+**Stage 3 — the application acts.**
+
+### What this means for injected input
+
+Injected keys enter the pipeline *after* xremap, because xremap is bound to one
+physical device. So the correct thing to inject is the **stage-2 chord the
+browser actually listens for** — `Ctrl+Alt+Shift+F4` to focus Zen's URL bar —
+never the physical chord a human would press, and never a documented default.
+
+### The xremap fallback is a live hazard
+
+`~/.local/bin/xremap-default` degrades to running xremap with **no device
+filter** when the keyboard is absent:
+
+```sh
+notify-send ... "Device not found, running without --device filter"
+xremap ~/.config/xremap/browser-emacs.yaml
+```
+
+In that state xremap grabs every keyboard including a virtual one, and injected
+keys are silently remapped — `C-f` would arrive as `right`. The device filter
+is therefore a property of the *running process*, not of the config, so
+`cu doctor` reads `/proc/<pid>/cmdline` of the live xremap rather than trusting
+the launcher's intent.
