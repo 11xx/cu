@@ -58,13 +58,76 @@ def test_a_click_without_a_relative_position_is_not_replayable():
 
 def test_a_click_keeps_its_window_relative_position():
     entry = {
-        "action": "click", "window": {"class": "zen"},
+        "action": "click",
+        "window": {
+            "class": "zen",
+            "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600},
+        },
         "relative": {"x": 0.5, "y": 0.25}, "button": "left", "count": 2,
     }
     step = recipes.step_from_log(entry)
     assert step["relative"] == {"x": 0.5, "y": 0.25}
     assert step["window_class"] == "zen"
+    assert step["window_size"] == {"w": 800, "h": 600}
     assert step["count"] == 2
+
+
+def test_an_aimed_scroll_keeps_its_target():
+    entry = {
+        "action": "scroll",
+        "window": {
+            "class": "zen",
+            "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600},
+        },
+        "relative": {"x": 0.5, "y": 0.25},
+        "dy": -3,
+    }
+    step = recipes.step_from_log(entry)
+    assert step["relative"] == entry["relative"]
+    assert step["window_class"] == "zen"
+    assert step["window_size"] == {"w": 800, "h": 600}
+
+
+def test_pointer_steps_without_window_geometry_are_not_promoted():
+    entry = {
+        "action": "click",
+        "window": {"class": "zen"},
+        "relative": {"x": 0.5, "y": 0.25},
+    }
+    assert recipes.step_from_log(entry) is None
+
+
+def test_a_pointer_fraction_maps_through_the_visible_crop():
+    window = {
+        "class": "zen",
+        "logical_rect": {"x": -100, "y": 0, "w": 1000, "h": 600},
+    }
+    frame = {
+        "logical_rect": {"x": 0, "y": 0, "w": 900, "h": 600},
+        "image_size": {"w": 900, "h": 600},
+    }
+    step = {
+        "relative": {"x": 0.5, "y": 0.25},
+        "window_size": {"w": 1000, "h": 600},
+    }
+    assert recipes._point_in_frame(step, window, frame) == (400, 150)
+
+
+def test_a_resized_window_refuses_a_pointer_step():
+    window = {
+        "class": "zen",
+        "logical_rect": {"x": 0, "y": 0, "w": 500, "h": 600},
+    }
+    frame = {
+        "logical_rect": window["logical_rect"],
+        "image_size": {"w": 500, "h": 600},
+    }
+    step = {
+        "relative": {"x": 0.5, "y": 0.25},
+        "window_size": {"w": 1000, "h": 600},
+    }
+    with pytest.raises(recipes.RecipeError, match="recorded at"):
+        recipes._point_in_frame(step, window, frame)
 
 
 def test_a_browser_step_keeps_the_action_not_the_chord():

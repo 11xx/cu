@@ -492,6 +492,13 @@ That history is what makes the second request answerable: "do it differently"
 resolves to a superseded revision plus the recorded failure, so the next
 attempt starts from what went wrong rather than from nothing.
 
+Pointer steps retain both a window-relative position and the window size they
+were measured against. The fraction survives the window moving; it does not
+say how a control follows a resize. Replay therefore refuses material size
+drift and asks for the procedure to be recorded and reviewed again. For a
+partially off-screen window, the logical target is mapped into the visible
+capture rather than multiplying the fraction by the cropped image dimensions.
+
 **Recipes are generated code that runs against a real authenticated browser**,
 which makes them a security boundary rather than a cache. They are reviewable
 before first replay, stored with a content hash, and re-reviewed when that hash

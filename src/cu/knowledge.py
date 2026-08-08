@@ -152,6 +152,8 @@ def set_landmark(
                 "landmarks are stored window-relative so they outlive the "
                 "desktop arrangement they were measured on"
             )
+    if rect["x"] + rect["w"] > 1.0 or rect["y"] + rect["h"] > 1.0:
+        raise KnowledgeError("a landmark must fit entirely inside its window")
     for axis, anchor in (("x", anchor_x), ("y", anchor_y)):
         if anchor not in ANCHORS[axis]:
             raise KnowledgeError(

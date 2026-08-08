@@ -36,6 +36,13 @@ def test_an_absolute_coordinate_is_refused():
         knowledge.set_landmark("zen", "urlbar", {"x": 412.0, "y": 300.0, "w": 100.0, "h": 20.0})
 
 
+def test_a_landmark_cannot_extend_into_another_window():
+    with pytest.raises(knowledge.KnowledgeError, match="entirely inside"):
+        knowledge.set_landmark(
+            "zen", "urlbar", {"x": 0.9, "y": 0.02, "w": 0.2, "h": 0.04}
+        )
+
+
 def test_a_landmark_resolves_against_current_geometry_not_remembered_geometry():
     """A moved window must yield a correctly-aimed region rather than a
     confidently wrong one."""

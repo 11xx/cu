@@ -16,8 +16,9 @@ changes. A stored recipe must never be able to change silently.
 
 **Pointer steps are stored window-relative.** An absolute coordinate describes
 one arrangement of one desktop at one moment; a fraction of the window survives
-that window being moved or resized, which is the difference between a recipe
-and a screenshot.
+that window being moved. It does not survive arbitrary resizing, so pointer
+steps also retain the measured window size and refuse when the current window
+has drifted beyond the tolerance they can justify.
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ from typing import Any
 #: Steps a recipe may contain. Anything else in the log — a refused command, a
 #: dry run — is history rather than procedure.
 REPLAYABLE = {"focus", "click", "move", "scroll", "type", "key", "browser", "wait"}
+
+WINDOW_SIZE_TOLERANCE = 0.02
 
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
@@ -91,16 +94,25 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
     window = entry.get("window") or {}
     step: dict[str, Any] = {"action": action}
     if action in {"click", "move"}:
-        if not entry.get("relative"):
+        if not entry.get("relative") or not window.get("logical_rect"):
             return None  # nothing that would survive the window moving
         step["relative"] = entry["relative"]
         step["window_class"] = window.get("class")
+        step["window_size"] = {
+            axis: window["logical_rect"][axis] for axis in ("w", "h")
+        }
         if action == "click":
             step["button"] = entry.get("button", "left")
             step["count"] = entry.get("count", 1)
     elif action == "scroll":
         step["dy"] = entry.get("dy", 0)
         step["dx"] = entry.get("dx", 0)
+        if entry.get("relative") and window.get("logical_rect"):
+            step["relative"] = entry["relative"]
+            step["window_class"] = window.get("class")
+            step["window_size"] = {
+                axis: window["logical_rect"][axis] for axis in ("w", "h")
+            }
     elif action == "type":
         # The text itself is not in the log and must not be: the log records
         # that typing happened and how much, never what was typed. So a typing
@@ -287,8 +299,7 @@ def replay(
             snap = observe.snapshot()
             window = _window_by_class(step["window_class"], snap)
             frame = _capture_window(window, cfg)
-            image = frame["image_size"]
-            at = (step["relative"]["x"] * image["w"], step["relative"]["y"] * image["h"])
+            at = _point_in_frame(step, window, frame)
             if action == "click":
                 performed.append(
                     actions.click(
@@ -301,10 +312,18 @@ def replay(
             else:
                 performed.append(actions.move(cfg, frame["id"], at, dry_run=dry_run))
         elif action == "scroll":
+            frame_id = None
+            at = None
+            if step.get("relative"):
+                snap = observe.snapshot()
+                window = _window_by_class(step["window_class"], snap)
+                frame = _capture_window(window, cfg)
+                frame_id = frame["id"]
+                at = _point_in_frame(step, window, frame)
             performed.append(
                 actions.scroll(
                     cfg, dy=step.get("dy", 0), dx=step.get("dx", 0),
-                    frame_id=None, at=None, dry_run=dry_run,
+                    frame_id=frame_id, at=at, dry_run=dry_run,
                 )
             )
         elif action == "type":
@@ -369,6 +388,44 @@ def replay(
         "verified": verified,
         "dry_run": dry_run,
     }
+
+
+def _point_in_frame(
+    step: dict[str, Any], window: dict[str, Any], frame: dict[str, Any]
+) -> tuple[float, float]:
+    """Map a recorded window fraction into the visible frame, refusing resize drift."""
+    measured = step.get("window_size")
+    if not measured:
+        raise RecipeError("pointer step predates window-size checks; record and review it again")
+    current = window["logical_rect"]
+    for axis in ("w", "h"):
+        if measured[axis] <= 0:
+            raise RecipeError(f"pointer step has an invalid measured {axis}")
+        drift = abs(current[axis] / measured[axis] - 1.0)
+        if drift > WINDOW_SIZE_TOLERANCE:
+            raise RecipeError(
+                f"{window['class']} is {round(current['w'])}x{round(current['h'])}, "
+                f"but the pointer step was recorded at "
+                f"{round(measured['w'])}x{round(measured['h'])}; "
+                "resize it or record and review the recipe again"
+            )
+
+    relative = step["relative"]
+    logical = {
+        "x": current["x"] + relative["x"] * current["w"],
+        "y": current["y"] + relative["y"] * current["h"],
+    }
+    depicted = frame["logical_rect"]
+    if not (
+        depicted["x"] <= logical["x"] < depicted["x"] + depicted["w"]
+        and depicted["y"] <= logical["y"] < depicted["y"] + depicted["h"]
+    ):
+        raise RecipeError("the recorded pointer target is outside the visible part of the window")
+    image = frame["image_size"]
+    return (
+        (logical["x"] - depicted["x"]) * image["w"] / depicted["w"],
+        (logical["y"] - depicted["y"]) * image["h"] / depicted["h"],
+    )
 
 
 def _capture_window(window: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:

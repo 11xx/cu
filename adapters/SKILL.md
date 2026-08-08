@@ -162,6 +162,9 @@ should be a deliberate choice you mention, not a default. Remove it when done.
   title looks like a credential prompt. If it refuses, do not work around it.
 - Recipes will not replay until a human has read and approved them. Show the
   steps and ask; never approve on the user's behalf.
+- A pointer recipe refuses when its window was materially resized. Re-record
+  and review it; a stored fraction does not reveal how the control followed the
+  resize.
 
 ## When a capture surprises you, widen
 

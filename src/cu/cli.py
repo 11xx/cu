@@ -654,7 +654,12 @@ def _parse_landmark_rect(text: str) -> dict[str, float]:
         # A point becomes a small box, because a capture needs an area and a
         # landmark is a place to look rather than a pixel to hit.
         x, y = parts
-        return {"x": max(x - 0.06, 0.0), "y": max(y - 0.03, 0.0), "w": 0.12, "h": 0.06}
+        return {
+            "x": min(max(x - 0.06, 0.0), 0.88),
+            "y": min(max(y - 0.03, 0.0), 0.94),
+            "w": 0.12,
+            "h": 0.06,
+        }
     if len(parts) == 4:
         x, y, w, h = parts
         return {"x": x, "y": y, "w": w, "h": h}

@@ -181,7 +181,7 @@ def click(
         "at": {"x": at[0], "y": at[1]},
         "logical": point,
         "cursor": landed,
-        "relative": aimed["relative"],
+        "relative": _relative_to(under, point["x"], point["y"]),
         "button": button,
         "count": count,
         "window": _describe(under),
@@ -229,6 +229,7 @@ def scroll(
         "dy": dy,
         "dx": dx,
         "frame": frame_id,
+        "relative": _relative_to(under, landed["x"], landed["y"]) if aimed else None,
         "cursor": landed,
         "window": _describe(under),
         "dry_run": dry_run,
@@ -570,8 +571,11 @@ def _live_pointer_target(
 def _describe(window: dict[str, Any] | None) -> dict[str, Any] | None:
     if window is None:
         return None
-    return {
+    described = {
         "address": window["address"],
         "class": window["class"],
         "title": window["title"],
     }
+    if "logical_rect" in window:
+        described["logical_rect"] = window["logical_rect"]
+    return described
