@@ -685,7 +685,8 @@ def cmd_browser(args: argparse.Namespace) -> int:
     focused = snap["focused"]
     if args.browser:
         target = browser.find(args.browser, browsers)
-        window = None
+        focused_browser = browser.for_window_class(focused["class"], browsers) if focused else None
+        window = focused if focused_browser and focused_browser["id"] == target["id"] else None
     else:
         if focused is None:
             print("cu: no window is focused; name a browser with --browser", file=sys.stderr)
@@ -778,6 +779,9 @@ def cmd_wait(args: argparse.Namespace) -> int:
     def render(r: Any) -> None:
         matched = r["matched"]
         how = "waited for" if r["waited"] else "already true:"
+        if "workspace" in matched:
+            print(f"{how} {r['condition']}  workspace {matched['workspace']}")
+            return
         described = matched.get("class", "?")
         title = matched.get("title", "")
         print(f"{how} {r['condition']}  {described}  {title[:56]}")

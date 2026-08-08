@@ -64,6 +64,7 @@ def test_the_subscription_is_opened_before_the_state_is_checked(monkeypatch):
             pass
 
     monkeypatch.setattr(wait, "connect", lambda: order.append("subscribe") or Subscription())
+    monkeypatch.setattr(wait.observe, "snapshot", lambda: {"windows": []})
     monkeypatch.setattr(
         wait,
         "already_true",
@@ -82,8 +83,45 @@ def test_a_closed_subscription_is_released_even_when_nothing_matches(monkeypatch
             closed.append(True)
 
     monkeypatch.setattr(wait, "connect", Subscription)
+    monkeypatch.setattr(wait.observe, "snapshot", lambda: {"windows": []})
     monkeypatch.setattr(wait, "already_true", lambda *a, **k: None)
     monkeypatch.setattr(wait, "stream", lambda conn, deadline: iter(()))
     with pytest.raises(wait.WaitTimeout):
         wait.until("window-open", cls="zen", timeout=0.01)
     assert closed
+
+
+def test_a_workspace_event_is_returned_without_window_resolution(monkeypatch):
+    class Subscription:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(wait, "connect", Subscription)
+    monkeypatch.setattr(wait.observe, "snapshot", lambda: {"windows": []})
+    monkeypatch.setattr(
+        wait,
+        "stream",
+        lambda _conn, _deadline: iter([("workspacev2", ["4", "web"])]),
+    )
+    result = wait.until("workspace", timeout=0.01)
+    assert result["matched"] == {"id": "4", "workspace": "web"}
+
+
+def test_a_filtered_close_ignores_an_unrelated_window(monkeypatch):
+    class Subscription:
+        def close(self):
+            pass
+
+    other = {"address": "0xaaa", "class": "Alacritty", "title": "shell"}
+    wanted = {"address": "0xbbb", "class": "zen", "title": "page"}
+    monkeypatch.setattr(wait, "connect", Subscription)
+    monkeypatch.setattr(wait.observe, "snapshot", lambda: {"windows": [other, wanted]})
+    monkeypatch.setattr(
+        wait,
+        "stream",
+        lambda _conn, _deadline: iter(
+            [("closewindow", ["aaa"]), ("closewindow", ["bbb"])]
+        ),
+    )
+    result = wait.until("window-close", cls="zen", timeout=0.01)
+    assert result["matched"] == wanted

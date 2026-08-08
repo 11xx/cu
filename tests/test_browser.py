@@ -139,3 +139,31 @@ def test_a_window_falls_back_to_the_executable_name():
 
 def test_an_unknown_window_matches_no_browser():
     assert browser.for_window_class("Alacritty", [entry(window_class="zen")]) is None
+
+
+def test_a_named_browser_can_be_the_focused_browser(monkeypatch, capsys):
+    from argparse import Namespace
+
+    from cu import cli
+
+    target = entry(id="zen.desktop", name="Zen", binary="zen", window_class="zen")
+    focused = {"address": "0x1", "class": "zen", "title": "page"}
+    monkeypatch.setattr(browser, "discover", lambda: [target])
+    monkeypatch.setattr(cli.observe, "snapshot", lambda: {"focused": focused})
+    monkeypatch.setattr(browser, "resolve", lambda *_args: ("ctrl+l", "test"))
+    monkeypatch.setattr(
+        cli.actions,
+        "browser_action",
+        lambda *_args, **_kwargs: {
+            "dry_run": True,
+            "semantic": "focus-urlbar",
+            "chord": "ctrl+l",
+            "browser": "Zen",
+            "resolved_from": "test",
+        },
+    )
+    args = Namespace(
+        action="focus-urlbar", browser="zen", backend=None, dry_run=True, json=True
+    )
+    assert cli.cmd_browser(args) == 0
+    assert '"browser": "Zen"' in capsys.readouterr().out

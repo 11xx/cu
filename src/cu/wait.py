@@ -95,16 +95,18 @@ def _window_matches(window: dict[str, Any], cls: str | None, title: str | None) 
 
 
 def already_true(
-    condition: str, cls: str | None, title: str | None
+    condition: str,
+    cls: str | None,
+    title: str | None,
+    snap: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Whether the thing being waited for has already happened.
 
-    Checked before the socket is even opened. A wait for a window that is
-    already open would otherwise block until its timeout, which reads to an
-    agent as "it never opened" — the most confusing possible answer, since the
-    window is right there.
+    Checked immediately after subscribing. A wait for a window that is already
+    open would otherwise block until its timeout, while subscribing first keeps
+    an event in the snapshot gap from being lost.
     """
-    snap = observe.snapshot()
+    snap = snap or observe.snapshot()
     if condition in {"window-open", "title"}:
         match = next(
             (w for w in snap["windows"] if _window_matches(w, cls, title)), None
@@ -140,25 +142,40 @@ def until(
     """Block until the condition holds, and return what satisfied it."""
     if condition not in EVENTS:
         raise ValueError(f"unknown condition {condition!r}; expected one of {sorted(EVENTS)}")
+    if condition == "workspace" and (cls or title):
+        raise ValueError("workspace waits do not take window class or title filters")
 
     deadline = time.monotonic() + timeout
     wanted = EVENTS[condition]
     # Subscribed before asking. The snapshot answers the common case without
     # waiting; subscribing first is what makes losing that race cost nothing.
     with closing(connect()) as conn:
-        existing = already_true(condition, cls, title)
+        snap = observe.snapshot()
+        existing = already_true(condition, cls, title, snap)
         if existing is not None:
             return {"condition": condition, "matched": existing, "waited": False}
+        known = {normalise_address(w["address"]): w for w in snap["windows"]}
 
         for name, args in stream(conn, deadline):
             if name not in wanted:
                 continue
             if condition == "window-close":
-                # There is nothing left to inspect, so the event itself is the
-                # answer and the caller only ever asked whether it happened.
+                address = normalise_address(args[0])
+                closed = known.pop(address, None)
+                if (cls or title) and (closed is None or not _window_matches(closed, cls, title)):
+                    continue
                 return {
                     "condition": condition,
-                    "matched": {"address": args[0]},
+                    "matched": closed or {"address": args[0]},
+                    "waited": True,
+                }
+            if condition == "workspace":
+                return {
+                    "condition": condition,
+                    "matched": {
+                        "workspace": args[-1],
+                        **({"id": args[0]} if len(args) > 1 else {}),
+                    },
                     "waited": True,
                 }
             # The event names a window; its geometry and title come from a
@@ -166,6 +183,7 @@ def until(
             # next move needs both.
             time.sleep(settle)  # a window is mapped a moment after it is announced
             snap = observe.snapshot()
+            known.update({normalise_address(w["address"]): w for w in snap["windows"]})
             match = _resolve(args, snap["windows"])
             if match is None and condition == "focus":
                 # The non-v2 focus event carries a class and title rather than
