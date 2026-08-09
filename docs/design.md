@@ -602,9 +602,10 @@ so an indicator inside it adds no new interference at all.
 Two artifacts, because there are two questions:
 
 - **`$XDG_RUNTIME_DIR/cu/status.json` — what is happening now.** One small
-  object, replaced atomically. A bar polling it gets a whole state or the
-  previous whole state and never parses history to find the end of it. Runtime
-  state, so a reboot cannot leave a stale claim behind.
+  object, replaced atomically. `cu status --follow --json` reads it into a
+  change-only feed, so a bar receives a whole state and never parses history to
+  find the end of it. Runtime state, so a reboot cannot leave a stale claim
+  behind.
 - **The action log — what happened.** Unchanged, append-only, read afterwards.
 
 **It is a registry, not a record.** Nothing stops two harnesses from driving
@@ -648,16 +649,14 @@ changing in between, at the one moment they most need to see that their stop
 landed — and an indicator would have to know where the flag lives.
 
 `cu status` prints one line per driver and nothing at all when nobody is
-driving, which is exactly what a bar module wants to render for idle:
+driving, which is exactly what a one-shot bar module wants to render for idle.
+The shipped eww widget instead listens to the compact, change-only JSON feed;
+its worst-case staleness is the 250 ms status poll interval:
 
-```jsonc
-// waybar
-"custom/cu": {
-  "exec": "cu status --json",
-  "return-type": "json",
-  "interval": 1,
-  "format": "🤖 {}"
-}
+```yuck
+(deflisten cu-status
+  :initial '{"active":false,"aborted":false,"drivers":[]}'
+  "cu status --follow --json")
 ```
 
 `eww/` carries a ready widget — `cu.yuck` and `cu.scss`, structure only, with
@@ -700,7 +699,7 @@ The whole contract, in one place. Everything takes `--json` and `--dry-run`.
 
 | Command | Purpose | Creates a uinput device |
 | --- | --- | --- |
-| `cu status` | What cu is doing, for a status bar to poll | no |
+| `cu status` | What cu is doing, including a change-only status-bar feed | no |
 | `cu session` | Bracket a stretch of work as one activity | no |
 | `cu doctor` | Verify every precondition in [environment.md](environment.md) | no |
 | `cu observe` | Monitors, windows, workspaces, focus, cursor | no |

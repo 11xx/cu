@@ -91,8 +91,8 @@ captured for. Later commands take coordinates as
 `--frame <id> --at x,y` in image pixels, and `cu` maps them back to the screen.
 
 `cu` publishes what it is doing to `$XDG_RUNTIME_DIR/cu/status.json` — one
-small object, replaced atomically, so a status bar can poll it and show the
-user that an agent is driving. It does not draw an overlay: `grim` captures
+small object, replaced atomically, which `cu status --follow --json` turns into
+a change-only feed for a status bar. It does not draw an overlay: `grim` captures
 layer surfaces, so anything `cu` drew would end up in the frames the model
 reads. Entries expire, because nothing writes "finished" for a killed process.
 
@@ -121,7 +121,9 @@ at exit 0.
 `eww/cu.yuck` and `eww/cu.scss` are a ready widget: one mark per driving agent,
 a tooltip carrying that agent's own `--why` and how long it has been running,
 hidden entirely while nothing is happening, and replaced by a stop mark once
-the user's abort flag is set. Clicking a mark sets that flag.
+the user's abort flag is set. It listens to `cu status --follow --json`, whose
+worst-case staleness is its 250 ms derived-state poll interval. Clicking a mark
+sets that flag.
 
 They name no path, colour, or monitor, so they are included by relative path
 and styled by the configuration that includes them:
