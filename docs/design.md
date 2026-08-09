@@ -653,6 +653,15 @@ wrong guess files one agent's action under the other's intent — which is worse
 than an unbracketed entry, because it reads as true. `cu session begin` prints
 an id and later commands claim it through `CU_SESSION` or `--session`.
 
+**Exclusivity is an opt-in session property.** `cu session begin --exclusive`
+reserves injection across the gaps between commands, when another agent could
+otherwise change focus or pixels after a frame was captured. The begin and
+every injection ownership check run under the desktop lock, so two exclusive
+begins cannot both succeed. A command naming the reserved session may inject;
+another gets retryable exit 44 naming its holder. Observation never consults
+the reservation. It ends only with the session: explicitly, at expiry, or when
+its watched `--pid` exits.
+
 **Entries expire, one at a time.** `cu` has no daemon, so nothing writes
 "finished" for a process killed mid-action. Each entry carries the moment it
 stops being true and a reader drops it past that. A stuck "an agent is driving
@@ -722,6 +731,12 @@ describes someone else's work in progress rather than the user's refusal.
 Reading is never serialized. `observe`, `shot`, `pixel`, `magnify`, `wait`,
 `status`, and `doctor` answer while someone else is driving, which is how both
 the other agent and the user find out what is going on.
+
+The command lock protects one injection from another, but ordinarily says
+nothing about the time between commands. An exclusive session deliberately
+extends ownership across that gap without holding an open process or lock:
+under the command lock, each injector checks the live session registry before
+acting. A non-owner receives exit 44 and waits for the reservation to end.
 
 ## Command surface
 

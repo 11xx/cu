@@ -1416,7 +1416,7 @@ def cmd_session(args: argparse.Namespace) -> int:
         if (args.detail is None) == (args.purpose is None):
             args.parser.error("session begin requires exactly one of PURPOSE or --why TEXT")
         purpose = args.detail if args.detail is not None else args.purpose
-        record = status.begin(purpose, pid=args.pid)
+        record = status.begin(purpose, pid=args.pid, exclusive=args.exclusive)
         _emit(record, args.json, lambda r: print(r["id"]))
         return exits.OK
     record = status.end(getattr(args, "session", None))
@@ -1503,6 +1503,11 @@ def build_parser() -> argparse.ArgumentParser:
     begin.add_argument(
         "--pid", type=int,
         help="end the session when this process does; omit if there is none",
+    )
+    begin.add_argument(
+        "--exclusive",
+        action="store_true",
+        help="reserve injection for commands naming this session",
     )
     begin.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     begin.set_defaults(parser=begin)
@@ -1871,9 +1876,20 @@ def main(argv: list[str] | None = None) -> int:
         # them. Holding it here rather than inside each action keeps the whole
         # command — warp, settle, and event — indivisible, which is the unit
         # that has to be, and keeps the read-only loop free of the lock.
-        if getattr(args, "injects", False):
+        injecting = getattr(args, "injects", False)
+        exclusive_begin = (
+            args.command == "session"
+            and args.subcommand == "begin"
+            and args.exclusive
+        )
+        if injecting or exclusive_begin:
             busy_wait = config.load()["safety"]["busy_wait_ms"] / 1000
-            with desktop.held(args.command, why, wait=busy_wait):
+            lock_detail = why
+            if exclusive_begin:
+                lock_detail = args.purpose if args.purpose is not None else args.detail or ""
+            with desktop.held(args.command, lock_detail, wait=busy_wait):
+                if injecting:
+                    status.check_exclusive(session)
                 return args.run(args)
         return args.run(args)
     except Refused as exc:
