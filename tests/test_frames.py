@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 
 import pytest
 
-from cu import capture, exits, frames
+from cu import capture, exits, frames, png
 from cu.cli import _parse_region
 
 MONITORS = [
@@ -397,7 +398,8 @@ def _args(**overrides):
 
     return argparse.Namespace(
         json=True, window=None, output=None, region=None, landmark=None,
-        context=None, profile="claude", if_changed=True, **overrides
+        context=None, profile="claude", if_changed=True, after=None, watch=None,
+        poll_ms=100, quiet_ms=200, timeout=10.0, **overrides
     )
 
 
@@ -441,3 +443,188 @@ def test_changed_pixels_produce_a_new_frame(monkeypatch, tmp_path, capsys):
     second = json.loads(capsys.readouterr().out)
     assert second["changed"] is True
     assert second["id"] != first["id"]
+
+
+def _watch_png(*colours: int) -> bytes:
+    rgba = b"".join(bytes((colour, colour, colour, 255)) for colour in colours)
+    return png.encode(len(colours), 1, rgba)
+
+
+def _watch_world(monkeypatch, sequence):
+    from cu import capture as capture_module
+    from cu import cli, observe
+
+    reference_png = sequence[0]
+    width, height, _ = png.decode(reference_png)
+    rect = {"x": 10, "y": 20, "w": width, "h": height}
+    with frames.capture_scratch() as scratch:
+        scratch.write_bytes(reference_png)
+        reference = frames.new(
+            source={"type": "region", "name": "DP-2"},
+            logical_rect=rect,
+            image_size={"w": width, "h": height},
+            scratch=scratch,
+            native_size={"w": width, "h": height},
+            digest_native=capture.digest(scratch),
+            monitor={"name": "DP-2", "scale": 1.0},
+            profile="claude",
+            capture_scale=1.0,
+            visual_tokens=1,
+            cursor_logical={"x": 0, "y": 0},
+            window=None,
+        )
+    monkeypatch.setattr(
+        observe,
+        "snapshot",
+        lambda: {
+            "monitors": [],
+            "windows": [],
+            "focused": None,
+            "cursor_logical": {"x": 7, "y": 8},
+            "desktop_logical_bounds": rect,
+        },
+    )
+    probes = iter(sequence[1:])
+    last = sequence[-1]
+
+    def fake_grab(_rect, dest, _scale):
+        nonlocal last
+        last = next(probes, last)
+        dest.write_bytes(last)
+
+    monkeypatch.setattr(capture_module, "grab_region", fake_grab)
+    clock = [0.0]
+    monkeypatch.setattr(cli.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cli.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    return cli, reference
+
+
+def _watch_argv(reference, *extra):
+    return [
+        "shot",
+        "--json",
+        "--after",
+        reference["id"],
+        "--watch",
+        "0,0 1x1",
+        "--poll-ms",
+        "1",
+        "--quiet-ms",
+        "2",
+        "--timeout",
+        "0.01",
+        *extra,
+    ]
+
+
+def test_after_returns_on_the_first_different_probe(monkeypatch, capsys):
+    original = _watch_png(1)
+    changed = _watch_png(2)
+    cli, reference = _watch_world(monkeypatch, [original, changed])
+
+    argv = _watch_argv(reference, "--quiet-ms", "0")
+    assert cli.main(argv) == exits.OK
+    result = json.loads(capsys.readouterr().out)
+    assert result["wait"]["probes"] == 1
+    assert Path(result["path"]).read_bytes() == changed
+
+
+def test_after_returns_the_probe_that_settled(monkeypatch, capsys):
+    original = _watch_png(1)
+    changed = _watch_png(2)
+    cli, reference = _watch_world(
+        monkeypatch, [original, original, original, changed, changed, changed]
+    )
+
+    assert cli.main(_watch_argv(reference)) == exits.OK
+    result = json.loads(capsys.readouterr().out)
+    assert result["wait"]["probes"] == 5
+    assert Path(result["path"]).read_bytes() == changed
+
+
+def test_after_times_out_without_creating_a_frame(monkeypatch, capsys):
+    original = _watch_png(1)
+    cli, reference = _watch_world(monkeypatch, [original])
+
+    argv = _watch_argv(reference, "--timeout", "0.003")
+    assert cli.main(argv) == exits.TIMED_OUT
+    captured = capsys.readouterr()
+    assert "0.003s and 3 probes" in captured.err
+    assert list(frames.store_dir().glob("f*.json")) == [
+        frames.path_for(reference["id"], ".json")
+    ]
+
+
+def test_after_ignores_changes_outside_the_watch_box(monkeypatch, capsys):
+    original = _watch_png(1, 1)
+    outside_changed = _watch_png(1, 2)
+    cli, reference = _watch_world(
+        monkeypatch, [original, outside_changed, outside_changed]
+    )
+
+    argv = _watch_argv(reference, "--timeout", "0.003")
+    assert cli.main(argv) == exits.TIMED_OUT
+    assert "3 probes" in capsys.readouterr().err
+
+
+def test_after_refuses_a_probe_with_a_different_image_size(monkeypatch, capsys):
+    original = _watch_png(1)
+    cli, reference = _watch_world(monkeypatch, [original, _watch_png(2, 2)])
+
+    assert cli.main(_watch_argv(reference)) == exits.STALE_FRAME
+    assert "capture conditions changed" in capsys.readouterr().err
+    assert len(list(frames.store_dir().glob("f*.json"))) == 1
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        ["--window", "active"],
+        ["--output", "DP-2"],
+        ["--region", "0,0 1x1"],
+        ["--landmark", "zen/urlbar"],
+    ],
+)
+def test_after_refuses_another_capture_target(monkeypatch, capsys, target):
+    original = _watch_png(1)
+    cli, reference = _watch_world(monkeypatch, [original])
+
+    assert cli.main([*_watch_argv(reference), *target]) == exits.USAGE
+    assert "reference frame already names the region" in capsys.readouterr().err
+
+
+def test_after_requires_an_explicit_watch_box(monkeypatch, capsys):
+    original = _watch_png(1)
+    cli, reference = _watch_world(monkeypatch, [original])
+
+    assert cli.main(["shot", "--after", reference["id"]]) == exits.USAGE
+    assert "ticking clock" in capsys.readouterr().err
+
+
+def test_after_refuses_a_watch_box_outside_the_reference(monkeypatch, capsys):
+    original = _watch_png(1)
+    cli, reference = _watch_world(monkeypatch, [original])
+
+    argv = _watch_argv(reference)
+    argv[argv.index("0,0 1x1")] = "1,0 1x1"
+    assert cli.main(argv) == exits.USAGE
+    assert "outside the reference image" in capsys.readouterr().err
+
+
+def test_after_frame_has_a_fresh_capture_time(monkeypatch, capsys):
+    original = _watch_png(1)
+    changed = _watch_png(2)
+    cli, reference = _watch_world(monkeypatch, [original, changed])
+    reference["captured_at"] = 1234.5
+    frames.save(reference)
+
+    argv = _watch_argv(reference, "--quiet-ms", "0")
+    assert cli.main(argv) == exits.OK
+    result = json.loads(capsys.readouterr().out)
+    assert result["captured_at"] > reference["captured_at"]
+    assert result["logical_rect"] == reference["logical_rect"]
+    assert result["source"] == reference["source"]

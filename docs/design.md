@@ -205,6 +205,17 @@ budgeted rather than literal:
   capture that confirmed it: the pixels were just read back and matched, which
   is the evidence the staleness threshold stands in for, so a frame proven
   current must not then be refused as too old.
+- `cu shot --after f3 --watch '0,0 200x26'` replaces a guessed sleep after
+  content reloads. It captures `f3`'s rectangle at the same scale until the
+  explicit image-pixel box differs, then stays unchanged for the quiet period.
+  The last probe becomes the new frame, so no change can slip between waiting
+  and capture. A mismatched probe size refuses the comparison rather than
+  rescaling it. Timed-out and intermediate probes stay scratch captures and
+  never become frames.
+- Intermediate pixel-wait probes cost local captures rather than model visual
+  tokens; only the returned frame is presented to the model. Comparing a tight
+  watch box is cheaper and prevents an unrelated animation or clock in the
+  same capture from satisfying the wait.
 - `cu pixel --frame f3 --at 412,300` reads exact sRGB and alpha components from
   the stored PNG. `--radius N` explicitly selects the per-channel median in a
   local box when one antialiased pixel would be too brittle.
