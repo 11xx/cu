@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 from typing import Any
@@ -968,8 +969,32 @@ def cmd_status(args: argparse.Namespace) -> int:
     takes up no room. One line per driver, since two agents on one desktop is
     a thing the user needs to see rather than a case to average away.
     """
-    record = status.read()
-    _emit(record, args.json, lambda r: print(status.summarize(r)) if r.get("active") else None)
+    if not args.follow:
+        record = status.read()
+        _emit(record, args.json, lambda r: print(status.summarize(r)) if r.get("active") else None)
+        return exits.OK
+
+    if not args.json:
+        args.parser.error(
+            "cu status --follow requires --json: a feed is machine-readable by definition"
+        )
+
+    def stop_feed(_signum, _frame) -> None:
+        raise KeyboardInterrupt
+
+    previous_handlers = {
+        signum: signal.signal(signum, stop_feed) for signum in (signal.SIGINT, signal.SIGTERM)
+    }
+    try:
+        for record in status.follow():
+            json.dump(record, sys.stdout, separators=(",", ":"))
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+    except KeyboardInterrupt:
+        return exits.OK
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
     return exits.OK
 
 
@@ -1071,7 +1096,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.set_defaults(run=run, injects=False)
         return p
 
-    add("status", "who is driving the desktop, for a status bar to poll", cmd_status)
+    command = add("status", "who is driving the desktop, for a status bar", cmd_status)
+    command.add_argument(
+        "--follow", action="store_true", help="emit changed status objects as a JSON feed"
+    )
+    command.set_defaults(parser=command)
 
     session = add("session", "bracket a stretch of work as one activity", cmd_session)
     ssub2 = session.add_subparsers(dest="subcommand", required=True)

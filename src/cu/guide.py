@@ -142,6 +142,9 @@ YOU MAY NOT BE ALONE HERE
   Reading is never serialized — observe, shot, wait, status, and doctor answer
   while someone else is driving, which is how you find out what is going on.
   `cu status` lists every agent currently driving, not just you.
+  A status bar listens with `cu status --follow --json`: it receives one compact
+  JSON object immediately and then only when that object changes. The feed
+  checks the derived state every 250 ms, so that is its worst-case staleness.
 
 TYPING AND KEYS
   cu type 'some text'            Clipboard by default; restores what was there.

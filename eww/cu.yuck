@@ -8,13 +8,12 @@
 ;; place `(cu-indicator)` in a bar; colours come from the config's own palette
 ;; against the classes below.
 
-;; One tick per second is what makes a status honest. It is a small JSON read
-;; from tmpfs, and the alternative — a slower poll — leaves the user watching
-;; an indicator that no longer describes their desktop.
-(defpoll cu-status
-  :interval "1s"
+;; The status feed emits only when the derived state changes, so no empty tick
+;; can leave this indicator stale. Its worst-case staleness is the feed's 250 ms
+;; bounded poll interval, which also catches expiry and a watched pid exiting.
+(deflisten cu-status
   :initial '{"active":false,"aborted":false,"drivers":[]}'
-  "cu status --json")
+  "cu status --follow --json")
 
 ;; Elapsed time needs a now to subtract from. Coarse on purpose: the display is
 ;; in minutes, so a faster clock would redraw without ever changing.

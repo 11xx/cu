@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from cu import status
+from cu import cli, config, exits, status
 
 
 def details(record=None):
@@ -22,6 +22,68 @@ def details(record=None):
 def test_nothing_published_reads_as_idle():
     assert status.read()["active"] is False
     assert status.summarize(status.read()) == ""
+
+
+def test_follow_emits_the_first_status_immediately():
+    feed = status.follow(interval=0.001)
+
+    assert next(feed) == {"active": False, "aborted": False, "drivers": []}
+
+
+def test_follow_skips_an_unchanged_status_before_the_next_change(monkeypatch):
+    idle = {"active": False, "aborted": False, "drivers": []}
+    active = {"active": True, "aborted": False, "drivers": [{"id": "run"}]}
+    records = iter((idle, idle, active))
+    monkeypatch.setattr(status, "read", lambda: next(records))
+
+    feed = status.follow(interval=0.0)
+    assert next(feed) == idle
+    assert next(feed) == active
+
+
+def test_follow_emits_each_derived_transition_once():
+    feed = status.follow(interval=0.001)
+    records = [next(feed)]
+
+    status.begin("a run")
+    records.append(next(feed))
+
+    path = status.status_path()
+    record = json.loads(path.read_text())
+    record["drivers"][0]["expires_at"] = time.time() - 1
+    path.write_text(json.dumps(record))
+    records.append(next(feed))
+
+    config.set_abort()
+    records.append(next(feed))
+
+    assert [record["active"] for record in records] == [False, True, False, False]
+    assert [record["aborted"] for record in records] == [False, False, False, True]
+    assert len(records[1]["drivers"]) == 1
+    assert records[1]["drivers"][0]["detail"] == "a run"
+
+
+def test_status_follow_writes_compact_json_lines(monkeypatch, capsys):
+    records = (
+        {"active": False, "aborted": False, "drivers": []},
+        {"active": True, "aborted": False, "drivers": [{"id": "run"}]},
+        {"active": False, "aborted": False, "drivers": []},
+        {"active": False, "aborted": True, "drivers": []},
+    )
+    monkeypatch.setattr(status, "follow", lambda: iter(records))
+
+    assert cli.main(["status", "--follow", "--json"]) == exits.OK
+    assert capsys.readouterr().out.splitlines() == [
+        json.dumps(record, separators=(",", ":")) for record in records
+    ]
+
+
+def test_status_follow_requires_json(capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["status", "--follow"])
+
+    assert exit_info.value.code == exits.USAGE
+    assert "requires --json" in capsys.readouterr().err
 
 
 def test_a_published_action_says_what_it_is_for():

@@ -4,8 +4,8 @@ the user.
 A person whose desktop is being driven should be able to tell at a glance, from
 whatever they already look at. That is a different question from what the
 action log answers. The log is history: append-only, complete, and read after
-the fact. This is the present tense, and a status bar polling it twice a second
-should not have to parse a growing file to find the end of it.
+the fact. This is the present tense, and a status-bar feed should not have to
+parse a growing file to find the end of it.
 
 So the current state is **one small JSON object, replaced atomically**. A
 reader gets a whole state or the previous whole state, never half of either,
@@ -64,6 +64,11 @@ ACTION_TTL = 45.0
 #: matters once that agent has stopped doing anything at all.
 SESSION_TTL = 300.0
 
+#: How long a status feed waits before it checks the derived state again.
+#: The bounded read catches registry changes, aborts, expiry, and dead watched
+#: processes without needing a watcher for each of their separate sources.
+FOLLOW_INTERVAL = 0.25
+
 #: The environment variable that binds a command to the session that owns it.
 #: An agent that cannot set it passes --session instead.
 SESSION_ENV = "CU_SESSION"
@@ -73,6 +78,7 @@ SESSION_ENV = "CU_SESSION"
 #: live. The two share one directory by design.
 __all__ = [
     "ACTION_TTL",
+    "FOLLOW_INTERVAL",
     "SESSION_ENV",
     "SESSION_TTL",
     "alive",
@@ -80,6 +86,7 @@ __all__ = [
     "current_session",
     "describe",
     "end",
+    "follow",
     "publish",
     "read",
     "state_dir",
@@ -223,6 +230,31 @@ def read() -> dict[str, Any]:
     """
     drivers = _load(time.time())
     return {"active": bool(drivers), "aborted": _aborted(), "drivers": drivers}
+
+
+def follow(interval: float = FOLLOW_INTERVAL) -> Iterator[dict[str, Any]]:
+    """Yield the current status, then each distinct later status.
+
+    The registry is atomically replaced, but status also derives from an abort
+    flag, wall-clock expiry, and watched process liveness. A monotonic bounded
+    poll sees every source with one cadence and does not drift when a read takes
+    time.
+    """
+    previous = read()
+    yield previous
+    deadline = time.monotonic()
+    while True:
+        # Clamped forward, so a read that overran its slot — or a suspended
+        # machine — resumes the cadence instead of firing back-to-back reads
+        # until it has caught up with a deadline left in the past.
+        deadline = max(deadline + interval, time.monotonic())
+        delay = deadline - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        current = read()
+        if current != previous:
+            previous = current
+            yield current
 
 
 def _find(drivers: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
