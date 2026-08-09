@@ -637,9 +637,10 @@ and grow a row of marks for work that finished seconds ago.
 
 **`--why` is the part worth showing.** `cu click` says an agent is acting;
 `--why "clicking Submit"` says what it is trying to do, which is what decides
-whether to interrupt. `cu session begin` brackets a stretch of work so the
-indicator does not blink out while a model spends longer thinking than one
-action's expiry.
+whether to interrupt. `cu session begin --why "booking a flight"` gives a
+bracket its standing purpose; later actions use their own `--why` intent. The
+bracket keeps the indicator from blinking out while a model spends longer
+thinking than one action's expiry.
 
 **The abort flag rides along.** The user presses their abort and each agent
 stops at its next command. Without it in the payload the bar would show nothing

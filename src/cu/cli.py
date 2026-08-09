@@ -980,10 +980,13 @@ def cmd_session(args: argparse.Namespace) -> int:
 
     `begin` prints the session id and nothing else, so the shell form that
     binds every later command to it is the obvious one:
-    `export CU_SESSION=$(cu session begin 'booking a flight')`.
+    `export CU_SESSION=$(cu session begin --why 'booking a flight')`.
     """
     if args.subcommand == "begin":
-        record = status.begin(args.detail, pid=args.pid)
+        if (args.detail is None) == (args.purpose is None):
+            args.parser.error("session begin requires exactly one of PURPOSE or --why TEXT")
+        purpose = args.detail if args.detail is not None else args.purpose
+        record = status.begin(purpose, pid=args.pid)
         _emit(record, args.json, lambda r: print(r["id"]))
         return exits.OK
     record = status.end(getattr(args, "session", None))
@@ -1020,6 +1023,9 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON"
         )
+        if name in {"status", "session"}:
+            p.set_defaults(run=run, injects=False)
+            return p
         # What the user sees while this runs. A command name says an agent is
         # acting; a sentence says what it is trying to do, which is the part
         # worth interrupting over or leaving alone.
@@ -1046,12 +1052,26 @@ def build_parser() -> argparse.ArgumentParser:
     session = add("session", "bracket a stretch of work as one activity", cmd_session)
     ssub2 = session.add_subparsers(dest="subcommand", required=True)
     begin = ssub2.add_parser("begin", help="say an agent has started working")
-    begin.add_argument("detail", help="a short description the user will see")
+    begin.add_argument(
+        "detail",
+        nargs="?",
+        default=None,
+        metavar="PURPOSE",
+        help="standing purpose, not a command's --why intent",
+    )
+    begin.add_argument(
+        "--why",
+        dest="purpose",
+        metavar="TEXT",
+        default=None,
+        help="standing purpose, not a command's --why intent",
+    )
     begin.add_argument(
         "--pid", type=int,
         help="end the session when this process does; omit if there is none",
     )
     begin.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    begin.set_defaults(parser=begin)
     ended = ssub2.add_parser("end", help="say it has stopped")
     ended.add_argument(
         "--session",

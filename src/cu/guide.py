@@ -104,13 +104,14 @@ HOW HARD TO THINK
   runtime interlock without spending a visual decision at all.
 
 SAY WHAT YOU ARE DOING
-  export CU_SESSION=$(cu session begin 'booking a flight')
+  export CU_SESSION=$(cu session begin --why 'booking a flight')
   cu click --frame f3 --at 412,300 --why 'accepting the fare'
   cu session end
 
   The user's status bar reads this, and it is how they decide whether to
-  interrupt you or leave you alone. --why is one short phrase about intent, not
-  a restatement of the command: "accepting the fare", not "click at 412,300".
+  interrupt you or leave you alone. A session's --why is its standing purpose;
+  each command's --why is one short phrase about that action's intent, not a
+  restatement of the command: "accepting the fare", not "click at 412,300".
   Open a session for anything spanning more than a couple of commands —
   without one the indicator clears while you are thinking, which reads to the
   user as "it finished".
