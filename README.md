@@ -61,7 +61,7 @@ cu know host 'keys pass through a remapping layer'  # a fact about the machine
 cu shot --landmark zen/urlbar    # aim a capture, widened as the window drifts
 cu sandbox create                # a headless output, when you want one
 
-export CU_SESSION=$(cu session begin 'booking a flight')   # tell the user
+export CU_SESSION=$(cu session begin --why 'booking a flight')   # tell the user
 cu click --frame f3 --at 412,300 --why 'accepting the fare'
 cu status                        # a line per driving agent; empty when idle
 cu session end
@@ -104,7 +104,7 @@ inferring it from process ancestry would file one agent's actions under
 another's intent.
 
 ```sh
-export CU_SESSION=$(cu session begin 'booking a flight')
+export CU_SESSION=$(cu session begin --why 'booking a flight')
 cu click --frame f3 --at 412,300 --why 'accepting the fare'
 cu session end
 ```
