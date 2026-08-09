@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from cu import actions, compositor, config, exits, observe, safety, uinput
+from cu import actions, cli, compositor, config, exits, observe, safety, uinput
 from cu.safety import Refused
 
 CFG = config.DEFAULTS
@@ -112,6 +112,65 @@ def test_a_shortened_list_is_honoured_rather_than_merged(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text('[safety]\ndenylist_classes = ["only-this"]\n')
     assert config.load(path)["safety"]["denylist_classes"] == ["only-this"]
+
+
+def test_an_unknown_configured_key_backend_is_refused_before_injection(
+    tmp_path, monkeypatch, capsys
+):
+    root = tmp_path / "config"
+    path = root / "cu" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text('[input]\nkey_backend = "compositr"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(root))
+    opened = []
+    monkeypatch.setattr(uinput, "Device", lambda **_kwargs: opened.append(True))
+
+    assert cli.main(["key", "--chord", "a"]) == exits.PRECONDITION_FAILED
+    error = capsys.readouterr().err
+    assert "compositr" in error
+    assert "compositor" in error
+    assert "uinput" in error
+    assert opened == []
+
+
+@pytest.mark.parametrize("backend", ["compositor", "uinput"])
+def test_configured_key_backend_matches_the_path_that_ran(
+    backend, tmp_path, monkeypatch
+):
+    path = tmp_path / "config.toml"
+    path.write_text(f'[input]\nkey_backend = "{backend}"\n')
+    cfg = config.load(path)
+    focused = window(cls="zen")
+    sent = []
+
+    monkeypatch.setattr(
+        observe,
+        "snapshot",
+        lambda: {"focused": focused, "windows": [focused]},
+    )
+    monkeypatch.setattr(observe, "focused", lambda: focused)
+    monkeypatch.setattr(safety, "preflight_keyboard", lambda *_args: None)
+    monkeypatch.setattr(safety, "record", lambda *_args: None)
+    monkeypatch.setattr(compositor, "send_chord", lambda chord: sent.append(("compositor", chord)))
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def chord(self, chord, _press_ms):
+            sent.append(("uinput", chord))
+
+    monkeypatch.setattr(uinput, "Device", Device)
+    result = actions.key(cfg, action=None, chord="a", dry_run=False)
+
+    assert sent == [(backend, "a")]
+    assert result["backend"] == backend
 
 
 def test_terminal_paste_beats_the_wildcard():
@@ -326,6 +385,46 @@ def test_typing_restores_an_initially_empty_clipboard(monkeypatch):
 def test_non_positive_action_counts_are_usage_errors(call):
     with pytest.raises(ValueError):
         call()
+
+
+@pytest.mark.parametrize("argv", [["scroll"], ["scroll", "--dx", "0", "--dy", "0"]])
+def test_zero_scroll_is_usage_and_never_reaches_the_action(argv, monkeypatch, capsys):
+    called = []
+    monkeypatch.setattr(actions, "scroll", lambda *_args, **_kwargs: called.append(True))
+
+    assert cli.main(argv) == exits.USAGE
+    assert called == []
+    error = capsys.readouterr().err
+    assert "--dx" in error
+    assert "--dy" in error
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["scroll", "--dy", "-2"], {"dy": -2, "dx": 0}),
+        (["scroll", "--dx", "3"], {"dy": 0, "dx": 3}),
+    ],
+)
+def test_nonzero_scroll_reaches_the_action(argv, expected, monkeypatch):
+    called = []
+
+    def scroll(_cfg, **kwargs):
+        called.append({"dy": kwargs["dy"], "dx": kwargs["dx"]})
+        return {
+            "action": "scroll",
+            "dy": kwargs["dy"],
+            "dx": kwargs["dx"],
+            "frame": None,
+            "relative": None,
+            "cursor": {"x": 0, "y": 0},
+            "window": None,
+            "dry_run": kwargs["dry_run"],
+        }
+
+    monkeypatch.setattr(actions, "scroll", scroll)
+    assert cli.main(argv) == exits.OK
+    assert called == [expected]
 
 
 def test_key_rechecks_focus_immediately_before_the_chord(monkeypatch):

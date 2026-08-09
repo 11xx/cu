@@ -104,7 +104,7 @@ EXIT CODES ARE THE CONTRACT
   22  Window, output, or browser gone   Re-observe
   23  Region spans outputs/off-screen   Widen to --window or --output
   24  Awaited event never arrived       Re-observe; it may have happened first
-  25  Typed text did not arrive intact  Read the field; do NOT blindly retype
+  25  Verification did not match state  Read actual state; do NOT blindly retry
   30  Denylist, lock, unreviewed recipe Do not retry; tell the user
   40  The user aborted                  Stop. Do not retry. Do not clear it.
   41  The user is moving the mouse      Yield; wait before retrying
