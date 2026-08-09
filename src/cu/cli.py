@@ -136,10 +136,17 @@ def cmd_observe(args: argparse.Namespace) -> int:
     def render(s: Any) -> None:
         for m in s["monitors"]:
             focus = " *" if m["focused"] else "  "
+            reserved = m["reserved"]
+            edges = ""
+            if any(reserved.values()):
+                edges = (
+                    f" reserved left {reserved['left']} top {reserved['top']} "
+                    f"right {reserved['right']} bottom {reserved['bottom']}"
+                )
             print(
                 f"{focus}{m['name']:<8} scale {m['scale']:<5} "
                 f"physical {m['physical']['w']}x{m['physical']['h']}  "
-                f"logical {fmt_rect(m['logical_rect']):<22} ws {m['active_workspace']}"
+                f"logical {fmt_rect(m['logical_rect']):<22} ws {m['active_workspace']}{edges}"
             )
         print(f"  desktop  logical {fmt_rect(s['desktop_logical_bounds'])}")
         c = s["cursor_logical"]
@@ -150,6 +157,12 @@ def cmd_observe(args: argparse.Namespace) -> int:
             print(
                 f"{focus}{w['class']:<18} {fmt_rect(w['logical_rect']):<22} "
                 f"ws {w['workspace']:<4} {xw:<9} {w['title'][:44]}"
+            )
+        for surface in s["layer_surfaces"]:
+            print(
+                f"  layer {surface['namespace']:<18} "
+                f"{fmt_rect(surface['logical_rect']):<22} "
+                f"monitor {surface['monitor']:<8} level {surface['level']}"
             )
 
     _emit(snap, args.json, render)
@@ -365,6 +378,9 @@ def _render_action(result: dict[str, Any]) -> None:
     mark = "would " if result["dry_run"] else ""
     window = result.get("window")
     where = f"{window['class']}" if window else "no window"
+    layer_surface = result.get("layer_surface")
+    if result["action"] == "click" and window is None and layer_surface is not None:
+        where += f"; layer '{layer_surface['namespace']}' covers this point"
     if result["action"] in {"move", "click"}:
         point = result["logical"]
         detail = f"at image {result['at']['x']:g},{result['at']['y']:g} "

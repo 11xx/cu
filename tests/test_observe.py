@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from cu import checks, exits, observe
+from cu import checks, cli, exits, observe
 
 MONITORS = [
     {
@@ -21,6 +21,7 @@ MONITORS = [
         "scale": 1.0,
         "focused": False,
         "activeWorkspace": {"name": "3"},
+        "reserved": [0, 26, 0, 0],
     },
     {
         "name": "DP-2",
@@ -31,6 +32,7 @@ MONITORS = [
         "scale": 1.25,
         "focused": True,
         "activeWorkspace": {"name": "4"},
+        "reserved": [0, 0, 0, 0],
     },
 ]
 
@@ -50,6 +52,127 @@ def test_scaled_output_reports_both_spaces(monitors):
 def test_unscaled_output_keeps_physical_size(monitors):
     dp1 = next(m for m in monitors if m["name"] == "DP-1")
     assert dp1["logical_rect"]["w"] == dp1["physical"]["w"] == 2560
+
+
+def test_monitor_names_each_reserved_edge(monitors):
+    dp1 = next(m for m in monitors if m["name"] == "DP-1")
+    assert dp1["reserved"] == {"left": 0, "top": 26, "right": 0, "bottom": 0}
+
+
+def test_layer_surfaces_flatten_levels_and_keep_desktop_coordinates(monkeypatch):
+    layers = {
+        "DP-1": {
+            "levels": {
+                "0": [],
+                "1": [],
+                "2": [
+                    {
+                        "address": "0xbar",
+                        "namespace": "bar",
+                        "x": 2048,
+                        "y": 0,
+                        "w": 2560,
+                        "h": 26,
+                    }
+                ],
+                "3": [],
+            }
+        }
+    }
+    monkeypatch.setattr(observe.hypr, "query", lambda what: layers)
+    assert observe.layer_surfaces() == [
+        {
+            "address": "0xbar",
+            "namespace": "bar",
+            "monitor": "DP-1",
+            "level": 2,
+            "logical_rect": {"x": 2048, "y": 0, "w": 2560, "h": 26},
+        }
+    ]
+
+
+def test_snapshot_always_carries_layer_surfaces(monkeypatch):
+    layers = {"DP-1": {"levels": {"0": [], "1": [], "2": [], "3": []}}}
+
+    def query(what):
+        return {
+            "monitors": MONITORS,
+            "layers": layers,
+            "activewindow": {},
+            "clients": [],
+            "cursorpos": {"x": 0, "y": 0},
+        }[what]
+
+    monkeypatch.setattr(observe.hypr, "query", query)
+    assert observe.snapshot()["layer_surfaces"] == []
+
+
+def test_click_rendering_reports_only_geometry_coverage(capsys):
+    bar = {
+        "address": "0xbar",
+        "namespace": "bar",
+        "monitor": "DP-1",
+        "level": 2,
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 26},
+    }
+    result = {
+        "action": "click",
+        "dry_run": True,
+        "window": None,
+        "layer_surface": observe.layer_surface_at(10, 10, [bar]),
+        "at": {"x": 10, "y": 10},
+        "logical": {"x": 10, "y": 10},
+        "button": "left",
+        "count": 1,
+    }
+    cli._render_action(result)
+    assert "[no window; layer 'bar' covers this point]" in capsys.readouterr().out
+
+
+def test_click_rendering_keeps_no_window_when_nothing_covers(capsys):
+    result = {
+        "action": "click",
+        "dry_run": True,
+        "window": None,
+        "layer_surface": observe.layer_surface_at(200, 200, []),
+        "at": {"x": 200, "y": 200},
+        "logical": {"x": 200, "y": 200},
+        "button": "left",
+        "count": 1,
+    }
+    cli._render_action(result)
+    assert "[no window]" in capsys.readouterr().out
+
+
+def test_click_rendering_uses_the_highest_covering_layer(capsys):
+    bottom = {
+        "address": "0xbottom",
+        "namespace": "wallpaper",
+        "monitor": "DP-1",
+        "level": 0,
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+    }
+    top = {
+        "address": "0xtop",
+        "namespace": "notification",
+        "monitor": "DP-1",
+        "level": 3,
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+    }
+    result = {
+        "action": "click",
+        "dry_run": True,
+        "window": None,
+        "layer_surface": observe.layer_surface_at(10, 10, [bottom, top]),
+        "at": {"x": 10, "y": 10},
+        "logical": {"x": 10, "y": 10},
+        "button": "left",
+        "count": 1,
+    }
+    cli._render_action(result)
+    output = capsys.readouterr().out
+    assert "layer 'notification' covers this point" in output
+    assert "wallpaper" not in output
 
 
 def test_desktop_bounds_span_both_outputs(monitors):

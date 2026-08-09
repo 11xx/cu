@@ -21,13 +21,15 @@ There is no state to hold between calls except frame ids, and those live on
 disk. Every command takes --json.
 
 OBSERVE BEFORE YOU LOOK
-  cu observe --json              Monitors, windows, titles, geometry, focus, cursor.
+  cu observe --json              Monitors, windows, layer surfaces, geometry, focus, cursor.
 
   The compositor already knows which window is focused and where it sits, so
   this answers most of what a screenshot gets asked — which window is focused,
   whether the dialog opened, where the terminal is — exactly, and for a few
-  hundred tokens. A screenshot is for reading *content*, not for locating
-  windows.
+  hundred tokens. A bar is a layer surface, not a window, and `observe` reports
+  it too. A click that lands on one reports that its geometry covers the point,
+  not that it received the click: layer input regions may pass events through.
+  A screenshot is for reading *content*, not for locating windows.
 
 CAPTURE ONLY WHAT YOU NEED TO READ
   cu shot --window active        The usual first call.

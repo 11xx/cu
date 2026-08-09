@@ -26,6 +26,7 @@ def monitors() -> list[dict[str, Any]]:
     out = []
     for m in hypr.query("monitors"):
         scale = m["scale"]
+        left, top, right, bottom = m["reserved"]
         out.append(
             {
                 "name": m["name"],
@@ -34,11 +35,37 @@ def monitors() -> list[dict[str, Any]]:
                 "logical_rect": _rect(
                     m["x"], m["y"], round(m["width"] / scale), round(m["height"] / scale)
                 ),
+                "reserved": {
+                    "left": left,
+                    "top": top,
+                    "right": right,
+                    "bottom": bottom,
+                },
                 "focused": m["focused"],
                 "active_workspace": m["activeWorkspace"]["name"],
                 "disabled": m.get("disabled", False),
             }
         )
+    return out
+
+
+def layer_surfaces() -> list[dict[str, Any]]:
+    """Layer-shell surfaces in desktop-absolute logical coordinates."""
+    out = []
+    for monitor, layers in hypr.query("layers").items():
+        for level, surfaces in layers["levels"].items():
+            for surface in surfaces:
+                out.append(
+                    {
+                        "address": surface["address"],
+                        "namespace": surface["namespace"],
+                        "monitor": monitor,
+                        "level": int(level),
+                        "logical_rect": _rect(
+                            surface["x"], surface["y"], surface["w"], surface["h"]
+                        ),
+                    }
+                )
     return out
 
 
@@ -97,6 +124,14 @@ def window_at(x: float, y: float, wins: list[dict[str, Any]]) -> dict[str, Any] 
     return min(covering, key=lambda w: w["focus_order"])
 
 
+def layer_surface_at(
+    x: float, y: float, surfaces: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """The highest layer level whose geometry covers this logical point."""
+    covering = [surface for surface in surfaces if contains(surface["logical_rect"], x, y)]
+    return max(covering, key=lambda surface: surface["level"], default=None)
+
+
 def focused() -> dict[str, Any] | None:
     active = hypr.query("activewindow")
     if not active or "address" not in active:
@@ -136,6 +171,7 @@ def snapshot() -> dict[str, Any]:
         "monitors": mons,
         "desktop_logical_bounds": desktop_bounds(mons),
         "windows": wins,
+        "layer_surfaces": layer_surfaces(),
         "focused": focus,
         "cursor_logical": cursor(),
     }
