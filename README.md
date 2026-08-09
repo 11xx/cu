@@ -41,6 +41,8 @@ cu shot --output <name>          # a whole monitor; `cu observe` names them
 cu shot --region '100,100 400x200'
 cu shot --if-changed             # reuse the last frame if nothing moved
 cu shot --for openai             # capture at another consumer's budget
+cu pixel --frame f3 --at 412,300 # exact r,g,b,a and #RRGGBBAA from stored pixels
+cu magnify --frame f3 --scale 3  # nearest-neighbour derived frame; no recapture
 cu profiles                      # what a capture costs each consumer
 
 cu wait window-open --class zen  # block on a compositor event
@@ -89,6 +91,10 @@ guess. `cu profiles` shows what each resolves to; `--for` overrides per command.
 the image depicts, its pixel size, and what it costs the consumer it was
 captured for. Later commands take coordinates as
 `--frame <id> --at x,y` in image pixels, and `cu` maps them back to the screen.
+`pixel` reads an exact stored pixel, or an explicitly requested median box,
+without producing another image. `magnify` makes a nearest-neighbour derived
+frame for reading small details; it preserves the source capture time and
+logical rectangle while recording its larger image size and token cost.
 
 `cu` publishes what it is doing to `$XDG_RUNTIME_DIR/cu/status.json` — one
 small object, replaced atomically, which `cu status --follow --json` turns into
@@ -112,9 +118,9 @@ cu session end
 The commands that reach the shared pointer, keyboard focus, and clipboard hold
 a host-wide `flock` while they run, so only one agent injects at a time. A
 second one waits briefly and then gets exit 42 naming the holder; reading —
-`observe`, `shot`, `wait`, `status`, `doctor` — is never serialized. Without
-this, two agents warping the same pointer produce a click on the wrong window
-at exit 0.
+`observe`, `shot`, `pixel`, `magnify`, `wait`, `status`, `doctor` — is never
+serialized. Without this, two agents warping the same pointer produce a click
+on the wrong window at exit 0.
 
 ## The eww indicator
 

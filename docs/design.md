@@ -64,6 +64,11 @@ Every capture emits a **frame descriptor** alongside the PNG:
 }
 ```
 
+A derived frame records `derived_from` and gets its own id, path, image size,
+and visual-token estimate. Magnification preserves the source's `captured_at`,
+`logical_rect`, and window metadata: resizing pixels does not make them newer
+or change what part of the desktop they depict.
+
 A frame states only which logical rectangle it depicts and how many pixels it
 depicts it with. The inverse transform is then one interpolation:
 
@@ -200,6 +205,12 @@ budgeted rather than literal:
   capture that confirmed it: the pixels were just read back and matched, which
   is the evidence the staleness threshold stands in for, so a frame proven
   current must not then be refused as too old.
+- `cu pixel --frame f3 --at 412,300` reads exact sRGB and alpha components from
+  the stored PNG. `--radius N` explicitly selects the per-channel median in a
+  local box when one antialiased pixel would be too brittle.
+- `cu magnify --frame f3 --scale 3` nearest-neighbour upscales stored pixels
+  into a derived frame. It spends no capture and gains no detail, but makes a
+  small label legible without asking the model to inspect the original scale.
 
 A profile describes a consumer by **capability rather than by one number**,
 because consumers do not share a unit. An image is billed in whole square
@@ -697,13 +708,14 @@ fact the caller needs told rather than a stall to hide. Past the wait the
 answer is exit 42 naming the holder — retryable, because unlike an abort it
 describes someone else's work in progress rather than the user's refusal.
 
-Reading is never serialized. `observe`, `shot`, `wait`, `status`, and `doctor`
-answer while someone else is driving, which is how both the other agent and the
-user find out what is going on.
+Reading is never serialized. `observe`, `shot`, `pixel`, `magnify`, `wait`,
+`status`, and `doctor` answer while someone else is driving, which is how both
+the other agent and the user find out what is going on.
 
 ## Command surface
 
-The whole contract, in one place. Everything takes `--json` and `--dry-run`.
+The whole contract, in one place. Everything takes `--json`; injecting commands
+also take `--dry-run`.
 
 | Command | Purpose | Creates a uinput device |
 | --- | --- | --- |
@@ -712,6 +724,8 @@ The whole contract, in one place. Everything takes `--json` and `--dry-run`.
 | `cu doctor` | Verify every precondition in [environment.md](environment.md) | no |
 | `cu observe` | Monitors, windows, layer surfaces, focus, cursor | no |
 | `cu shot` | Capture; writes a PNG and a frame descriptor | no |
+| `cu pixel` | Read an exact or median colour from a stored frame | no |
+| `cu magnify` | Nearest-neighbour derived frame from stored pixels | no |
 | `cu wait` | Block on a Hyprland event (`openwindow`, focus change, title match) | no |
 | `cu focus` | Give a window keyboard focus | no |
 | `cu move` | Warp the pointer to a frame coordinate | no |
@@ -724,11 +738,11 @@ The whole contract, in one place. Everything takes `--json` and `--dry-run`.
 | `cu know` | What past runs learned about an application; aims captures only | no |
 | `cu sandbox` | Create and remove headless outputs, explicitly | no |
 
-`observe`, `shot`, `wait`, and `focus` never touch the input path at all, which
-is what makes the read-heavy loop cheap and safe. `focus` earns its place there
-because `type` and `key` act on whatever holds focus, and without it an agent's
-only way to redirect them would be a click — which needs a frame and moves the
-pointer as a side effect.
+`observe`, `shot`, `pixel`, `magnify`, `wait`, and `focus` never touch the input
+path at all, which is what makes the read-heavy loop cheap and safe. `focus`
+earns its place there because `type` and `key` act on whatever holds focus, and
+without it an agent's only way to redirect them would be a click — which needs
+a frame and moves the pointer as a side effect.
 
 ### Measured cost per invocation
 

@@ -122,12 +122,12 @@ def new(
     scratch: Path,
     **extra: Any,
 ) -> dict[str, Any]:
-    """Name a freshly captured image and record what it depicts.
+    """Name a new frame image and record what it depicts.
 
-    The image is captured to a scratch path because its id does not exist
-    until here, and moving it is part of allocating that id rather than
-    something each caller repeats — a descriptor whose `path` disagrees with
-    where the PNG landed would resolve to some other capture entirely.
+    The image is written to a scratch path because its id does not exist until
+    here, and moving it is part of allocating that id rather than something
+    each caller repeats — a descriptor whose `path` disagrees with where the
+    PNG landed would resolve to some other frame entirely.
     """
     frame_id = _next_id()
     final = path_for(frame_id, ".png")

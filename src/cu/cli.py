@@ -13,6 +13,7 @@ import os
 import signal
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from . import (
@@ -27,6 +28,7 @@ from . import (
     guide,
     knowledge,
     observe,
+    png,
     recipes,
     safety,
     sandbox,
@@ -48,6 +50,7 @@ from .sandbox import SandboxError
 from .uinput import UinputError
 
 STATUS_MARK = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL"}
+MAX_MAGNIFIED_LONG_EDGE = 8192
 
 # These commands do not make the desktop look agent-driven. Their parsers also
 # refuse the activity-only options whose values would otherwise be ignored.
@@ -383,6 +386,144 @@ def _parse_at(text: str) -> tuple[float, float]:
     if len(parts) != 2:
         raise ValueError(f"--at takes 'x,y' in image pixels, got {text!r}")
     return (float(parts[0]), float(parts[1]))
+
+
+def _parse_pixel_at(text: str) -> tuple[int, int]:
+    parts = [part for part in text.replace(",", " ").split() if part]
+    if len(parts) != 2:
+        raise ValueError(f"--at takes 'x,y' in image pixels, got {text!r}")
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError as exc:
+        raise ValueError(f"--at takes integer image pixels, got {text!r}") from exc
+
+
+def _frame_pixels(frame: dict[str, Any]) -> tuple[int, int, bytes]:
+    try:
+        data = Path(frame["path"]).read_bytes()
+        width, height, pixels = png.decode(data)
+        recorded = frame["image_size"]
+    except (KeyError, OSError, ValueError) as exc:
+        raise FrameError(f"cannot read frame {frame['id']}: {exc}") from exc
+    if recorded != {"w": width, "h": height}:
+        if isinstance(recorded, dict):
+            recorded_size = f"{recorded.get('w')}x{recorded.get('h')}"
+        else:
+            recorded_size = repr(recorded)
+        raise FrameError(
+            f"frame {frame['id']} records {recorded_size} pixels, but its PNG is "
+            f"{width}x{height}"
+        )
+    return width, height, pixels
+
+
+def cmd_pixel(args: argparse.Namespace) -> int:
+    frame = frames.load(args.frame)
+    width, height, pixels = _frame_pixels(frame)
+    x, y = _parse_pixel_at(args.at)
+    if not (0 <= x < width and 0 <= y < height):
+        raise ValueError(
+            f"({x},{y}) is outside frame {frame['id']} ({width}x{height})"
+        )
+    if args.radius < 0:
+        raise ValueError("--radius must be at least 0")
+    if x - args.radius < 0 or y - args.radius < 0:
+        raise ValueError(f"--radius {args.radius} extends outside frame {frame['id']}")
+    if x + args.radius >= width or y + args.radius >= height:
+        raise ValueError(f"--radius {args.radius} extends outside frame {frame['id']}")
+
+    samples = []
+    for sample_y in range(y - args.radius, y + args.radius + 1):
+        for sample_x in range(x - args.radius, x + args.radius + 1):
+            offset = (sample_y * width + sample_x) * 4
+            samples.append(pixels[offset : offset + 4])
+    middle = len(samples) // 2
+    colour = tuple(
+        sorted(sample[channel] for sample in samples)[middle] for channel in range(4)
+    )
+    hexadecimal = "#" + "".join(f"{component:02X}" for component in colour)
+    payload = {
+        "frame": frame["id"],
+        "at": {"x": x, "y": y},
+        "radius": args.radius,
+        "r": colour[0],
+        "g": colour[1],
+        "b": colour[2],
+        "a": colour[3],
+        "hex": hexadecimal,
+    }
+    _emit(
+        payload,
+        args.json,
+        lambda value: print(
+            f"rgba {value['r']},{value['g']},{value['b']},{value['a']}  {value['hex']}"
+        ),
+    )
+    return exits.OK
+
+
+def _magnified_pixels(width: int, height: int, pixels: bytes, scale: int) -> bytes:
+    enlarged = bytearray()
+    stride = width * 4
+    for row_start in range(0, height * stride, stride):
+        row = pixels[row_start : row_start + stride]
+        enlarged_row = b"".join(
+            row[index : index + 4] * scale for index in range(0, stride, 4)
+        )
+        enlarged.extend(enlarged_row * scale)
+    return bytes(enlarged)
+
+
+def cmd_magnify(args: argparse.Namespace) -> int:
+    if args.scale < 2:
+        raise ValueError("--scale must be an integer at least 2")
+    source = frames.load(args.frame)
+    width, height, pixels = _frame_pixels(source)
+    long_edge = max(width, height) * args.scale
+    if long_edge > MAX_MAGNIFIED_LONG_EDGE:
+        raise ValueError(
+            f"--scale {args.scale} would make a {long_edge}px long edge; "
+            f"the limit is {MAX_MAGNIFIED_LONG_EDGE}px"
+        )
+
+    try:
+        source_kind = source["source"]
+        logical_rect = source["logical_rect"]
+        captured_at = source["captured_at"]
+    except KeyError as exc:
+        raise FrameError(f"frame {source['id']} has no {exc.args[0]}") from exc
+    cfg = config.load()
+    profile_name = source.get("profile") or capture.default_name(cfg)
+    profile = capture.resolve(profile_name, cfg)
+    image_size = {"w": width * args.scale, "h": height * args.scale}
+    enlarged = _magnified_pixels(width, height, pixels, args.scale)
+    with frames.capture_scratch() as scratch:
+        scratch.write_bytes(png.encode(image_size["w"], image_size["h"], enlarged))
+        frame = frames.new(
+            source=source_kind,
+            logical_rect=logical_rect,
+            image_size=image_size,
+            scratch=scratch,
+            captured_at=captured_at,
+            derived_from=source["id"],
+            window=source.get("window"),
+            profile=profile_name,
+            visual_tokens=capture.visual_tokens(
+                image_size["w"], image_size["h"], profile
+            ),
+        )
+
+    def render(value: Any) -> None:
+        size = value["image_size"]
+        print(f"{value['id']}  {value['path']}")
+        print(
+            f"  magnified from {value['derived_from']} by {args.scale}x; "
+            f"image {size['w']}x{size['h']} "
+            f"(~{value['visual_tokens']} visual tokens)"
+        )
+
+    _emit(frame, args.json, render)
+    return exits.OK
 
 
 def _render_action(result: dict[str, Any]) -> None:
@@ -1215,6 +1356,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--if-changed",
         action="store_true",
         help="reuse the previous frame when the pixels are identical",
+    )
+
+    pixel = add("pixel", "read a colour from an existing frame", cmd_pixel)
+    pixel.add_argument("--frame", metavar="ID", required=True, help="frame to read")
+    pixel.add_argument(
+        "--at", metavar="X,Y", required=True, help="integer coordinate in image pixels"
+    )
+    pixel.add_argument(
+        "--radius",
+        type=int,
+        default=0,
+        metavar="N",
+        help="median in a square of radius N around the point (default: 0)",
+    )
+
+    magnify = add("magnify", "upscale an existing frame without recapturing", cmd_magnify)
+    magnify.add_argument("--frame", metavar="ID", required=True, help="frame to derive from")
+    magnify.add_argument(
+        "--scale",
+        type=int,
+        required=True,
+        metavar="N",
+        help=f"integer factor at least 2; maximum output long edge {MAX_MAGNIFIED_LONG_EDGE}px",
     )
 
     sbox = add("sandbox", "create and remove headless outputs, explicitly", cmd_sandbox)
