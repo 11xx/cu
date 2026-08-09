@@ -207,6 +207,25 @@ def test_an_unknown_verification_kind_is_an_error():
         recipes.check({"kind": "vibes"})
 
 
+@pytest.mark.parametrize(
+    ("verified", "expected"),
+    [(False, exits.VERIFY_FAILED), (True, exits.OK), (None, exits.OK)],
+)
+def test_replay_exit_reflects_stated_verification(verified, expected, monkeypatch):
+    recipes.save(build())
+    recipes.approve("demo")
+    result = {
+        "recipe": "demo",
+        "revision": 1,
+        "steps": 1,
+        "verified": verified,
+        "dry_run": False,
+    }
+    monkeypatch.setattr(recipes, "replay", lambda *_args, **_kwargs: result)
+
+    assert cli.main(["recipe", "replay", "demo"]) == expected
+
+
 def test_a_missing_recipe_is_named_in_the_error():
     with pytest.raises(recipes.RecipeError, match="absent"):
         recipes.load("absent")

@@ -228,7 +228,13 @@ def load(path: Path | None = None) -> dict[str, Any]:
         user = tomllib.loads(path.read_text())
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
-    return _merge(copy.deepcopy(DEFAULTS), user)
+    cfg = _merge(copy.deepcopy(DEFAULTS), user)
+    backend = cfg["input"]["key_backend"]
+    valid_backends = ("compositor", "uinput")
+    if backend not in valid_backends:
+        valid = ", ".join(repr(name) for name in valid_backends)
+        raise ConfigError(f"unknown input.key_backend {backend!r}; expected one of {valid}")
+    return cfg
 
 
 def abort_path() -> Path:

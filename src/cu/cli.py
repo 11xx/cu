@@ -879,7 +879,7 @@ def cmd_recipe(args: argparse.Namespace) -> int:
                 f"verification {_verdict(r['verified'])}"
             ),
         )
-        return exits.OK
+        return exits.VERIFY_FAILED if result["verified"] is False else exits.OK
 
     return exits.USAGE
 
@@ -1296,6 +1296,9 @@ def cmd_click(args: argparse.Namespace) -> int:
 
 
 def cmd_scroll(args: argparse.Namespace) -> int:
+    if args.dx == 0 and args.dy == 0:
+        print("cu: --dx and --dy cannot both be zero", file=sys.stderr)
+        return exits.USAGE
     cfg = config.load()
     if (args.frame is None) != (args.at is None):
         print("cu: --frame and --at are given together or not at all", file=sys.stderr)

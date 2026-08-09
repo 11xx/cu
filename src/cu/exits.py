@@ -48,8 +48,8 @@ RESPONSE = {
         "happened before the wait started, or not at all."
     ),
     VERIFY_FAILED: (
-        "The text sent did not arrive intact. Read the field before retyping; "
-        "retyping blindly can duplicate what did land."
+        "Verification did not match the actual state. Read the actual state before retrying; "
+        "retrying blindly can repeat what did land."
     ),
     DENIED_BY_POLICY: "Refused by the denylist or a locked session. Do not retry; tell the user.",
     ABORTED_BY_USER: (
