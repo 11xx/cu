@@ -209,12 +209,227 @@ def _parse_region(text: str) -> dict[str, float]:
     return {"x": x, "y": y, "w": w, "h": h}
 
 
+def _parse_watch(text: str, image_size: dict[str, int]) -> dict[str, int]:
+    if text == "full":
+        return {"x": 0, "y": 0, **image_size}
+    parsed = _parse_region(text)
+    if any(not value.is_integer() for value in parsed.values()):
+        raise ValueError("--watch coordinates and dimensions must be whole image pixels")
+    box = {name: int(value) for name, value in parsed.items()}
+    if (
+        box["x"] < 0
+        or box["y"] < 0
+        or box["x"] + box["w"] > image_size["w"]
+        or box["y"] + box["h"] > image_size["h"]
+    ):
+        raise ValueError(
+            f"--watch is outside the reference image "
+            f"({image_size['w']}x{image_size['h']})"
+        )
+    return box
+
+
+def _watched_pixels(rgba: bytes, image_width: int, box: dict[str, int]) -> bytes:
+    row_bytes = image_width * 4
+    left = box["x"] * 4
+    right = (box["x"] + box["w"]) * 4
+    return b"".join(
+        rgba[row * row_bytes + left : row * row_bytes + right]
+        for row in range(box["y"], box["y"] + box["h"])
+    )
+
+
+def _frame_capture_scale(frame: dict[str, Any]) -> float:
+    if "capture_scale" in frame:
+        return float(frame["capture_scale"])
+    try:
+        rect = frame["logical_rect"]
+        image = frame["image_size"]
+        scales = (image["w"] / rect["w"], image["h"] / rect["h"])
+    except (KeyError, TypeError, ZeroDivisionError) as exc:
+        raise FrameError(f"frame {frame['id']} has no comparable capture scale") from exc
+    # Older descriptors did not record grim's scale. One output pixel of
+    # rounding on each axis is the most that can separate these two ratios.
+    tolerance = (1 / rect["w"]) + (1 / rect["h"])
+    if abs(scales[0] - scales[1]) > tolerance:
+        raise FrameError(f"frame {frame['id']} has no comparable capture scale")
+    return sum(scales) / len(scales)
+
+
+def _grab_shot(
+    source: dict[str, Any], rect: dict[str, float], scratch: Path, scale: float
+) -> None:
+    if source["type"] == "output":
+        capture.grab_output(source["name"], scratch, scale)
+    else:
+        capture.grab_region(rect, scratch, scale)
+
+
+def _validate_after_args(args: argparse.Namespace) -> None:
+    if args.watch and not args.after:
+        raise ValueError("--watch requires --after")
+    if not args.after:
+        return
+    conflicting = [
+        flag
+        for flag, value in (
+            ("--window", args.window),
+            ("--output", args.output),
+            ("--region", args.region),
+            ("--landmark", args.landmark),
+        )
+        if value
+    ]
+    if conflicting:
+        raise ValueError(
+            f"--after cannot combine with {', '.join(conflicting)}; "
+            "the reference frame already names the region"
+        )
+    if not args.watch:
+        raise ValueError(
+            "--after requires --watch; unrelated pixels such as a ticking clock "
+            "must not satisfy the wait"
+        )
+    if args.profile:
+        raise ValueError("--after cannot combine with --for; it reuses the reference scale")
+    if args.if_changed:
+        raise ValueError("--after cannot combine with --if-changed")
+    if args.poll_ms <= 0:
+        raise ValueError("--poll-ms must be positive")
+    if args.quiet_ms < 0:
+        raise ValueError("--quiet-ms cannot be negative")
+    if args.timeout <= 0:
+        raise ValueError("--timeout must be positive")
+
+
+def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, Any]) -> int:
+    reference = frames.load(args.after)
+    expected_size = reference["image_size"]
+    watch = _parse_watch(args.watch, expected_size)
+    try:
+        width, height, reference_rgba = png.decode(Path(reference["path"]).read_bytes())
+    except (OSError, ValueError, KeyError) as exc:
+        raise FrameError(f"cannot read frame {reference['id']}: {exc}") from exc
+    decoded_size = {"w": width, "h": height}
+    if decoded_size != expected_size:
+        raise FrameError(
+            f"frame {reference['id']} descriptor says {expected_size['w']}x"
+            f"{expected_size['h']}, but its PNG is {width}x{height}"
+        )
+
+    source = reference["source"]
+    rect = reference["logical_rect"]
+    scale = _frame_capture_scale(reference)
+    baseline = _watched_pixels(reference_rgba, width, watch)
+    previous = baseline
+    changed = False
+    quiet_since = 0.0
+    probes = 0
+    started = time.monotonic()
+    deadline = started + args.timeout
+    poll_seconds = args.poll_ms / 1000
+    quiet_seconds = args.quiet_ms / 1000
+
+    while True:
+        if probes and time.monotonic() >= deadline:
+            elapsed = time.monotonic() - started
+            print(
+                f"cu: timed out after {elapsed:.3f}s and {probes} probes; "
+                "watched pixels did not change and settle",
+                file=sys.stderr,
+            )
+            return exits.TIMED_OUT
+
+        with frames.capture_scratch() as scratch:
+            _grab_shot(source, rect, scratch, scale)
+            probes += 1
+            try:
+                probe_width, probe_height, probe_rgba = png.decode(scratch.read_bytes())
+            except (OSError, ValueError) as exc:
+                raise FrameError(f"cannot compare probe {probes}: {exc}") from exc
+            probe_size = {"w": probe_width, "h": probe_height}
+            if probe_size != expected_size:
+                raise FrameError(
+                    f"probe {probes} is {probe_width}x{probe_height}, but reference "
+                    f"{reference['id']} is {expected_size['w']}x{expected_size['h']}; "
+                    "capture conditions changed"
+                )
+
+            now = time.monotonic()
+            current = _watched_pixels(probe_rgba, probe_width, watch)
+            if not changed:
+                if current != baseline:
+                    changed = True
+                    quiet_since = now
+            elif current != previous:
+                quiet_since = now
+            previous = current
+
+            if changed and now - quiet_since >= quiet_seconds:
+                elapsed = now - started
+                profile_name = reference.get("profile") or capture.default_name(cfg)
+                profile = capture.resolve(profile_name, cfg)
+                digest = capture.digest(scratch)
+                frame = frames.new(
+                    source=source,
+                    logical_rect=rect,
+                    image_size=probe_size,
+                    scratch=scratch,
+                    native_size=reference.get("native_size"),
+                    digest_native=digest,
+                    monitor=reference.get("monitor"),
+                    profile=profile_name,
+                    capture_scale=scale,
+                    visual_tokens=capture.visual_tokens(
+                        probe_width, probe_height, profile
+                    ),
+                    cursor_logical=snap["cursor_logical"],
+                    window=reference.get("window"),
+                    wait={
+                        "after": reference["id"],
+                        "watch": watch,
+                        "elapsed_seconds": elapsed,
+                        "probes": probes,
+                        "poll_ms": args.poll_ms,
+                        "quiet_ms": args.quiet_ms,
+                        "timeout_seconds": args.timeout,
+                    },
+                )
+                frame["changed"] = True
+
+                def render(f: Any) -> None:
+                    waited = f["wait"]
+                    depicted = f["source"]
+                    print(f"{f['id']}  {f['path']}")
+                    print(
+                        f"  waited {waited['elapsed_seconds']:.3f}s across "
+                        f"{waited['probes']} probes; "
+                        "watched pixels changed and settled"
+                    )
+                    print(
+                        f"  depicts {depicted['type']} {depicted['name']} "
+                        f"logical {fmt_rect(f['logical_rect'])}"
+                    )
+
+                _emit(frame, args.json, render)
+                return exits.OK
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            continue
+        time.sleep(min(poll_seconds, remaining))
+
+
 def cmd_shot(args: argparse.Namespace) -> int:
+    _validate_after_args(args)
     if args.window and (args.output or args.region):
         raise ValueError("--window cannot combine with --output or --region")
 
     cfg = config.load()
     snap = observe.snapshot()
+    if args.after:
+        frames.collect()
+        return _shot_after(args, snap, cfg)
     monitors = snap["monitors"]
     source: dict[str, Any]
     window = None
@@ -300,10 +515,7 @@ def cmd_shot(args: argparse.Namespace) -> int:
     }
 
     with frames.capture_scratch() as scratch:
-        if source["type"] == "output":
-            capture.grab_output(source["name"], scratch, scale)
-        else:
-            capture.grab_region(rect, scratch, scale)
+        _grab_shot(source, rect, scratch, scale)
 
         digest = capture.digest(scratch)
 
@@ -329,6 +541,7 @@ def cmd_shot(args: argparse.Namespace) -> int:
             digest_native=digest,
             monitor={"name": monitor["name"], "scale": monitor["scale"]},
             profile=name,
+            capture_scale=scale,
             visual_tokens=capture.visual_tokens(
                 image_size["w"], image_size["h"], profile
             ),
@@ -1356,6 +1569,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--if-changed",
         action="store_true",
         help="reuse the previous frame when the pixels are identical",
+    )
+    shot.add_argument(
+        "--after",
+        metavar="FRAME_ID",
+        help="recapture a frame's region after watched pixels change and settle",
+    )
+    shot.add_argument(
+        "--watch",
+        metavar="'x,y wxh'|full",
+        help="required with --after; box in the reference frame's image pixels",
+    )
+    shot.add_argument(
+        "--poll-ms",
+        type=float,
+        default=100,
+        help="milliseconds between --after probes (default: 100)",
+    )
+    shot.add_argument(
+        "--quiet-ms",
+        type=float,
+        default=200,
+        help="unchanged milliseconds before --after settles (default: 200)",
+    )
+    shot.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="seconds before --after gives up (default: 10)",
     )
 
     pixel = add("pixel", "read a colour from an existing frame", cmd_pixel)

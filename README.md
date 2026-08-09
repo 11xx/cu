@@ -40,6 +40,7 @@ cu shot                          # capture the focused window
 cu shot --output <name>          # a whole monitor; `cu observe` names them
 cu shot --region '100,100 400x200'
 cu shot --if-changed             # reuse the last frame if nothing moved
+cu shot --after f3 --watch '0,0 200x26' # recapture once pixels change and settle
 cu shot --for openai             # capture at another consumer's budget
 cu pixel --frame f3 --at 412,300 # exact r,g,b,a and #RRGGBBAA from stored pixels
 cu magnify --frame f3 --scale 3  # nearest-neighbour derived frame; no recapture

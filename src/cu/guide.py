@@ -37,12 +37,21 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   cu shot --region '100,100 400x200'
   cu shot --output DP-1 --region '0,0 900x26'
   cu shot --if-changed           Reuse the last frame when the pixels match.
+  cu shot --after f3 --watch '0,0 200x26'
+                                 Recapture after those pixels change and settle.
 
   A region is desktop-absolute by itself. With --output, its x,y are relative
   to that output; the returned logical_rect is always desktop-absolute.
 
   Every capture prints a frame id and a path. Read the PNG at that path, along
   with what the image will cost whoever reads it.
+
+  After reloading a bar or other rendered content, use --after instead of a
+  guessed sleep. The watch box is in the reference frame's image pixels and is
+  required so an unrelated animation or ticking clock cannot satisfy the wait.
+  The returned frame is the settled probe itself, with the elapsed time and
+  probe count in its descriptor. A wait costs captures; a tighter watch box is
+  cheaper to compare.
 
   Before paying for another capture, ask the frame already on disk:
 
@@ -76,8 +85,11 @@ ACT THROUGH THE FRAME YOU READ
   Every injecting command takes --dry-run, which runs each interlock and writes
   the same log entry without emitting an event.
 
-WAIT ON EVENTS, DO NOT POLL
+WAIT ON COMPOSITOR EVENTS, WATCH PIXELS FOR REPAINTS
   cu wait window-open --class zen --timeout 20
+
+  `cu wait` handles focus, title, window, and workspace events. Those events do
+  not prove rendered pixels have changed; use `cu shot --after` for a repaint.
 
 EXIT CODES ARE THE CONTRACT
   Read them. They say what to do next, and the right response differs per code.
