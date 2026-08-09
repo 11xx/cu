@@ -1,0 +1,11 @@
+<!-- Copy the section below into the AGENTS.md, CLAUDE.md, or equivalent of any
+     project whose agents might need the desktop. Keep it this short. cu teaches
+     itself, and a second copy of that teaching in a context file drifts out of
+     date without anything failing. -->
+
+## This desktop is drivable
+
+`cu` sees and drives the running desktop — screen, pointer, keyboard, windows,
+browsers — for the tasks the filesystem cannot settle.
+
+Run `cu` with no arguments to learn it.

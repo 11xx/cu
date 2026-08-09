@@ -138,6 +138,15 @@ and styled by the configuration that includes them:
 .cu__aborted { color: $red; }
 ```
 
+## Telling an agent it is there
+
+An agent reaches for the desktop only if it knows the desktop is reachable, so
+one short section belongs in the context file of any project where that might
+come up. [AGENTS.md.example](AGENTS.md.example) is that section, and it is
+deliberately five lines: the fact that `cu` exists, what it is for, and that
+bare `cu` teaches the rest. Anything more is a copy of the guide that goes stale
+without anything failing.
+
 ## Status
 
 `doctor`, `observe`, `shot`, `focus`, and the input commands — `move`, `click`,
