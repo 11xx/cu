@@ -35,7 +35,11 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   cu shot --window active        The usual first call.
   cu shot --output DP-2          A whole monitor.
   cu shot --region '100,100 400x200'
+  cu shot --output DP-1 --region '0,0 900x26'
   cu shot --if-changed           Reuse the last frame when the pixels match.
+
+  A region is desktop-absolute by itself. With --output, its x,y are relative
+  to that output; the returned logical_rect is always desktop-absolute.
 
   Every capture prints a frame id and a path. Read the PNG at that path, along
   with what the image will cost whoever reads it.

@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from cu import capture, frames
+from cu import capture, exits, frames
 from cu.cli import _parse_region
 
 MONITORS = [
@@ -175,6 +175,113 @@ def test_region_syntaxes(text):
 def test_bad_regions_are_usage_errors(text):
     with pytest.raises(ValueError):
         _parse_region(text)
+
+
+def _region_shot_world(monkeypatch):
+    """A two-output desktop whose captured rectangles are observable."""
+    from cu import capture as capture_module
+    from cu import cli, observe
+
+    monitors = [{**monitor, "scale": 1.0} for monitor in MONITORS]
+    monkeypatch.setattr(
+        observe,
+        "snapshot",
+        lambda: {
+            "monitors": monitors,
+            "windows": [],
+            "focused": None,
+            "cursor_logical": {"x": 0, "y": 0},
+            "desktop_logical_bounds": {"x": 0, "y": 0, "w": 4608, "h": 1440},
+        },
+    )
+    grabbed = []
+
+    def fake_grab(rect, dest, scale):
+        grabbed.append(rect)
+        dest.write_bytes(_png(1))
+
+    monkeypatch.setattr(capture_module, "grab_region", fake_grab)
+    monkeypatch.setattr(capture_module, "size_of", lambda path: {"w": 800, "h": 600})
+    return cli, grabbed
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected", "source"),
+    [
+        (
+            ["--output", "DP-1", "--region", "0,0 900x26"],
+            {"x": 2048, "y": 0, "w": 900, "h": 26},
+            {"type": "region", "name": "DP-1"},
+        ),
+        (
+            ["--output", "DP-2", "--region", "0,0 900x26"],
+            {"x": 0, "y": 0, "w": 900, "h": 26},
+            {"type": "region", "name": "DP-2"},
+        ),
+        (
+            ["--region", "2048,0 900x26"],
+            {"x": 2048, "y": 0, "w": 900, "h": 26},
+            {"type": "region", "name": "DP-1"},
+        ),
+    ],
+)
+def test_shot_regions_keep_absolute_frame_rects(monkeypatch, capsys, argv, expected, source):
+    cli, grabbed = _region_shot_world(monkeypatch)
+
+    assert cli.main(["shot", "--json", *argv]) == exits.OK
+    frame = json.loads(capsys.readouterr().out)
+    assert frame["logical_rect"] == expected
+    assert frame["source"] == source
+    assert grabbed == [expected]
+
+
+def test_an_output_relative_region_clamps_to_its_named_output(monkeypatch, capsys):
+    cli, grabbed = _region_shot_world(monkeypatch)
+
+    result = cli.main(
+        ["shot", "--json", "--output", "DP-1", "--region", "2500,0 200x26"]
+    )
+    assert result == exits.OK
+    frame = json.loads(capsys.readouterr().out)
+    assert frame["logical_rect"] == {"x": 4548, "y": 0, "w": 60, "h": 26}
+    assert grabbed == [frame["logical_rect"]]
+
+
+def test_an_output_relative_region_entirely_off_its_output_refuses(monkeypatch, capsys):
+    cli, grabbed = _region_shot_world(monkeypatch)
+
+    result = cli.main(["shot", "--output", "DP-1", "--region", "3000,0 900x26"])
+    assert result == exits.DEGENERATE_AIM
+    assert "empty after clamping" in capsys.readouterr().err
+    assert grabbed == []
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--landmark", "zen/urlbar", "--output", "DP-1"],
+        ["--landmark", "zen/urlbar", "--region", "0,0 900x26"],
+    ],
+)
+def test_landmark_still_refuses_output_or_region(monkeypatch, capsys, argv):
+    cli, _ = _region_shot_world(monkeypatch)
+
+    assert cli.main(["shot", *argv]) == exits.USAGE
+    assert "cannot combine" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--window", "active", "--output", "DP-1"],
+        ["--window", "active", "--region", "0,0 900x26"],
+    ],
+)
+def test_window_still_refuses_output_or_region(monkeypatch, capsys, argv):
+    cli, _ = _region_shot_world(monkeypatch)
+
+    assert cli.main(["shot", *argv]) == exits.USAGE
+    assert "--window cannot combine" in capsys.readouterr().err
 
 
 DP2_SCALE, DP1_SCALE = 1.25, 1.0

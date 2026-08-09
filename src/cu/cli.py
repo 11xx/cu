@@ -207,6 +207,9 @@ def _parse_region(text: str) -> dict[str, float]:
 
 
 def cmd_shot(args: argparse.Namespace) -> int:
+    if args.window and (args.output or args.region):
+        raise ValueError("--window cannot combine with --output or --region")
+
     cfg = config.load()
     snap = observe.snapshot()
     monitors = snap["monitors"]
@@ -223,8 +226,16 @@ def cmd_shot(args: argparse.Namespace) -> int:
         if monitor is None:
             print(f"cu: no such output: {args.output}", file=sys.stderr)
             return exits.TARGET_NOT_FOUND
-        rect = monitor["logical_rect"]
-        source = {"type": "output", "name": monitor["name"]}
+        if args.region:
+            rect = _parse_region(args.region)
+            bounds = monitor["logical_rect"]
+            rect["x"] += bounds["x"]
+            rect["y"] += bounds["y"]
+            rect = capture.clamp(rect, bounds)
+            source = {"type": "region", "name": monitor["name"]}
+        else:
+            rect = monitor["logical_rect"]
+            source = {"type": "output", "name": monitor["name"]}
     elif args.region and not args.landmark:
         rect = _parse_region(args.region)
         monitor = capture.sole_monitor(rect, monitors)
@@ -1167,15 +1178,21 @@ def build_parser() -> argparse.ArgumentParser:
     add("observe", "monitors, windows, focus, cursor", cmd_observe)
 
     shot = add("shot", "capture a frame", cmd_shot)
-    target = shot.add_mutually_exclusive_group()
-    target.add_argument(
+    shot.add_argument(
         "--window",
         metavar="SELECTOR",
         help="'active' (default), a window address, or a class substring",
     )
-    target.add_argument("--output", metavar="NAME", help="a whole monitor")
-    target.add_argument("--region", metavar="'x,y wxh'", help="an arbitrary strip")
-    # --landmark is deliberately outside the mutually exclusive group: it names
+    shot.add_argument("--output", metavar="NAME", help="a whole monitor")
+    shot.add_argument(
+        "--region",
+        metavar="'x,y wxh'",
+        help=(
+            "an arbitrary strip; with --output, x,y are output-relative and "
+            "logical_rect is absolute"
+        ),
+    )
+    # --landmark is deliberately outside target selection: it names
     # *what region* while --window names *which window*, so they compose. With
     # several windows of one class open, that pairing is the only way to say
     # which one the landmark applies to.
