@@ -53,7 +53,7 @@ def send_chords(
 
 
 def aim(frame: dict[str, Any], x: float, y: float, snap: dict[str, Any]) -> dict[str, Any]:
-    """Resolve an image coordinate to a logical point and the window under it.
+    """Resolve an image coordinate to a logical point and the geometry covering it.
 
     The window matters even when the caller named none: the denylist has to
     apply to the thing actually being clicked, which on a full-output frame is
@@ -79,6 +79,11 @@ def aim(frame: dict[str, Any], x: float, y: float, snap: dict[str, Any]) -> dict
             else under
         ),
         "window_under_point": under,
+        "layer_surface": (
+            observe.layer_surface_at(lx, ly, snap.get("layer_surfaces", []))
+            if under is None
+            else None
+        ),
     }
 
 
@@ -171,6 +176,7 @@ def click(
     target = resolve_target(frame_id, at, cfg)
     aimed = target["aimed"]
     under = aimed["window_under_point"]
+    layer_surface = aimed["layer_surface"]
     safety.preflight_pointer(cfg, under, target["frame"])
     point = aimed["logical"]
     landed = warp(cfg, point["x"], point["y"], dry_run=dry_run)
@@ -185,6 +191,11 @@ def click(
             )
             device.click(button, cfg["input"]["press_ms"], count)
         under = arrived
+        layer_surface = (
+            observe.layer_surface_at(landed["x"], landed["y"], observe.layer_surfaces())
+            if under is None
+            else None
+        )
 
     result = {
         "action": "click",
@@ -196,6 +207,7 @@ def click(
         "button": button,
         "count": count,
         "window": _describe(under),
+        "layer_surface": layer_surface,
         "dry_run": dry_run,
     }
     safety.record(cfg, result)

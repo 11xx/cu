@@ -149,11 +149,15 @@ workspace, floating state, XWayland status. That is semantic ground truth of
 the kind that X11 and macOS computer use only get from accessibility APIs, and
 most implementations do without.
 
-`cu observe --json` returns monitors (with scale and logical rects), windows,
-workspaces, the focused window, and the cursor position. It is exact, costs a
-few hundred tokens, and answers most of what a screenshot is usually asked to
-answer — which window is focused, whether the dialog opened, where the terminal
-is.
+`cu observe --json` returns monitors (with scale, logical rects, and reserved
+edges), windows, layer surfaces, workspaces, the focused window, and the cursor
+position. A bar is a layer surface rather than a window, so its geometry is
+reported separately. When a click lands on no window but within a layer
+surface's rect, `cu` reports coverage rather than calling it the target or
+claiming it received the click: a layer's input region can be smaller than its
+rect or pass events through. It is exact, costs a few hundred tokens, and
+answers most of what a screenshot is usually asked to answer — which window is
+focused, whether the dialog opened, where the terminal is.
 
 The design consequence is that **a screenshot is for reading content, not for
 locating windows.** An agent should call `observe` freely and `shot` when it
@@ -597,7 +601,9 @@ drew would land in the frames the model then reads and acts on. Hyprland 0.56
 offers no exclusion — a `noscreenshare` layer rule is accepted and does
 nothing — which leaves hiding the overlay around every capture, or editing it
 back out of the PNG. The status bar is already a layer surface in every frame,
-so an indicator inside it adds no new interference at all.
+so an indicator inside it adds no new interference at all. `observe` reports
+that geometry without claiming the layer receives a click, because geometry
+cannot establish its input region.
 
 Two artifacts, because there are two questions:
 
@@ -702,7 +708,7 @@ The whole contract, in one place. Everything takes `--json` and `--dry-run`.
 | `cu status` | What cu is doing, including a change-only status-bar feed | no |
 | `cu session` | Bracket a stretch of work as one activity | no |
 | `cu doctor` | Verify every precondition in [environment.md](environment.md) | no |
-| `cu observe` | Monitors, windows, workspaces, focus, cursor | no |
+| `cu observe` | Monitors, windows, layer surfaces, focus, cursor | no |
 | `cu shot` | Capture; writes a PNG and a frame descriptor | no |
 | `cu wait` | Block on a Hyprland event (`openwindow`, focus change, title match) | no |
 | `cu focus` | Give a window keyboard focus | no |
