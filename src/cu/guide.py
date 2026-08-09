@@ -44,6 +44,19 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   Every capture prints a frame id and a path. Read the PNG at that path, along
   with what the image will cost whoever reads it.
 
+  Before paying for another capture, ask the frame already on disk:
+
+  cu pixel --frame f3 --at 412,300       Exact r,g,b,a and #RRGGBBAA.
+  cu pixel --frame f3 --at 412,300 --radius 2
+                                          Median colour in the local box.
+  cu magnify --frame f3 --scale 3         Nearest-neighbour derived frame.
+
+  `pixel` reads image coordinates without producing an image. Its default is
+  one exact pixel; --radius is an explicit hedge against antialiasing.
+  `magnify` writes a new frame with more image pixels but the original capture
+  time and logical rectangle. It makes small text readable without pretending
+  the desktop was captured again, and reports the derived image's token cost.
+
   cu profiles                    What a capture costs each configured consumer.
 
   Image size is one of the two things you control that changes cost and
@@ -145,8 +158,9 @@ YOU MAY NOT BE ALONE HERE
   and the rest wait briefly. Past that wait you get exit 42 naming who holds
   it: that is another agent working, not a fault. Wait and retry.
 
-  Reading is never serialized — observe, shot, wait, status, and doctor answer
-  while someone else is driving, which is how you find out what is going on.
+  Reading is never serialized — observe, shot, pixel, magnify, wait, status,
+  and doctor answer while someone else is driving, which is how you find out
+  what is going on.
   `cu status` lists every agent currently driving, not just you.
   A status bar listens with `cu status --follow --json`: it receives one compact
   JSON object immediately and then only when that object changes. The feed
