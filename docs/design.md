@@ -747,6 +747,7 @@ also take `--dry-run`.
 | --- | --- | --- |
 | `cu status` | What cu is doing, including a change-only status-bar feed | no |
 | `cu session` | Bracket a stretch of work as one activity | no |
+| `cu abort` | Report or operate the user's abort interlock | no |
 | `cu doctor` | Verify every precondition in [environment.md](environment.md) | no |
 | `cu observe` | Monitors, windows, layer surfaces, focus, cursor | no |
 | `cu shot` | Capture; writes a PNG and a frame descriptor | no |

@@ -35,10 +35,12 @@ caller that reaches straight for `cu click` can still find out what it owes.
 
 ```sh
 cu doctor                        # verify every environment precondition
-cu observe                       # monitors, windows, focus, cursor
+cu abort                         # the user's interlock: --set, --clear, or report
+cu observe                       # monitors, windows, layer surfaces, focus, cursor
 cu shot                          # capture the focused window
 cu shot --output <name>          # a whole monitor; `cu observe` names them
-cu shot --region '100,100 400x200'
+cu shot --region '100,100 400x200'         # desktop-absolute
+cu shot --output <name> --region '0,0 900x26'  # relative to that output
 cu shot --if-changed             # reuse the last frame if nothing moved
 cu shot --after f3 --watch '0,0 200x26' # recapture once pixels change and settle
 cu shot --for openai             # capture at another consumer's budget

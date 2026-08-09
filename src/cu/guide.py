@@ -17,8 +17,8 @@ Use it when a task needs the real screen rather than the filesystem. `cu` acts
 on the **visible desktop** by default, and that is a safety property rather
 than a limitation: the user can watch what you do and stop you.
 
-There is no state to hold between calls except frame ids, and those live on
-disk. Every command takes --json.
+There is no state to hold between calls except frame ids and, if you open one,
+a session id — both live on disk. Every command takes --json.
 
 OBSERVE BEFORE YOU LOOK
   cu observe --json              Monitors, windows, layer surfaces, geometry, focus, cursor.
@@ -43,8 +43,9 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   A region is desktop-absolute by itself. With --output, its x,y are relative
   to that output; the returned logical_rect is always desktop-absolute.
 
-  Every capture prints a frame id and a path. Read the PNG at that path, along
-  with what the image will cost whoever reads it.
+  A capture prints a frame id and a path. Read the PNG at that path, along
+  with what the image will cost whoever reads it. --if-changed prints the id it
+  is reusing and nothing else, because no new image was written.
 
   After reloading a bar or other rendered content, use --after instead of a
   guessed sleep. The watch box is in the reference frame's image pixels and is
@@ -153,17 +154,21 @@ SAY WHAT YOU ARE DOING
 
   The user's status bar reads this, and it is how they decide whether to
   interrupt you or leave you alone. A session's --why is its standing purpose;
-  each command's --why is one short phrase about that action's intent, not a
-  restatement of the command: "accepting the fare", not "click at 412,300".
+  an acting command's --why is one short phrase about that action's intent, not
+  a restatement of the command: "accepting the fare", not "click at 412,300".
+  status, session, and abort take no --why: they report or operate cu itself
+  rather than doing something to the desktop, so there is no intent to show.
   Open a session for anything spanning more than a couple of commands —
   without one the indicator clears while you are thinking, which reads to the
   user as "it finished".
 
-  `session begin` prints an id, and every command inside the session must say
+  `session begin` prints an id, and every command inside the session should say
   it belongs there: through CU_SESSION as above, or --session ID if you cannot
   set an environment variable between commands. It is never inferred, because
   you may not be the only agent on this desktop and guessing would file your
-  actions under someone else's intent.
+  actions under someone else's intent. An unnamed command still runs, filed as
+  its own loose entry — except under a reservation, where an unnamed injecting
+  command is refused with exit 44.
 
 YOU MAY NOT BE ALONE HERE
   The desktop is one pointer, one keyboard focus, and one clipboard. `cu`
