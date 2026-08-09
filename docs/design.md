@@ -806,17 +806,20 @@ shell's beginning-of-line and a suspend signal. An unmapped action refuses; an
 inherited one performs something else and reports success.
 
 **The abort mechanism.** The lockfile is `$XDG_RUNTIME_DIR/cu/abort` — session
-state that must not survive a reboot. `cu` only ever tests for it and never
-removes it; clearing it is a physical act by the user, which is what makes it a
-deadman switch rather than a suggestion.
+state that must not survive a reboot. `cu abort` reports its state, and gives
+the user `--set` and `--clear` commands so every consumer names the interlock
+rather than its private path. Calls marked as agents by `CU_SESSION` or
+`--session` refuse either mutation with exit 43. That prevents an injection
+path, retry, or instruction-following agent from changing it by accident; it
+cannot stop a determined agent from bypassing the command.
 
 `escape` carries no binding at all in this session's keymap, so the abort takes
 the modifier shape already used for display control:
 
 ```lua
-bind("SUPER + ALT + escape", hl.dsp.exec_cmd("touch $XDG_RUNTIME_DIR/cu/abort"),
+bind("SUPER + ALT + escape", hl.dsp.exec_cmd("cu abort --set"),
      { locked = true })
-bind("SUPER + CTRL + ALT + escape", hl.dsp.exec_cmd("rm -f $XDG_RUNTIME_DIR/cu/abort"),
+bind("SUPER + CTRL + ALT + escape", hl.dsp.exec_cmd("cu abort --clear"),
      { locked = true })
 ```
 

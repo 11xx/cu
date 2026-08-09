@@ -185,7 +185,7 @@ def abort_flag() -> dict[str, Any]:
         path = config.abort_path()
     except config.ConfigError as exc:
         return _check("abort_flag", FAIL, str(exc))
-    if path.exists():
+    if config.aborted():
         return _check(
             "abort_flag",
             WARN,

@@ -238,6 +238,21 @@ def abort_path() -> Path:
     return Path(runtime) / "cu" / ABORT_FILENAME
 
 
+def set_abort() -> None:
+    """Set the user's abort flag, creating its runtime directory if needed."""
+    path = abort_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(exist_ok=True)
+
+
+def clear_abort() -> bool:
+    """Clear the abort flag and say whether it had been set."""
+    path = abort_path()
+    was_set = path.exists()
+    path.unlink(missing_ok=True)
+    return was_set
+
+
 def aborted() -> bool:
     try:
         return abort_path().exists()

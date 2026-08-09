@@ -29,11 +29,16 @@
 
 ;; One agent. The tooltip carries what the glance cannot: the agent's own --why,
 ;; the command in flight, and how long it has been at it.
+;;
+;; The click drops CU_SESSION first. `cu abort` refuses a mutation from anything
+;; marked as an agent, and a bar inheriting that variable from whatever launched
+;; it would turn the abort button into a silent no-op — the one failure this
+;; control cannot have. A click here is the user, whatever the environment says.
 (defwidget cu-driver [driver spinner]
   (button
     :class "cu__driver cu__driver--${driver.session ? "session" : "loose"}"
     :tooltip "cu: ${driver.detail} · ${driver.command} · ${cu-clock > driver.started_at ? round((cu-clock - driver.started_at) / 60, 0) : 0}m"
-    :onclick "touch \"$XDG_RUNTIME_DIR/cu/abort\""
+    :onclick "env -u CU_SESSION cu abort --set"
     spinner))
 
 ;; Hidden entirely when nothing is happening. An always-present idle icon is
