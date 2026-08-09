@@ -189,7 +189,9 @@ budgeted rather than literal:
 
 - `cu shot --window active` crops to one window. Usually the right default:
   fewer tokens *and* more detail per token than a full output.
-- `cu shot --region <x>,<y> <w>x<h>` captures an arbitrary strip.
+- `cu shot --region <x>,<y> <w>x<h>` captures an arbitrary desktop-absolute
+  strip. With `--output NAME`, the region's x and y are relative to that
+  output's logical origin; the returned `logical_rect` stays desktop-absolute.
 - `cu shot --output DP-2` for a whole monitor.
 - `--for <consumer>` selects a capture profile, which sets the downscale
   target. Profiles are configuration, not code — see below.
