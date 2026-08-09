@@ -116,6 +116,12 @@ cu click --frame f3 --at 412,300 --why 'accepting the fare'
 cu session end
 ```
 
+Add `--exclusive` to `session begin` when the desktop must remain unchanged
+between those commands. While that session is live, only injecting commands
+that name its id through `CU_SESSION` or `--session` may act; other injectors
+get retryable exit 44 naming the reservation. Ordinary sessions reserve
+nothing, and observation remains concurrent.
+
 The commands that reach the shared pointer, keyboard focus, and clipboard hold
 a host-wide `flock` while they run, so only one agent injects at a time. A
 second one waits briefly and then gets exit 42 naming the holder; reading —

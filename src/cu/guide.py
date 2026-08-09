@@ -109,6 +109,7 @@ EXIT CODES ARE THE CONTRACT
   41  The user is moving the mouse      Yield; wait before retrying
   42  Another agent is driving          Wait for it to finish, then retry
   43  An agent tried to change abort    Ask the user to set or clear it
+  44  Another agent reserved desktop    Wait for its session to end, then retry
   50  No known binding for that action  Do not guess a chord; say so
 
   Code 40 is not a transient failure. It means the person at the desk pressed
@@ -169,6 +170,13 @@ YOU MAY NOT BE ALONE HERE
   serializes the commands that touch them, so only one agent injects at a time
   and the rest wait briefly. Past that wait you get exit 42 naming who holds
   it: that is another agent working, not a fault. Wait and retry.
+
+  For a stretch of work that must not be changed between commands, start it
+  with `cu session begin --exclusive --why 'purpose'`. Until that session ends,
+  an injecting command must name its id through CU_SESSION or --session;
+  another agent gets retryable exit 44 naming the reservation. A dead watched
+  --pid or the normal session expiry also releases it. Ordinary sessions do
+  not reserve anything.
 
   Reading is never serialized — observe, shot, pixel, magnify, wait, status,
   and doctor answer while someone else is driving, which is how you find out

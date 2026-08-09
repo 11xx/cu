@@ -51,9 +51,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from . import config
+from . import config, exits
 from .config import ConfigError
 from .desktop import state_dir
+from .safety import Refused
 
 #: How long one command's entry stays true without being renewed. Long enough
 #: to bridge the gap between two commands while a model decides what to do
@@ -83,6 +84,7 @@ __all__ = [
     "SESSION_TTL",
     "alive",
     "begin",
+    "check_exclusive",
     "current_session",
     "describe",
     "end",
@@ -261,6 +263,30 @@ def _find(drivers: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
     return next((d for d in drivers if d.get("id") == key), None)
 
 
+def _exclusive(drivers: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return next((d for d in drivers if d.get("exclusive") is True), None)
+
+
+def _reserved(holder: dict[str, Any]) -> Refused:
+    detail = describe(holder)
+    return Refused(
+        exits.DESKTOP_RESERVED,
+        f"session {holder['id']} ({detail}) has reserved the desktop",
+    )
+
+
+def check_exclusive(session: str | None = None) -> None:
+    """Refuse injection that does not belong to the live reservation.
+
+    The caller holds the host-wide desktop lock, making this decision and the
+    eventual injection one indivisible turn on the shared desktop.
+    """
+    holder = _exclusive(_load(time.time()))
+    owner = session or current_session()
+    if holder is not None and holder["id"] != owner:
+        raise _reserved(holder)
+
+
 def publish(command: str, detail: str = "", session: str | None = None) -> dict[str, Any]:
     """Say what is happening, now.
 
@@ -304,7 +330,12 @@ def publish(command: str, detail: str = "", session: str | None = None) -> dict[
         return dict(driver)
 
 
-def begin(detail: str, pid: int | None = None) -> dict[str, Any]:
+def begin(
+    detail: str,
+    pid: int | None = None,
+    *,
+    exclusive: bool = False,
+) -> dict[str, Any]:
     """Open a bracket that outlives the individual commands inside it.
 
     Without one the indicator blinks out whenever a model spends longer
@@ -320,6 +351,7 @@ def begin(detail: str, pid: int | None = None) -> dict[str, Any]:
     driver = {
         "id": uuid.uuid4().hex[:12],
         "session": True,
+        "exclusive": exclusive,
         "agent_pid": pid,
         "state": "working",
         "command": "session",
@@ -330,6 +362,9 @@ def begin(detail: str, pid: int | None = None) -> dict[str, Any]:
         "expires_at": now + SESSION_TTL,
     }
     with _registry() as drivers:
+        holder = _exclusive(drivers)
+        if exclusive and holder is not None:
+            raise _reserved(holder)
         drivers.append(driver)
     return dict(driver)
 

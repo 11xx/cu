@@ -241,6 +241,100 @@ def test_a_session_without_a_pid_is_not_watched():
     assert details() == ["an ordinary run"]
 
 
+def test_an_exclusive_session_refuses_unnamed_injection(monkeypatch, capsys):
+    holder = status.begin("editing the report", exclusive=True)
+    monkeypatch.setattr(cli, "cmd_key", lambda _args: exits.OK)
+
+    assert holder["exclusive"] is True
+    assert cli.main(["key", "--chord", "a"]) == exits.DESKTOP_RESERVED
+    refusal = capsys.readouterr().err
+    assert holder["id"] in refusal
+    assert holder["detail"] in refusal
+
+
+def test_an_exclusive_session_allows_its_named_injection(monkeypatch):
+    holder = status.begin("editing the report", exclusive=True)
+    monkeypatch.setattr(cli, "cmd_key", lambda _args: exits.OK)
+
+    assert (
+        cli.main(["key", "--chord", "a", "--session", holder["id"]])
+        == exits.OK
+    )
+    monkeypatch.setenv(status.SESSION_ENV, holder["id"])
+    assert cli.main(["key", "--chord", "a"]) == exits.OK
+
+
+@pytest.mark.parametrize(
+    ("handler", "argv"),
+    [
+        ("cmd_observe", ["observe"]),
+        ("cmd_shot", ["shot"]),
+        ("cmd_wait", ["wait", "focus"]),
+        ("cmd_status", ["status"]),
+        ("cmd_doctor", ["doctor"]),
+        ("cmd_profiles", ["profiles"]),
+    ],
+)
+def test_an_exclusive_session_never_refuses_read_only_commands(
+    monkeypatch, handler, argv
+):
+    status.begin("editing the report", exclusive=True)
+
+    def unexpected_check(_session=None):
+        pytest.fail("a read-only command consulted the exclusive reservation")
+
+    monkeypatch.setattr(status, "check_exclusive", unexpected_check)
+    monkeypatch.setattr(cli, handler, lambda _args: exits.OK)
+    assert cli.main(argv) == exits.OK
+
+
+def test_a_second_exclusive_session_refuses_and_names_the_holder(capsys):
+    assert (
+        cli.main(["session", "begin", "--exclusive", "--why", "editing the report"])
+        == exits.OK
+    )
+    holder = capsys.readouterr().out.strip()
+
+    assert (
+        cli.main(["session", "begin", "--exclusive", "--why", "second agent"])
+        == exits.DESKTOP_RESERVED
+    )
+    refusal = capsys.readouterr().err
+    assert holder in refusal
+    assert "editing the report" in refusal
+
+
+def test_a_nonexclusive_session_refuses_no_injection(monkeypatch):
+    record = status.begin("ordinary work")
+    monkeypatch.setattr(cli, "cmd_key", lambda _args: exits.OK)
+
+    assert record["exclusive"] is False
+    assert cli.main(["key", "--chord", "a"]) == exits.OK
+
+
+def test_an_exclusive_session_with_a_dead_pid_refuses_no_injection(monkeypatch):
+    status.begin("abandoned work", pid=999_999, exclusive=True)
+    monkeypatch.setattr(cli, "cmd_key", lambda _args: exits.OK)
+
+    assert cli.main(["key", "--chord", "a"]) == exits.OK
+
+
+def test_an_expired_exclusive_session_refuses_no_injection(monkeypatch):
+    status.begin("stale work", exclusive=True)
+    path = status.status_path()
+    record = json.loads(path.read_text())
+    record["drivers"][0]["expires_at"] = time.time() - 1
+    path.write_text(json.dumps(record))
+    monkeypatch.setattr(cli, "cmd_key", lambda _args: exits.OK)
+
+    assert cli.main(["key", "--chord", "a"]) == exits.OK
+
+
+def test_desktop_reserved_is_retryable_and_has_a_response():
+    assert exits.DESKTOP_RESERVED in exits.RETRYABLE
+    assert exits.DESKTOP_RESERVED in exits.RESPONSE
+
+
 def test_a_corrupt_status_reads_as_idle_rather_than_raising():
     status.publish("shot")
     status.status_path().write_text("{ this is not json")

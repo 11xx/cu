@@ -23,6 +23,7 @@ ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
 DESKTOP_BUSY = 42
 ABORT_CONTROLLED_BY_USER = 43
+DESKTOP_RESERVED = 44
 NOT_MAPPED = 50
 
 #: What a caller should do on each code. Shipped in `cu doctor --json` and
@@ -65,6 +66,10 @@ RESPONSE = {
     ABORT_CONTROLLED_BY_USER: (
         "The abort flag belongs to the user. Ask them to set or clear it."
     ),
+    DESKTOP_RESERVED: (
+        "Another agent has reserved the desktop. Wait for its session to end and retry, "
+        "or tell the user who holds it."
+    ),
     NOT_MAPPED: (
         "No known binding for this action in this application. "
         "Do not guess a default chord."
@@ -75,7 +80,15 @@ RESPONSE = {
 #: ABORTED_BY_USER is excluded deliberately: an agent that retries it has
 #: defeated the one interlock the user holds and the agent cannot clear.
 RETRYABLE = frozenset(
-    {STALE_FRAME, FOCUS_CHANGED, TARGET_NOT_FOUND, TIMED_OUT, HUMAN_ACTIVE, DESKTOP_BUSY}
+    {
+        STALE_FRAME,
+        FOCUS_CHANGED,
+        TARGET_NOT_FOUND,
+        TIMED_OUT,
+        HUMAN_ACTIVE,
+        DESKTOP_BUSY,
+        DESKTOP_RESERVED,
+    }
 )
 
 
