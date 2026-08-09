@@ -22,6 +22,7 @@ DENIED_BY_POLICY = 30
 ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
 DESKTOP_BUSY = 42
+ABORT_CONTROLLED_BY_USER = 43
 NOT_MAPPED = 50
 
 #: What a caller should do on each code. Shipped in `cu doctor --json` and
@@ -60,6 +61,9 @@ RESPONSE = {
     DESKTOP_BUSY: (
         "Another agent is driving the desktop. Wait for it to finish and retry; "
         "acting now would interleave with its pointer, focus, and clipboard."
+    ),
+    ABORT_CONTROLLED_BY_USER: (
+        "The abort flag belongs to the user. Ask them to set or clear it."
     ),
     NOT_MAPPED: (
         "No known binding for this action in this application. "

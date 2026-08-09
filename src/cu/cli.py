@@ -48,6 +48,10 @@ from .uinput import UinputError
 
 STATUS_MARK = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL"}
 
+# These commands do not make the desktop look agent-driven. Their parsers also
+# refuse the activity-only options whose values would otherwise be ignored.
+NON_PUBLISHING_COMMANDS = frozenset({"status", "session", "abort"})
+
 
 def _num(value: float) -> str:
     """Logical space is continuous, but whole numbers should not read as floats."""
@@ -969,6 +973,26 @@ def cmd_status(args: argparse.Namespace) -> int:
     return exits.OK
 
 
+def cmd_abort(args: argparse.Namespace) -> int:
+    """Report or change the user's host-wide abort interlock."""
+    if args.set or args.clear:
+        if args.session is not None or status.current_session() is not None:
+            raise Refused(
+                exits.ABORT_CONTROLLED_BY_USER,
+                "the abort flag belongs to the user; ask them to change it",
+            )
+        if args.set:
+            config.set_abort()
+        else:
+            config.clear_abort()
+    _emit(
+        {"aborted": config.aborted()},
+        args.json,
+        lambda state: print(f"abort: {'set' if state['aborted'] else 'clear'}"),
+    )
+    return exits.OK
+
+
 def cmd_session(args: argparse.Namespace) -> int:
     """Bracket a stretch of work, so the indicator does not blink between steps.
 
@@ -1023,7 +1047,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON"
         )
-        if name in {"status", "session"}:
+        if name in NON_PUBLISHING_COMMANDS:
             p.set_defaults(run=run, injects=False)
             return p
         # What the user sees while this runs. A command name says an agent is
@@ -1081,6 +1105,17 @@ def build_parser() -> argparse.ArgumentParser:
         "or the only one open)",
     )
     ended.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+
+    abort = add("abort", "report or change the user's abort interlock", cmd_abort)
+    mutation = abort.add_mutually_exclusive_group()
+    mutation.add_argument("--set", action="store_true", help="set the abort flag")
+    mutation.add_argument("--clear", action="store_true", help="clear the abort flag")
+    abort.add_argument(
+        "--session",
+        metavar="ID",
+        default=None,
+        help=f"agent session; mutations refuse (default: ${status.SESSION_ENV})",
+    )
 
     add("doctor", "verify every environment precondition", cmd_doctor)
     add("profiles", "what a capture costs each configured consumer", cmd_profiles)
@@ -1354,12 +1389,14 @@ def main(argv: list[str] | None = None) -> int:
         # has no command to dispatch to.
         print(guide.render(), end="")
         return exits.OK
+    if args.command in NON_PUBLISHING_COMMANDS and getattr(args, "why", ""):
+        parser.error(f"cu {args.command} does not accept --why")
     why = getattr(args, "why", "") or ""
     session = getattr(args, "session", None)
     # Published before the command runs rather than after, because the point is
-    # to say what is happening while it happens. `status` is excluded: a reader
-    # asking what is going on is not itself something going on.
-    if args.command not in {"status", "session"}:
+    # to say what is happening while it happens. Non-publishing commands are
+    # readers or user-owned controls, not agents driving the desktop.
+    if args.command not in NON_PUBLISHING_COMMANDS:
         status.publish(args.command, detail=why, session=session)
     try:
         # The desktop's pointer, focus, and clipboard are one shared resource,

@@ -77,11 +77,22 @@ EXIT CODES ARE THE CONTRACT
   40  The user aborted                  Stop. Do not retry. Do not clear it.
   41  The user is moving the mouse      Yield; wait before retrying
   42  Another agent is driving          Wait for it to finish, then retry
+  43  An agent tried to change abort    Ask the user to set or clear it
   50  No known binding for that action  Do not guess a chord; say so
 
   Code 40 is not a transient failure. It means the person at the desk pressed
   their abort key. Stop, and tell them. Retrying past it or trying to clear the
   flag defeats the only interlock they hold and you cannot.
+
+THE USER'S ABORT
+  cu abort                            Report whether the abort is set.
+  cu abort --set                      Set it and stop every agent at its next action.
+  cu abort --clear                    Release it.
+
+  The abort flag is host-wide and belongs to the user. An agent-marked caller
+  (`CU_SESSION` or `--session`) gets exit 43 for either mutation and asks the
+  user instead. This prevents normal agent paths from changing it by accident;
+  it cannot stop a determined agent from bypassing the command.
 
 HOW HARD TO THINK
   Reasoning effort and capture size are separate costs. Lower effort shortens
