@@ -40,6 +40,7 @@ about a session that ended.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
 import os
@@ -158,6 +159,38 @@ def _load(now: float) -> list[dict[str, Any]]:
     return _live(record.get("drivers"), now)
 
 
+def _drivers_in(record: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(record, dict) or not isinstance(record.get("drivers"), list):
+        return None
+    drivers = record["drivers"]
+    for driver in drivers:
+        valid = (
+            isinstance(driver, dict)
+            and isinstance(driver.get("id"), str)
+            and bool(driver["id"])
+            and isinstance(driver.get("expires_at"), int | float)
+            and isinstance(driver.get("exclusive", False), bool)
+        )
+        if not valid:
+            return None
+    return drivers
+
+
+def _load_for_update(now: float) -> list[dict[str, Any]] | None:
+    """Load a mutable registry, returning None when rewriting would hide damage."""
+    path = status_path()
+    if path is None:
+        return None
+    try:
+        record = json.loads(path.read_text())
+    except FileNotFoundError:
+        return []
+    except (OSError, json.JSONDecodeError):
+        return None
+    drivers = _drivers_in(record)
+    return _live(drivers, now) if drivers is not None else None
+
+
 def _write(drivers: list[dict[str, Any]]) -> None:
     """Replace the registry atomically, or leave the previous one alone.
 
@@ -170,14 +203,93 @@ def _write(drivers: list[dict[str, Any]]) -> None:
     if path is None:
         return
     record = {"active": bool(drivers), "drivers": drivers}
-    fd, temporary = tempfile.mkstemp(prefix=".status-", suffix=".new", dir=path.parent)
-    os.close(fd)
+    try:
+        fd, temporary = tempfile.mkstemp(
+            prefix=".status-", suffix=".new", dir=path.parent
+        )
+        os.close(fd)
+    except OSError:
+        return
     scratch = Path(temporary)
     try:
         scratch.write_text(json.dumps(record))
         scratch.replace(path)
     except OSError:
         scratch.unlink(missing_ok=True)
+
+
+def _reservation_unavailable(detail: object) -> Refused:
+    return Refused(
+        exits.RESERVATION_UNAVAILABLE,
+        f"the desktop reservation registry is unavailable: {detail}",
+    )
+
+
+def _load_strict(now: float) -> list[dict[str, Any]]:
+    """Load reservation state, distinguishing empty from unavailable."""
+    path = status_path()
+    if path is None:
+        raise _reservation_unavailable("XDG_RUNTIME_DIR is unset")
+    try:
+        record = json.loads(path.read_text())
+    except FileNotFoundError:
+        return []
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _reservation_unavailable(exc) from exc
+    drivers = _drivers_in(record)
+    if drivers is None:
+        raise _reservation_unavailable(f"{path} contains an invalid registry")
+    return _live(drivers, now)
+
+
+def _write_strict(drivers: list[dict[str, Any]]) -> None:
+    """Replace reservation state atomically, or report that it was not persisted."""
+    path = status_path()
+    if path is None:
+        raise _reservation_unavailable("XDG_RUNTIME_DIR is unset")
+    record = {"active": bool(drivers), "drivers": drivers}
+    try:
+        fd, temporary = tempfile.mkstemp(
+            prefix=".status-", suffix=".new", dir=path.parent
+        )
+    except OSError as exc:
+        raise _reservation_unavailable(exc) from exc
+    try:
+        os.close(fd)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            Path(temporary).unlink(missing_ok=True)
+        raise _reservation_unavailable(exc) from exc
+    scratch = Path(temporary)
+    try:
+        scratch.write_text(json.dumps(record))
+        scratch.replace(path)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            scratch.unlink(missing_ok=True)
+        raise _reservation_unavailable(exc) from exc
+
+
+@contextmanager
+def _strict_registry() -> Iterator[list[dict[str, Any]]]:
+    """A serialized registry mutation whose load, lock, and write must succeed."""
+    path = _lock_path()
+    if path is None:
+        raise _reservation_unavailable("XDG_RUNTIME_DIR is unset")
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as exc:
+        raise _reservation_unavailable(exc) from exc
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError as exc:
+            raise _reservation_unavailable(exc) from exc
+        drivers = _load_strict(time.time())
+        yield drivers
+        _write_strict(drivers)
+    finally:
+        os.close(fd)
 
 
 @contextmanager
@@ -200,10 +312,17 @@ def _registry() -> Iterator[list[dict[str, Any]]]:
         yield []
         return
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        drivers = _load(time.time())
-        yield drivers
-        _write(drivers)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            yield []
+            return
+        drivers = _load_for_update(time.time())
+        if drivers is None:
+            yield []
+        else:
+            yield drivers
+            _write(drivers)
     finally:
         os.close(fd)
 
@@ -281,7 +400,7 @@ def check_exclusive(session: str | None = None) -> None:
     The caller holds the host-wide desktop lock, making this decision and the
     eventual injection one indivisible turn on the shared desktop.
     """
-    holder = _exclusive(_load(time.time()))
+    holder = _exclusive(_load_strict(time.time()))
     owner = session or current_session()
     if holder is not None and holder["id"] != owner:
         raise _reserved(holder)
@@ -361,7 +480,8 @@ def begin(
         "updated_at": now,
         "expires_at": now + SESSION_TTL,
     }
-    with _registry() as drivers:
+    registry = _strict_registry() if exclusive else _registry()
+    with registry as drivers:
         holder = _exclusive(drivers)
         if exclusive and holder is not None:
             raise _reserved(holder)

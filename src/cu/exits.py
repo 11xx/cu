@@ -24,6 +24,7 @@ HUMAN_ACTIVE = 41
 DESKTOP_BUSY = 42
 ABORT_CONTROLLED_BY_USER = 43
 DESKTOP_RESERVED = 44
+RESERVATION_UNAVAILABLE = 45
 NOT_MAPPED = 50
 
 #: What a caller should do on each code. Shipped in `cu doctor --json` and
@@ -38,10 +39,13 @@ RESPONSE = {
     ),
     STALE_FRAME: "The frame no longer describes the screen. Capture a new one and retry.",
     FOCUS_CHANGED: "Focus moved between planning and acting. Re-observe, then decide again.",
-    TARGET_NOT_FOUND: "The named window, output, or element is gone. Re-observe.",
+    TARGET_NOT_FOUND: (
+        "The named window, output, element, browser, or recipe is gone. "
+        "Re-observe or check the stored name."
+    ),
     DEGENERATE_AIM: (
-        "The region spans outputs or falls outside any window. "
-        "Widen to --window or --output."
+        "The region spans outputs or is empty or outside every output. "
+        "Aim wholly within one output."
     ),
     TIMED_OUT: (
         "The awaited event did not arrive in time. Re-observe: it may have "
@@ -69,6 +73,10 @@ RESPONSE = {
     DESKTOP_RESERVED: (
         "Another agent has reserved the desktop. Wait for its session to end and retry, "
         "or tell the user who holds it."
+    ),
+    RESERVATION_UNAVAILABLE: (
+        "The desktop reservation state is unavailable. Do not inject or retry; "
+        "the registry must be repaired first."
     ),
     NOT_MAPPED: (
         "No known binding for this action in this application. "

@@ -108,8 +108,8 @@ EXIT CODES ARE THE CONTRACT
   10  Environment unusable              Run `cu doctor`; retrying will not help
   20  Frame no longer describes screen  Capture a new one, retry
   21  Focus or target changed           Re-observe, then decide again
-  22  Window, output, or browser gone   Re-observe
-  23  Region spans outputs/off-screen   Widen to --window or --output
+  22  Named target is gone              Re-observe or check the stored name
+  23  Region crosses/is off an output   Aim wholly within one output
   24  Awaited event never arrived       Re-observe; it may have happened first
   25  Verification did not match state  Read actual state; do NOT blindly retry
   30  Denylist, lock, unreviewed recipe Do not retry; tell the user
@@ -118,6 +118,7 @@ EXIT CODES ARE THE CONTRACT
   42  Another agent is driving          Wait for it to finish, then retry
   43  An agent tried to change abort    Ask the user to set or clear it
   44  Another agent reserved desktop    Wait for its session to end, then retry
+  45  Reservation state unavailable     Stop; repair the registry before injecting
   50  No known binding for that action  Do not guess a chord; say so
 
   Code 40 is not a transient failure. It means the person at the desk pressed

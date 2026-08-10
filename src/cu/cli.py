@@ -38,13 +38,13 @@ from . import (
 )
 from .actions import ClipboardError
 from .browser import BrowserError
-from .capture import CaptureError
+from .capture import CaptureAimError, CaptureError
 from .compositor import QuietError
 from .config import ConfigError
 from .frames import FrameError
 from .hypr import HyprError
 from .knowledge import KnowledgeError
-from .recipes import RecipeError
+from .recipes import RecipeError, RecipeNotFound, RecipeTimeout
 from .safety import Refused
 from .sandbox import SandboxError
 from .uinput import UinputError
@@ -265,6 +265,22 @@ def _grab_shot(
         capture.grab_region(rect, scratch, scale)
 
 
+def _confirm_captured_window(
+    window: dict[str, Any], monitors: list[dict[str, Any]]
+) -> None:
+    """Establish that grim captured the geometry selected before it ran."""
+    live = next(
+        (w for w in observe.windows(monitors) if w["address"] == window["address"]),
+        None,
+    )
+    if live is None:
+        raise FrameError(
+            f"window {window['class']} ({window['address']}) disappeared during capture"
+        )
+    if live["logical_rect"] != window["logical_rect"]:
+        raise FrameError(f"window {window['class']} moved or resized during capture")
+
+
 def _validate_after_args(args: argparse.Namespace) -> None:
     if args.watch and not args.after:
         raise ValueError("--watch requires --after")
@@ -383,7 +399,7 @@ def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, A
                     visual_tokens=capture.visual_tokens(
                         probe_width, probe_height, profile
                     ),
-                    cursor_logical=snap["cursor_logical"],
+                    cursor_logical=observe.cursor(),
                     window=reference.get("window"),
                     wait={
                         "after": reference["id"],
@@ -516,6 +532,8 @@ def cmd_shot(args: argparse.Namespace) -> int:
 
     with frames.capture_scratch() as scratch:
         _grab_shot(source, rect, scratch, scale)
+        if window is not None:
+            _confirm_captured_window(window, monitors)
 
         digest = capture.digest(scratch)
 
@@ -526,6 +544,7 @@ def cmd_shot(args: argparse.Namespace) -> int:
                 # staleness is a proxy for. Keeping the original timestamp would
                 # let a frame proven current a moment ago be refused as too old.
                 previous["captured_at"] = time.time()
+                previous["cursor_logical"] = observe.cursor()
                 frames.save(previous)
                 payload = {**previous, "changed": False}
                 _emit(payload, args.json, lambda p: print(f"unchanged; reusing {p['id']}"))
@@ -539,7 +558,11 @@ def cmd_shot(args: argparse.Namespace) -> int:
             scratch=scratch,
             native_size=native,
             digest_native=digest,
-            monitor={"name": monitor["name"], "scale": monitor["scale"]},
+            monitor={
+                "name": monitor["name"],
+                "scale": monitor["scale"],
+                "logical_rect": dict(monitor["logical_rect"]),
+            },
             profile=name,
             capture_scale=scale,
             visual_tokens=capture.visual_tokens(
@@ -1904,6 +1927,12 @@ def main(argv: list[str] | None = None) -> int:
     except (KnowledgeError, SandboxError) as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.TARGET_NOT_FOUND
+    except RecipeNotFound as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        return exits.TARGET_NOT_FOUND
+    except RecipeTimeout as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        return exits.TIMED_OUT
     except RecipeError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.DENIED_BY_POLICY
@@ -1922,9 +1951,12 @@ def main(argv: list[str] | None = None) -> int:
     except HyprError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.PRECONDITION_FAILED
-    except CaptureError as exc:
+    except CaptureAimError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.DEGENERATE_AIM
+    except CaptureError as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        return exits.PRECONDITION_FAILED
     except wait.WaitTimeout as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.TIMED_OUT

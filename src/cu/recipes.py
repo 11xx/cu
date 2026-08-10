@@ -44,6 +44,14 @@ class RecipeError(RuntimeError):
     pass
 
 
+class RecipeNotFound(RecipeError):
+    pass
+
+
+class RecipeTimeout(RecipeError):
+    pass
+
+
 def store_dir() -> Path:
     base = os.environ.get("XDG_DATA_HOME") or "~/.local/share"
     path = Path(base).expanduser() / "ai-computer-use" / "recipes"
@@ -202,7 +210,7 @@ def save(recipe: dict[str, Any]) -> Path:
 def load(name: str) -> dict[str, Any]:
     path = path_for(name)
     if not path.is_file():
-        raise RecipeError(f"no recipe named {name!r}")
+        raise RecipeNotFound(f"no recipe named {name!r}")
     try:
         return json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
@@ -311,7 +319,7 @@ def replay(
         elif action in {"click", "move"}:
             snap = observe.snapshot()
             window = _window_by_class(step["window_class"], snap)
-            frame = _capture_window(window, cfg, profile_name)
+            frame = _capture_window(window, snap["monitors"], cfg, profile_name)
             at = _point_in_frame(step, window, frame)
             if action == "click":
                 performed.append(
@@ -330,7 +338,7 @@ def replay(
             if step.get("relative"):
                 snap = observe.snapshot()
                 window = _window_by_class(step["window_class"], snap)
-                frame = _capture_window(window, cfg, profile_name)
+                frame = _capture_window(window, snap["monitors"], cfg, profile_name)
                 frame_id = frame["id"]
                 at = _point_in_frame(step, window, frame)
             performed.append(
@@ -389,7 +397,7 @@ def replay(
                         )
                     )
                 except wait_module.WaitTimeout as exc:
-                    raise RecipeError(f"step {index}: {exc}") from exc
+                    raise RecipeTimeout(f"step {index}: {exc}") from exc
         else:
             raise RecipeError(f"step {index} has unknown action {action!r}")
 
@@ -442,14 +450,16 @@ def _point_in_frame(
 
 
 def _capture_window(
-    window: dict[str, Any], cfg: dict[str, Any], profile_name: str
+    window: dict[str, Any],
+    monitors: list[dict[str, Any]],
+    cfg: dict[str, Any],
+    profile_name: str,
 ) -> dict[str, Any]:
     from . import capture, frames, observe
 
     # Replays capture per pointer step, so without this the store grows for the
     # length of the replay and is only ever trimmed by the next `cu shot`.
     frames.collect()
-    monitors = observe.monitors()
     rect = capture.clamp(
         window["logical_rect"],
         capture.sole_monitor(window["logical_rect"], monitors)["logical_rect"],
@@ -459,6 +469,22 @@ def _capture_window(
     scale = capture.scale_for(rect, monitor["scale"], profile["max_long_edge"])
     with frames.capture_scratch() as scratch:
         capture.grab_region(rect, scratch, scale)
+        live = next(
+            (
+                candidate
+                for candidate in observe.windows(monitors)
+                if candidate["address"] == window["address"]
+            ),
+            None,
+        )
+        if live is None:
+            raise frames.FrameError(
+                f"window {window['class']} ({window['address']}) disappeared during capture"
+            )
+        if live["logical_rect"] != window["logical_rect"]:
+            raise frames.FrameError(
+                f"window {window['class']} moved or resized during capture"
+            )
         image_size = capture.size_of(scratch)
         return frames.new(
             source={"type": "window", "name": window["class"]},
@@ -470,7 +496,11 @@ def _capture_window(
                 "h": round(rect["h"] * monitor["scale"]),
             },
             digest_native=capture.digest(scratch),
-            monitor={"name": monitor["name"], "scale": monitor["scale"]},
+            monitor={
+                "name": monitor["name"],
+                "scale": monitor["scale"],
+                "logical_rect": dict(monitor["logical_rect"]),
+            },
             profile=profile_name,
             visual_tokens=capture.visual_tokens(
                 image_size["w"], image_size["h"], profile

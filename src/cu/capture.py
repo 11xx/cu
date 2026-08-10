@@ -162,12 +162,20 @@ class CaptureError(RuntimeError):
     pass
 
 
+class CaptureAimError(CaptureError):
+    pass
+
+
+class CaptureToolError(CaptureError):
+    pass
+
+
 def _run(args: list[str]) -> None:
     if not shutil.which(args[0]):
-        raise CaptureError(f"{args[0]} is not installed")
+        raise CaptureToolError(f"{args[0]} is not installed")
     proc = subprocess.run(args, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
-        raise CaptureError(f"{' '.join(args[:2])}: {proc.stderr.strip()}")
+        raise CaptureToolError(f"{' '.join(args[:2])}: {proc.stderr.strip()}")
 
 
 def intersects(rect: dict[str, float], other: dict[str, float]) -> bool:
@@ -189,10 +197,10 @@ def sole_monitor(
     """
     touched = [m for m in monitors if intersects(rect, m["logical_rect"])]
     if not touched:
-        raise CaptureError("region falls outside every output")
+        raise CaptureAimError("region falls outside every output")
     if len(touched) > 1:
         names = ", ".join(m["name"] for m in touched)
-        raise CaptureError(
+        raise CaptureAimError(
             f"region spans {names}; capture one output at a time to avoid upscaling"
         )
     return touched[0]
@@ -217,7 +225,7 @@ def clamp(rect: dict[str, float], bounds: dict[str, float]) -> dict[str, float]:
     x1 = min(x1, math.floor(bounds["x"] + bounds["w"]))
     y1 = min(y1, math.floor(bounds["y"] + bounds["h"]))
     if x1 <= x0 or y1 <= y0:
-        raise CaptureError("region is empty after clamping to its output")
+        raise CaptureAimError("region is empty after clamping to its output")
     return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
 
 
@@ -233,7 +241,7 @@ def scale_for(
     """
     longest = max(rect["w"], rect["h"])
     if longest <= 0:
-        raise CaptureError("cannot scale an empty region")
+        raise CaptureAimError("cannot scale an empty region")
     return min(max_long_edge / longest, monitor_scale)
 
 
@@ -262,7 +270,7 @@ def size_of(path: Path) -> dict[str, int]:
     """
     header = path.read_bytes()[:24]
     if len(header) < 24 or not header.startswith(PNG_MAGIC):
-        raise CaptureError(f"{path} is not a PNG")
+        raise CaptureToolError(f"{path} is not a PNG")
     return {
         "w": int.from_bytes(header[16:20], "big"),
         "h": int.from_bytes(header[20:24], "big"),

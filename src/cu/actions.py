@@ -136,7 +136,7 @@ def resolve_target(
     if frame_id is None or at is None:
         return {"snapshot": snap, "frame": None, "aimed": None}
     frame = frames.load(frame_id)
-    safety.check_frame(cfg, frame, snap["windows"])
+    safety.check_frame(cfg, frame, snap["windows"], snap["monitors"])
     return {"snapshot": snap, "frame": frame, "aimed": aim(frame, at[0], at[1], snap)}
 
 

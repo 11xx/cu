@@ -71,20 +71,20 @@ def check_abort() -> None:
         )
 
 
-def check_session() -> None:
-    locked = checks.session_unlocked()
+def check_session(processes: list[tuple[int, list[str]]] | None = None) -> None:
+    locked = checks.session_unlocked(processes)
     if locked["status"] == checks.FAIL:
         raise Refused(exits.DENIED_BY_POLICY, locked["detail"])
 
 
-def check_remapper() -> None:
+def check_remapper(processes: list[tuple[int, list[str]]] | None = None) -> None:
     """An unfiltered remapper silently rewrites what gets injected.
 
     This is a property of the running process rather than of its config file,
     and it fails silently in the worst way: the keystroke arrives, as some
     other keystroke.
     """
-    state = checks.xremap_filter()
+    state = checks.xremap_filter(processes)
     if state["status"] == checks.FAIL:
         raise Refused(exits.PRECONDITION_FAILED, state["detail"])
 
@@ -126,7 +126,8 @@ def check_target(frame: dict[str, Any], under: dict[str, Any] | None) -> None:
     has since changed" failure the frame contract exists to refuse.
 
     A frame depicting no particular window — a whole output, or a region —
-    asserts nothing here; its geometry is fixed and the denylist still applies.
+    asserts nothing here. Its output geometry is checked by `check_frame`, and
+    the denylist still applies to whatever is under the aimed point.
     """
     declared = frame.get("window")
     if declared is None:
@@ -140,8 +141,15 @@ def check_target(frame: dict[str, Any], under: dict[str, Any] | None) -> None:
         )
 
 
-def check_frame(cfg: dict[str, Any], frame: dict[str, Any], windows: list[dict[str, Any]]) -> None:
-    why = frames.staleness(frame, windows, cfg["safety"]["frame_max_age"])
+def check_frame(
+    cfg: dict[str, Any],
+    frame: dict[str, Any],
+    windows: list[dict[str, Any]],
+    monitors: list[dict[str, Any]],
+) -> None:
+    why = frames.staleness(
+        frame, windows, monitors, cfg["safety"]["frame_max_age"]
+    )
     if why:
         raise Refused(exits.STALE_FRAME, f"frame {frame['id']}: {why}")
 
@@ -188,9 +196,10 @@ def _common(cfg: dict[str, Any], window: dict[str, Any] | None) -> None:
     names the most important reason rather than the first one checked.
     """
     check_abort()
-    check_session()
+    processes = checks._processes(fresh=True)
+    check_session(processes)
     check_denylist(cfg, window)
-    check_remapper()
+    check_remapper(processes)
 
 
 def preflight_pointer(
