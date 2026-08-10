@@ -7,9 +7,11 @@ fixture would pass while the transform was wrong.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from cu import checks, cli, exits, observe
+from cu import checks, cli, config, exits, observe, safety
 
 MONITORS = [
     {
@@ -195,6 +197,21 @@ def test_every_exit_code_documents_a_response():
     assert codes == set(exits.RESPONSE)
 
 
+def test_every_documented_response_has_a_production_exit_site():
+    package = Path(__file__).parents[1] / "src" / "cu"
+    source = "\n".join(
+        path.read_text()
+        for path in package.glob("*.py")
+        if path.name not in {"exits.py", "guide.py"}
+    )
+    reachable = {
+        code
+        for name, code in vars(exits).items()
+        if name.isupper() and isinstance(code, int) and f"exits.{name}" in source
+    }
+    assert reachable == set(exits.RESPONSE)
+
+
 def test_abort_is_not_retryable():
     """An agent that retries past an abort defeats the interlock."""
     assert exits.ABORTED_BY_USER not in exits.RETRYABLE
@@ -274,6 +291,32 @@ def test_one_scan_serves_both_guards_in_a_single_injection(monkeypatch):
     checks.xremap_filter()
     checks.session_unlocked()
     assert len(scans) == 1
+
+
+def test_each_common_preflight_shares_one_fresh_process_snapshot(monkeypatch):
+    scans = []
+    seen = []
+
+    def fresh_scan(*, fresh=False):
+        assert fresh is True
+        snapshot = []
+        scans.append(snapshot)
+        return snapshot
+
+    monkeypatch.setattr(checks, "_processes", fresh_scan)
+    monkeypatch.setattr(safety, "check_abort", lambda: None)
+    monkeypatch.setattr(safety, "check_denylist", lambda *_args: None)
+    monkeypatch.setattr(safety, "check_session", seen.append)
+    monkeypatch.setattr(safety, "check_remapper", seen.append)
+
+    safety._common(config.DEFAULTS, None)
+    safety._common(config.DEFAULTS, None)
+
+    assert len(scans) == 2
+    assert seen[0] is scans[0]
+    assert seen[1] is scans[0]
+    assert seen[2] is scans[1]
+    assert seen[3] is scans[1]
 
 
 def test_a_long_run_re_reads_before_acting_again(monkeypatch):

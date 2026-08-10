@@ -97,12 +97,10 @@ def uinput() -> dict[str, Any]:
     return _check("uinput", OK, f"writable as uid {os.getuid()}, no root needed")
 
 
-#: How long a /proc scan may be reused. Long enough that the remapper filter
-#: and the lock-screen check share one scan within a single injection — they
-#: are meant to describe the same instant, and scanning twice cost about half
-#: the latency of a dry-run command. Short enough that a replay, which injects
-#: repeatedly over minutes, re-reads before each action rather than deciding
-#: the whole run against the moment it started.
+#: How long callers outside an injection preflight may reuse a /proc scan.
+#: A preflight takes one explicitly fresh snapshot and shares it between the
+#: lock-screen and remapper guards. Other checks retain this cache because a
+#: scan costs about half the latency of a dry-run command.
 PROCESS_SCAN_TTL = 1.0
 
 #: The most recent scan and when it was taken. A list rather than a rebound
@@ -110,7 +108,7 @@ PROCESS_SCAN_TTL = 1.0
 _process_scan: list[tuple[float, list[tuple[int, list[str]]]]] = []
 
 
-def _processes() -> list[tuple[int, list[str]]]:
+def _processes(*, fresh: bool = False) -> list[tuple[int, list[str]]]:
     """Every readable process as (pid, argv). Ignores races against exiting pids.
 
     A lock screen or an unfiltered remapper appearing mid-run has to be seen:
@@ -118,7 +116,7 @@ def _processes() -> list[tuple[int, list[str]]]:
     the answer is dated and expires rather than being fixed at process start.
     """
     now = time.monotonic()
-    if _process_scan and now - _process_scan[0][0] < PROCESS_SCAN_TTL:
+    if not fresh and _process_scan and now - _process_scan[0][0] < PROCESS_SCAN_TTL:
         return _process_scan[0][1]
     found = []
     for entry in Path("/proc").iterdir():
@@ -135,13 +133,18 @@ def _processes() -> list[tuple[int, list[str]]]:
     return found
 
 
-def xremap_filter() -> dict[str, Any]:
+def xremap_filter(
+    processes: list[tuple[int, list[str]]] | None = None,
+) -> dict[str, Any]:
     """An unfiltered xremap grabs virtual keyboards and silently rewrites injection.
 
     The filter is a property of the running process, not of the config, so the
     live argv is what gets read.
     """
-    procs = [(pid, args) for pid, args in _processes() if Path(args[0]).name == "xremap"]
+    snapshot = _processes() if processes is None else processes
+    procs = [
+        (pid, args) for pid, args in snapshot if Path(args[0]).name == "xremap"
+    ]
     if not procs:
         return _check("xremap_filter", OK, "xremap not running; no remapping applies")
     unfiltered = [pid for pid, args in procs if "--device" not in args]
@@ -159,8 +162,11 @@ def xremap_filter() -> dict[str, Any]:
 LOCKERS = {"hyprlock", "swaylock", "gtklock", "waylock"}
 
 
-def session_unlocked() -> dict[str, Any]:
-    for _, args in _processes():
+def session_unlocked(
+    processes: list[tuple[int, list[str]]] | None = None,
+) -> dict[str, Any]:
+    snapshot = _processes() if processes is None else processes
+    for _, args in snapshot:
         locker = Path(args[0]).name
         if locker in LOCKERS:
             return _check(

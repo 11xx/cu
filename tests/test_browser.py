@@ -86,6 +86,28 @@ def test_the_users_config_overrides_the_browsers_own_file(tmp_path):
     assert source == "cu config"
 
 
+def test_an_explicitly_empty_override_stops_browser_fallback(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    path.write_text('[keys.zen]\nfocus-urlbar = ""\n')
+    cfg = config.load(path)
+    monkeypatch.setattr(browser, "keymap_for", lambda _browser: {"focus-urlbar": "ctrl+k"})
+
+    assert browser.resolve(entry(window_class="zen"), "focus-urlbar", cfg) == (
+        None,
+        "cu config",
+    )
+
+
+def test_an_absent_override_still_falls_through_to_the_browser(monkeypatch, tmp_path):
+    cfg = config.load(tmp_path / "absent.toml")
+    monkeypatch.setattr(browser, "keymap_for", lambda _browser: {"focus-urlbar": "ctrl+k"})
+
+    assert browser.resolve(entry(window_class="zen"), "focus-urlbar", cfg) == (
+        "ctrl+k",
+        "X configuration",
+    )
+
+
 def test_an_unresolvable_action_says_so(tmp_path):
     cfg = config.load(tmp_path / "absent.toml")
     chord, source = browser.resolve(entry(family="chromium", window_class="vivaldi"),

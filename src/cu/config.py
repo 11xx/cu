@@ -271,6 +271,23 @@ def log_path(cfg: dict[str, Any]) -> Path:
     return Path(cfg["log"]["path"]).expanduser()
 
 
+UNMAPPED = object()
+
+
+def binding_for(
+    cfg: dict[str, Any], window_class: str, action: str
+) -> str | object | None:
+    """Resolve a mapped, explicitly unmapped, or absent application binding."""
+    table = cfg.get("keys", {})
+    for name, actions in table.items():
+        if name.lower() == window_class.lower() and action in actions:
+            return actions[action] or UNMAPPED
+    wildcard = table.get("*", {})
+    if action in wildcard:
+        return wildcard[action] or UNMAPPED
+    return None
+
+
 def chord_for(cfg: dict[str, Any], window_class: str, action: str) -> str | None:
     """The chord a given application listens for, or None if unknown.
 
@@ -282,8 +299,5 @@ def chord_for(cfg: dict[str, Any], window_class: str, action: str) -> str | None
     application listed for one action inherits the wildcard for every other,
     which is how a chord ends up performing something else entirely.
     """
-    table = cfg.get("keys", {})
-    for name, actions in table.items():
-        if name.lower() == window_class.lower() and action in actions:
-            return actions[action] or None
-    return table.get("*", {}).get(action) or None
+    binding = binding_for(cfg, window_class, action)
+    return binding if isinstance(binding, str) else None

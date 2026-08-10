@@ -72,25 +72,51 @@ LIVE = [{"address": "0xdead", "logical_rect": WINDOW["logical_rect"]}]
 
 def test_fresh_window_frame_is_usable():
     f = frame({"x": 3, "y": 29, "w": 2042, "h": 1120}, {"w": 1, "h": 1}, window=WINDOW)
-    assert frames.staleness(f, LIVE) is None
+    assert frames.staleness(f, LIVE, MONITORS) is None
 
 
 def test_old_frame_is_stale():
     f = frame({"x": 0, "y": 0, "w": 1, "h": 1}, {"w": 1, "h": 1})
     f["captured_at"] = time.time() - 999
-    assert "old" in frames.staleness(f, LIVE)
+    assert "old" in frames.staleness(f, LIVE, MONITORS)
 
 
 def test_closed_window_makes_the_frame_stale():
     f = frame({"x": 3, "y": 29, "w": 2042, "h": 1120}, {"w": 1, "h": 1}, window=WINDOW)
-    assert "gone" in frames.staleness(f, [])
+    assert "gone" in frames.staleness(f, [], MONITORS)
 
 
 def test_moved_window_makes_the_frame_stale():
     """The image still looks plausible, which is exactly why age alone is not enough."""
     f = frame({"x": 3, "y": 29, "w": 2042, "h": 1120}, {"w": 1, "h": 1}, window=WINDOW)
     moved = [{"address": "0xdead", "logical_rect": {"x": 500, "y": 29, "w": 2042, "h": 1120}}]
-    assert "moved" in frames.staleness(f, moved)
+    assert "moved" in frames.staleness(f, moved, MONITORS)
+
+
+def output_frame() -> dict:
+    monitor = MONITORS[1]
+    return frame(
+        monitor["logical_rect"],
+        {"w": 1, "h": 1},
+        window=None,
+        monitor={"name": monitor["name"], "logical_rect": monitor["logical_rect"]},
+    )
+
+
+def test_unchanged_output_geometry_keeps_a_frame_usable():
+    assert frames.staleness(output_frame(), [], MONITORS) is None
+
+
+def test_changed_output_geometry_makes_a_frame_stale():
+    moved = [
+        MONITORS[0],
+        {**MONITORS[1], "logical_rect": {"x": 10, "y": 0, "w": 2048, "h": 1152}},
+    ]
+    assert "moved" in frames.staleness(output_frame(), [], moved)
+
+
+def test_vanished_output_makes_a_frame_stale():
+    assert "gone" in frames.staleness(output_frame(), [], [MONITORS[0]])
 
 
 def test_ids_are_monotonic_and_never_reused():
@@ -233,6 +259,8 @@ def test_shot_regions_keep_absolute_frame_rects(monkeypatch, capsys, argv, expec
     frame = json.loads(capsys.readouterr().out)
     assert frame["logical_rect"] == expected
     assert frame["source"] == source
+    captured_monitor = next(m for m in MONITORS if m["name"] == source["name"])
+    assert frame["monitor"]["logical_rect"] == captured_monitor["logical_rect"]
     assert grabbed == [expected]
 
 
@@ -335,6 +363,44 @@ def test_non_png_is_refused(tmp_path):
         capture.size_of(bad)
 
 
+def test_a_missing_capture_tool_is_a_tool_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(capture.shutil, "which", lambda _name: None)
+    with pytest.raises(capture.CaptureToolError, match="not installed"):
+        capture.grab_region(
+            {"x": 0, "y": 0, "w": 10, "h": 10}, tmp_path / "shot.png", 1.0
+        )
+
+
+def test_a_failed_capture_tool_is_a_tool_failure(monkeypatch, tmp_path):
+    class Failed:
+        returncode = 1
+        stderr = "capture failed"
+
+    monkeypatch.setattr(capture.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(capture.subprocess, "run", lambda *_args, **_kwargs: Failed())
+    with pytest.raises(capture.CaptureToolError, match="capture failed"):
+        capture.grab_region(
+            {"x": 0, "y": 0, "w": 10, "h": 10}, tmp_path / "shot.png", 1.0
+        )
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (capture.CaptureAimError("bad aim"), exits.DEGENERATE_AIM),
+        (capture.CaptureToolError("grim failed"), exits.PRECONDITION_FAILED),
+    ],
+)
+def test_capture_error_kinds_map_to_their_contract(monkeypatch, error, expected):
+    from cu import cli
+
+    def fail(_args):
+        raise error
+
+    monkeypatch.setattr(cli, "cmd_observe", fail)
+    assert cli.main(["observe"]) == expected
+
+
 def test_collect_drops_only_the_expired(monkeypatch):
     store = frames.store_dir()
     keep = store / "f1.json"
@@ -384,6 +450,8 @@ def _shot_world(monkeypatch, tmp_path, pixels: bytes):
 
     monkeypatch.setattr(capture_module, "grab_region", fake_grab)
     monkeypatch.setattr(capture_module, "size_of", lambda path: {"w": 800, "h": 600})
+    monkeypatch.setattr(observe, "windows", lambda _monitors: [SHOT_WINDOW])
+    monkeypatch.setattr(observe, "cursor", lambda: {"x": 0, "y": 0})
     return cli
 
 
@@ -430,7 +498,53 @@ def test_a_reused_frame_is_dated_by_the_capture_that_confirmed_it(
     cli.cmd_shot(_args())
     reused = json.loads(capsys.readouterr().out)
     assert frames.age(reused) < 5
-    assert frames.staleness(frames.load(first["id"]), [SHOT_WINDOW]) is None
+    assert frames.staleness(
+        frames.load(first["id"]), [SHOT_WINDOW], [{**MONITORS[1], "scale": 1.0}]
+    ) is None
+
+
+def test_if_changed_re_reads_the_cursor_only_when_reusing(
+    monkeypatch, tmp_path, capsys
+):
+    cli = _shot_world(monkeypatch, tmp_path, _png(1))
+    cli.cmd_shot(_args())
+    capsys.readouterr()
+    reads = []
+    monkeypatch.setattr(
+        cli.observe,
+        "cursor",
+        lambda: reads.append(True) or {"x": 31, "y": 47},
+    )
+
+    cli.cmd_shot(_args())
+    reused = json.loads(capsys.readouterr().out)
+    assert reused["cursor_logical"] == {"x": 31, "y": 47}
+    assert reads == [True]
+
+
+@pytest.mark.parametrize("moved", [False, True])
+def test_window_geometry_is_rechecked_after_capture(
+    monkeypatch, tmp_path, capsys, moved
+):
+    cli = _shot_world(monkeypatch, tmp_path, _png(1))
+    live = SHOT_WINDOW
+    if moved:
+        live = {
+            **SHOT_WINDOW,
+            "logical_rect": {**SHOT_WINDOW["logical_rect"], "x": 25},
+        }
+    queries = []
+    monkeypatch.setattr(
+        cli.observe,
+        "windows",
+        lambda monitors: queries.append(monitors) or [live],
+    )
+
+    result = cli.main(["shot", "--json", "--for", "claude"])
+    assert result == (exits.STALE_FRAME if moved else exits.OK)
+    assert len(queries) == 1
+    if moved:
+        assert "during capture" in capsys.readouterr().err
 
 
 def test_changed_pixels_produce_a_new_frame(monkeypatch, tmp_path, capsys):
@@ -493,6 +607,7 @@ def _watch_world(monkeypatch, sequence):
         dest.write_bytes(last)
 
     monkeypatch.setattr(capture_module, "grab_region", fake_grab)
+    monkeypatch.setattr(observe, "cursor", lambda: {"x": 7, "y": 8})
     clock = [0.0]
     monkeypatch.setattr(cli.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(
@@ -628,3 +743,22 @@ def test_after_frame_has_a_fresh_capture_time(monkeypatch, capsys):
     assert result["captured_at"] > reference["captured_at"]
     assert result["logical_rect"] == reference["logical_rect"]
     assert result["source"] == reference["source"]
+
+
+def test_after_re_reads_the_cursor_only_when_promoting(monkeypatch, capsys):
+    original = _watch_png(1)
+    changed = _watch_png(2)
+    cli, reference = _watch_world(monkeypatch, [original, original, changed])
+    reads = []
+    monkeypatch.setattr(
+        cli.observe,
+        "cursor",
+        lambda: reads.append(True) or {"x": 53, "y": 59},
+    )
+
+    argv = _watch_argv(reference, "--quiet-ms", "0")
+    assert cli.main(argv) == exits.OK
+    result = json.loads(capsys.readouterr().out)
+    assert result["wait"]["probes"] == 2
+    assert result["cursor_logical"] == {"x": 53, "y": 59}
+    assert reads == [True]

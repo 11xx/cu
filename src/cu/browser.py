@@ -283,8 +283,10 @@ def resolve(
     from . import config as config_module
 
     window_class = browser.get("window_class") or browser["binary"]
-    override = config_module.chord_for(cfg, window_class, action)
-    if override:
+    override = config_module.binding_for(cfg, window_class, action)
+    if override is config_module.UNMAPPED:
+        return None, "cu config"
+    if isinstance(override, str):
         return override, "cu config"
     keymap = keymap_for(browser)
     if action in keymap:

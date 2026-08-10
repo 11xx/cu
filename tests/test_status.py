@@ -335,6 +335,66 @@ def test_desktop_reserved_is_retryable_and_has_a_response():
     assert exits.DESKTOP_RESERVED in exits.RESPONSE
 
 
+def test_exclusive_begin_returns_no_id_when_registry_write_fails(
+    monkeypatch, capsys
+):
+    def unwritable(*_args, **_kwargs):
+        raise PermissionError("registry is unwritable")
+
+    monkeypatch.setattr(status.tempfile, "mkstemp", unwritable)
+
+    result = cli.main(
+        ["session", "begin", "--exclusive", "--why", "editing the report"]
+    )
+    captured = capsys.readouterr()
+    assert result == exits.RESERVATION_UNAVAILABLE
+    assert captured.out == ""
+    assert "registry is unwritable" in captured.err
+
+
+def test_injection_refuses_when_reservation_registry_cannot_be_read(
+    monkeypatch, capsys
+):
+    status.status_path().mkdir()
+    monkeypatch.setattr(cli, "cmd_key", lambda _args: exits.OK)
+
+    assert cli.main(["key", "--chord", "a"]) == exits.RESERVATION_UNAVAILABLE
+    assert "reservation registry is unavailable" in capsys.readouterr().err
+
+
+def test_injection_refuses_when_reservation_registry_has_no_driver_list(
+    monkeypatch
+):
+    status.status_path().write_text("{}")
+    monkeypatch.setattr(cli, "cmd_key", lambda _args: exits.OK)
+
+    assert cli.main(["key", "--chord", "a"]) == exits.RESERVATION_UNAVAILABLE
+
+
+def test_ordinary_publication_stays_best_effort_when_registry_is_unwritable():
+    status.status_path().mkdir()
+    published = status.publish("click", detail="still allowed")
+    assert published["detail"] == "still allowed"
+    assert status.read()["active"] is False
+
+
+def test_ordinary_publication_stays_best_effort_when_scratch_cannot_be_created(
+    monkeypatch
+):
+    monkeypatch.setattr(
+        status.tempfile,
+        "mkstemp",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("read-only")),
+    )
+    published = status.publish("click", detail="still allowed")
+    assert published["detail"] == "still allowed"
+
+
+def test_reservation_unavailable_is_documented_and_not_retryable():
+    assert exits.RESERVATION_UNAVAILABLE in exits.RESPONSE
+    assert exits.RESERVATION_UNAVAILABLE not in exits.RETRYABLE
+
+
 def test_a_corrupt_status_reads_as_idle_rather_than_raising():
     status.publish("shot")
     status.status_path().write_text("{ this is not json")

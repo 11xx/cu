@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from cu import cli, exits, recipes
+from cu import capture, cli, config, exits, frames, observe, recipes, wait
 
 
 @pytest.fixture(autouse=True)
@@ -229,6 +229,88 @@ def test_replay_exit_reflects_stated_verification(verified, expected, monkeypatc
 def test_a_missing_recipe_is_named_in_the_error():
     with pytest.raises(recipes.RecipeError, match="absent"):
         recipes.load("absent")
+
+
+def test_a_missing_recipe_maps_to_target_not_found(capsys):
+    assert cli.main(["recipe", "replay", "absent"]) == exits.TARGET_NOT_FOUND
+    assert "no recipe named 'absent'" in capsys.readouterr().err
+
+
+def test_a_replay_wait_timeout_maps_to_timed_out(monkeypatch, capsys):
+    recipe = build(
+        [
+            {
+                "action": "wait",
+                "condition": "window-open",
+                "class": "zen",
+                "window": {},
+            }
+        ]
+    )
+    recipes.save(recipe)
+    recipes.approve("demo")
+    monkeypatch.setattr(
+        wait,
+        "until",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(wait.WaitTimeout("late")),
+    )
+
+    assert cli.main(["recipe", "replay", "demo"]) == exits.TIMED_OUT
+    assert "step 1: late" in capsys.readouterr().err
+
+
+def test_a_genuine_recipe_policy_refusal_stays_denied(capsys):
+    recipes.save(build())
+    assert cli.main(["recipe", "replay", "demo"]) == exits.DENIED_BY_POLICY
+    assert "never been reviewed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("moved", [False, True])
+def test_recipe_capture_rechecks_window_geometry_without_querying_monitors(
+    monkeypatch, moved
+):
+    monitor = {
+        "name": "DP-1",
+        "scale": 1.0,
+        "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600},
+    }
+    window = {
+        "address": "0x1",
+        "class": "zen",
+        "title": "page",
+        "logical_rect": monitor["logical_rect"],
+    }
+    live = window
+    if moved:
+        live = {**window, "logical_rect": {**window["logical_rect"], "x": 20}}
+    queries = []
+
+    monkeypatch.setattr(
+        capture,
+        "grab_region",
+        lambda _rect, scratch, _scale: scratch.write_bytes(b"captured"),
+    )
+    monkeypatch.setattr(capture, "size_of", lambda _scratch: {"w": 800, "h": 600})
+    monkeypatch.setattr(
+        observe,
+        "windows",
+        lambda monitors: queries.append(monitors) or [live],
+    )
+    monkeypatch.setattr(
+        observe,
+        "monitors",
+        lambda: pytest.fail("recipe capture queried monitors again"),
+    )
+
+    if moved:
+        with pytest.raises(frames.FrameError, match="during capture"):
+            recipes._capture_window(window, [monitor], config.DEFAULTS, "claude")
+    else:
+        captured = recipes._capture_window(
+            window, [monitor], config.DEFAULTS, "claude"
+        )
+        assert captured["window"]["logical_rect"] == window["logical_rect"]
+    assert queries == [[monitor]]
 
 
 # --- the profile a replay will use ----------------------------------------

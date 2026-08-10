@@ -168,19 +168,31 @@ def age(frame: dict[str, Any]) -> float:
 
 
 def staleness(
-    frame: dict[str, Any], windows: list[dict[str, Any]], max_age: float = DEFAULT_MAX_AGE
+    frame: dict[str, Any],
+    windows: list[dict[str, Any]],
+    monitors: list[dict[str, Any]],
+    max_age: float = DEFAULT_MAX_AGE,
 ) -> str | None:
     """Why this frame can no longer be acted on, or None if it still can.
 
-    Age alone is a weak signal, so a frame that depicts a window is also
-    checked against that window still existing at the same geometry. A moved
-    window makes every coordinate in the frame wrong while the image still
-    looks perfectly plausible.
+    Age alone is a weak signal. A window frame is checked against that window's
+    geometry, while an output or region frame is checked against its output's
+    geometry. Either can move every coordinate while the image still looks
+    perfectly plausible.
     """
     if age(frame) > max_age:
         return f"frame is {age(frame):.0f}s old (limit {max_age:.0f}s)"
     window = frame.get("window")
     if window is None:
+        monitor = frame.get("monitor") or {}
+        captured = monitor.get("logical_rect")
+        if captured is None:
+            return "frame has no captured output geometry"
+        live = next((m for m in monitors if m["name"] == monitor.get("name")), None)
+        if live is None:
+            return f"output {monitor.get('name', '<unknown>')} is gone"
+        if live["logical_rect"] != captured:
+            return f"output {monitor['name']} moved or changed size since capture"
         return None
     live = next((w for w in windows if w["address"] == window["address"]), None)
     if live is None:

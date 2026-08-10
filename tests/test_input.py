@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from cu import actions, cli, compositor, config, exits, observe, safety, uinput
+from cu import actions, checks, cli, compositor, config, exits, observe, safety, uinput
 from cu.safety import Refused
 
 CFG = config.DEFAULTS
@@ -225,6 +225,44 @@ def test_an_empty_chord_in_a_user_table_unmaps_the_wildcard(tmp_path):
     assert config.chord_for(cfg, "zen", "paste") == "ctrl+v"
 
 
+def test_output_frame_preflight_uses_snapshot_monitors_without_another_query(
+    monkeypatch
+):
+    monitor = {
+        "name": "DP-1",
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+    }
+    stored = {
+        "id": "f1",
+        "captured_at": __import__("time").time(),
+        "logical_rect": monitor["logical_rect"],
+        "image_size": {"w": 100, "h": 100},
+        "window": None,
+        "monitor": monitor,
+    }
+    snapshot = {
+        "monitors": [monitor],
+        "windows": [],
+        "cursor_logical": {"x": 0, "y": 0},
+        "layer_surfaces": [],
+    }
+    monkeypatch.setattr(actions.frames, "load", lambda _frame_id: stored)
+    monkeypatch.setattr(observe, "snapshot", lambda: snapshot)
+    monkeypatch.setattr(
+        observe,
+        "monitors",
+        lambda: pytest.fail("frame preflight queried monitors again"),
+    )
+    monkeypatch.setattr(
+        observe,
+        "windows",
+        lambda _monitors: pytest.fail("frame preflight queried clients again"),
+    )
+
+    resolved = actions.resolve_target("f1", (10, 10), CFG)
+    assert resolved["aimed"]["logical"] == {"x": 10, "y": 10}
+
+
 def test_a_field_cu_cannot_select_reports_unverified(monkeypatch):
     """No select-all means no read-back, which is not the same as a mismatch:
     reporting failure would send an agent to retype text that did arrive.
@@ -342,6 +380,47 @@ def test_focus_confirms_the_dispatch_took_effect(monkeypatch):
     with pytest.raises(Refused) as caught:
         actions.focus(CFG, wanted, dry_run=False)
     assert caught.value.code == exits.FOCUS_CHANGED
+
+
+def test_lock_screen_appearing_between_repeated_chords_is_caught(monkeypatch):
+    focused = window(cls="zen")
+    snapshots = iter(
+        [
+            [],
+            [],
+            [(7, ["/usr/bin/hyprlock"])],
+        ]
+    )
+    sent = []
+    monkeypatch.setattr(
+        observe,
+        "snapshot",
+        lambda: {"focused": focused, "windows": [focused]},
+    )
+    monkeypatch.setattr(observe, "focused", lambda: focused)
+    monkeypatch.setattr(checks, "_processes", lambda *, fresh=False: next(snapshots))
+    monkeypatch.setattr(safety, "check_abort", lambda: None)
+    monkeypatch.setattr(safety, "check_denylist", lambda *_args: None)
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def chord(self, chord, _press_ms):
+            sent.append(chord)
+
+    monkeypatch.setattr(uinput, "Device", Device)
+
+    with pytest.raises(Refused) as caught:
+        actions.key(CFG, action=None, chord="a", repeat=2, dry_run=False)
+    assert caught.value.code == exits.DENIED_BY_POLICY
+    assert sent == ["a"]
 
 
 def test_an_output_frame_asserts_no_particular_window():
