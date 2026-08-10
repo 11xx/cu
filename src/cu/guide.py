@@ -33,9 +33,9 @@ OBSERVE BEFORE YOU LOOK
 
 CAPTURE ONLY WHAT YOU NEED TO READ
   cu shot --window active        The usual first call.
-  cu shot --output DP-2          A whole monitor.
+  cu shot --output OUTPUT-A      A whole monitor.
   cu shot --region '100,100 400x200'
-  cu shot --output DP-1 --region '0,0 900x26'
+  cu shot --output OUTPUT-A --region '0,0 900x26'
   cu shot --if-changed           Reuse the last frame when the pixels match.
   cu shot --after f3 --watch '0,0 200x26'
                                  Recapture after those pixels change and settle.
@@ -75,13 +75,20 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   one is a stanza under [capture.profiles] rather than a change to cu.
 
 ACT THROUGH THE FRAME YOU READ
+  cu focus zen
+  cu move --frame f3 --at 412,300
   cu click --frame f3 --at 412,300
+  cu scroll --frame f3 --at 412,300 --dy -3
 
   Coordinates are image pixels of a specific frame, always paired with its id.
   Never compute a screen coordinate yourself. `cu` owns every transform between
   image pixels, the compositor's logical space, and physical pixels — that
   arithmetic is the largest single source of confidently-wrong clicks, and it
   is already done for you.
+
+  `focus` redirects keyboard actions without moving the pointer. `move` aims the
+  pointer without pressing a button. `scroll` may aim through a frame first, or
+  omit --frame and --at to send wheel events where the pointer already sits.
 
   Every injecting command takes --dry-run, which runs each interlock and writes
   the same log entry without emitting an event.
@@ -192,7 +199,7 @@ YOU MAY NOT BE ALONE HERE
   checks the derived state every 250 ms, so that is its worst-case staleness.
 
 TYPING AND KEYS
-  cu type 'some text'            Clipboard by default; restores what was there.
+  cu type 'some text'            Clipboard by default; restores unless --no-restore.
   cu type 'some text' --verify   Read the field back and confirm it arrived.
   cu type 'x' --method keys      Per-character, for fields that reject a paste.
   cu key --action paste          Semantic, resolved for the focused application.
@@ -260,7 +267,8 @@ THE INTERLOCKS, AND WHAT TO TELL THE USER
   title reads like a credential prompt. The list is a default the user's config
   can change. If it refuses, do not work around it.
 
-  Recipes do not replay until a human has read and approved them. Show the
+  Recipes do not execute until a human has read and approved them. An unapproved
+  recipe may be replayed only with --dry-run, which injects nothing. Show the
   steps and ask; never approve on the user's behalf. A pointer recipe also
   refuses when its window was materially resized — re-record and review it,
   because a stored fraction cannot reveal how a control followed a resize.

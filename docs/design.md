@@ -48,19 +48,20 @@ Three coordinate spaces are in play, and conflating any two is *the* bug class:
 - **Image pixels** — what the model actually sees, after cropping and
   downscaling to fit a token budget.
 
-On this host the physical→logical ratio is 1.25 on one monitor and 1.0 on the
-other, so no global constant relates them. See [environment.md](environment.md).
+Outputs may report different scales, so no global constant relates physical and
+logical coordinates.
 
-Every capture emits a **frame descriptor** alongside the PNG:
+Every capture emits a **frame descriptor** alongside the PNG. These values are
+schematic:
 
 ```json
 {
-  "id": "f3",
-  "source": { "type": "output", "name": "DP-2" },
-  "logical_rect": { "x": 0, "y": 0, "w": 2048, "h": 1152 },
+  "id": "f12",
+  "source": { "type": "output", "name": "OUTPUT-A" },
+  "logical_rect": { "x": 0, "y": 0, "w": 1600, "h": 900 },
   "image_size":   { "w": 1280, "h": 720 },
-  "captured_at":  "2026-08-05T12:31:07Z",
-  "cursor_logical": { "x": 173.0, "y": 627.4 }
+  "captured_at":  1720000000.0,
+  "cursor_logical": { "x": 200.0, "y": 400.0 }
 }
 ```
 
@@ -95,11 +96,12 @@ cu click --frame f3 --at 412,300
 ```
 
 That pairing is what makes the whole thing safe. `cu` rejects a click against a
-frame whose window has since moved, closed, or lost focus, and against a frame
-older than a staleness threshold. The common catastrophic failure of pixel
-computer use — acting on coordinates read off a screenshot of a different
-monitor, or of a screen that has since changed — becomes a refused command
-rather than a misdirected click.
+frame whose window has since moved, resized, or closed, and against a frame
+older than a staleness threshold. Focus is not a pointer-staleness condition:
+clicking an unfocused window is how it becomes focused. The common catastrophic
+failure of pixel computer use — acting on coordinates read off a screenshot of
+a different monitor, or of a screen that has since changed — becomes a refused
+command rather than a misdirected click.
 
 ## Input: Hyprland positions, uinput acts
 
@@ -123,9 +125,10 @@ compositor policy, not something we control, and it is exactly the fragile
 surface this design is trying to eliminate.
 
 **Buttons, scroll, and keys via `/dev/uinput`.** A virtual keyboard and pointer
-created directly by the unprivileged process — no root, no `ydotoold`, verified
-writable as uid 1000. Hyprland's key dispatchers are keybind-oriented and a
-poor fit for free text.
+created directly by the process — no root and no resident input daemon. The
+current user must be able to open `/dev/uinput` for writing; `cu doctor` probes
+that precondition on the machine where it runs. Hyprland's key dispatchers are
+keybind-oriented and a poor fit for free text.
 
 So a click is: warp through IPC, assert the expected window is still under the
 point, then press and release through uinput.
@@ -188,16 +191,16 @@ Per-output capture is the primitive; whole-desktop capture is never used
 because Hyprland composites it at the largest scale in play, upscaling the
 unscaled monitor into a larger and blurrier image.
 
-Even so, one native output is 2560x1440 — near the per-image ceiling on its
-own, and the logical desktop is nearly three times that. Capture is therefore
-budgeted rather than literal:
+Even one native output can exceed a consumer's useful image budget, and a
+multi-output desktop is larger still. Capture is therefore budgeted rather
+than literal:
 
 - `cu shot --window active` crops to one window. Usually the right default:
   fewer tokens *and* more detail per token than a full output.
 - `cu shot --region <x>,<y> <w>x<h>` captures an arbitrary desktop-absolute
   strip. With `--output NAME`, the region's x and y are relative to that
   output's logical origin; the returned `logical_rect` stays desktop-absolute.
-- `cu shot --output DP-2` for a whole monitor.
+- `cu shot --output OUTPUT-A` for a whole monitor.
 - `--for <consumer>` selects a capture profile, which sets the downscale
   target. Profiles are configuration, not code — see below.
 - `--if-changed` hashes the region and skips re-sending an unchanged screen,
@@ -240,11 +243,9 @@ rather than under-priced, and a typo resolves to a refusal rather than to a
 silently ignored key.
 
 The shipped profiles record measurements, not preferences, and the measurement
-belongs in the config comment beside each. `claude` downscales to 1080p because
-that is both the recommended balance for computer use and the largest capture
-the high-resolution tier accepts without downscaling it again; returned
-coordinates map 1:1 to image pixels there, so no scale-factor correction is
-needed on the model's output, only the frame transform above.
+belongs in the config comment beside each. `cu profiles` prints every profile's
+resolved long edge and budget. A caller never compensates for that scaling: it
+pairs an image coordinate with its frame and leaves the transform to `cu`.
 
 Frames are written to disk and the path is printed with the descriptor. Both
 Claude Code and Codex read image files natively, which makes the filesystem the
@@ -276,8 +277,8 @@ that in check:
   available, and the guidance for the harness layer is to widen on the first
   surprise rather than re-aim repeatedly. Two aimed captures that disagree with
   expectation cost more than one full-output capture.
-- **`cu` refuses degenerate aims** — regions spanning outputs (which upscale),
-  and regions falling outside any window's current geometry.
+- **`cu` refuses degenerate aims** — an arbitrary region must lie on exactly
+  one output, because a cross-output capture would silently upscale part of it.
 
 Aimed capture is an optimization over a working default, not the default
 itself. `--window active` stays the recommended first call.
@@ -372,149 +373,55 @@ verifying, or re-aim before typing again.
 
 ## Testing without touching the user's screen
 
-**Verified.** `hyprctl output create headless` adds a real output the
-compositor treats like any other; applications launch onto it, `grim -o`
-captures rendered content from it, and removing it restores the session
-byte-identically. Details and measurements in
-[environment.md](environment.md).
+`cu sandbox create` asks the compositor for a headless output and reads back the
+one that actually appeared. Nothing selects that output automatically: using a
+screen the user cannot see remains an explicit act. Removal accepts only an
+output identified as headless, so the safer test surface cannot turn a typo into
+a blank physical monitor.
 
-So the test suite drives real applications on a monitor that does not
-physically exist — real compositor, real input path, real capture, and no
-possibility of stealing focus or clicking something on a screen the user is
-looking at. That is a better safety story than any amount of care taken while
-driving live outputs, and it makes the input stage developable at all.
-
-It also lands at scale 2.00, a third distinct scale alongside the host's 1.0
-and 1.25, so coordinate math gets exercised against a case neither real output
-covers.
+This supplies a compositor-managed output for input and capture experiments
+without putting them on a screen the user is reading. Its name, geometry, and
+scale come from live observation, so the same coordinate path is exercised
+without assuming a particular host layout.
 
 ## Browser control
 
-The largest module, and the one whose shape is dictated by a constraint rather
-than a preference.
+Its shape is dictated by a constraint rather than a preference.
 
 ### The constraint is automation detection, not authentication
 
-A logged-in session on a driver-controlled browser gets challenged anyway:
-correct credentials, correct 2FA, no VPN, and Cloudflare still captchas every
-page. Authenticating harder does not help, because what is detected is the
-automation, not the identity.
+A measured driver-controlled session was challenged despite being correctly
+authenticated. The experiment implicated automation rather than identity, so
+authenticating harder was not the answer.
 
 Two consequences follow, and they set the whole design:
 
-- **Driving a separate automation browser is the wrong default.** It is the
-  configuration that gets blocked, *and* it strands the user's real session —
+- **Driving a separate automation browser is the wrong default.** It can be
+  blocked, *and* it strands the user's real session —
   asking someone to log in again, in a browser they don't use, to let an agent
   change a setting in an account they are already signed into, is a bad trade
   even when it works.
 - **The real browser, with the real profile, is the target.** Real cookies,
   real profile, real fingerprint, launched the ordinary way.
 
-### Act with real input, read with a side channel
+### Discover browsers, resolve chrome actions, read content from pixels
 
-The split that satisfies both goals:
+Page content is read from ordinary frames and acted on through frame
+coordinates. The browser module adds only what browser chrome needs: it scans
+desktop entries marked as browsers, records their identity, executable, engine
+family, declared window class, and profile location, and matches those records
+to live windows.
 
-**Acting is always synthesized input** — the uinput device and cursor warp
-already built for the rest of the system, aimed at the user's normally-launched
-browser. These are kernel-level input events travelling the ordinary path
-through libinput and the compositor, so at the browser they are genuine events
-rather than protocol-injected ones. There is no automation protocol in the
-acting path at all.
+Chrome is driven by semantic keyboard actions because its layout is
+user-configurable. The engine family decides where a readable keymap may exist:
+Gecko actions can be translated from the active profile's `customKeys.json`,
+while a browser with no readable mapping resolves no actions of its own. A
+mapping in `cu` configuration takes precedence. If neither source resolves an
+action, `cu` refuses it rather than substituting a default chord.
 
-**Reading is a side channel** used only to *locate* things — element boxes,
-text, state — so the real input can be aimed. The read channel never performs
-the action.
-
-This inverts the usual driver design, where the protocol both finds the button
-and clicks it. Here it only finds it.
-
-Behavioral fingerprinting is a separate axis and is not solved by this: warping
-instantly between coordinates is itself a signal. Interpolated movement with
-plausible timing is a `cu` option rather than a browser-module concern, since
-it belongs to the input layer.
-
-### Read tiers, ordered by footprint
-
-Each tier is more informative and more conspicuous than the one above it. The
-module uses the least conspicuous tier that answers the question.
-
-1. **Pixels only.** Screenshot plus the model's own vision. Zero footprint,
-   works in every browser, needs no flags and no launch changes. Always
-   available as the floor.
-2. **Accessibility tree (AT-SPI).** Both engine families expose roles, names,
-   and element bounding boxes to assistive technology over D-Bus. This is not
-   an automation protocol — it is the interface screen readers use, so its
-   presence is an ordinary property of a real user's desktop rather than a bot
-   signal. If the coordinates it reports can be mapped into logical space, this
-   is the highest-value tier for this design, and it would upgrade every GUI
-   application, not only browsers.
-3. **CDP or WebDriver BiDi.** Richest: DOM, precise geometry, real load events.
-   Also the most conspicuous, and it requires launch flags. Reserved for sites
-   that do not fight automation, and never used for input.
-
-### Chrome is driven by resolved actions, content by pixels
-
-Zen, Vivaldi, and Helium have heavily customized interfaces, and Vivaldi can
-run with its window decoration toggled off entirely. Pixel-hunting for a URL
-bar across six browsers with divergent and user-reconfigurable chrome is
-unwinnable, so chrome is operated by keyboard and only page content by
-coordinates.
-
-**But the keyboard is not the stable layer — on this desktop it is the most
-customized one.** Keys pass through an Emacs remapping layer and then through
-each browser's own bindings before reaching an action, and the result is not
-predictable from defaults: focusing Zen's URL bar is `Ctrl+Alt+Shift+F4`,
-closing a tab is `Ctrl+Alt+Shift+Delete`, while opening a tab is still plain
-`Ctrl+T`. Some bindings are customized, some are not, and nothing about a
-chord's ordinariness predicts which. The full pipeline is in
-[environment.md](environment.md).
-
-So the design treats **the keymap as configuration to be read, never a constant
-to be assumed**:
-
-- `cu` exposes *semantic actions*, not chords: `cu browser focus-urlbar`,
-  `cu browser close-tab`. The agent never names a key combination.
-- The registry resolves each action to a chord **per browser, from that
-  browser's own configuration** — `customKeys.json` for the Gecko family,
-  whatever the equivalent is elsewhere — and re-reads it when the file changes.
-- An action with no known mapping is **refused, not guessed**. Falling back to
-  a documented default is the failure mode this whole section exists to
-  prevent: it would silently perform some other action rather than erroring.
-- Because injected keys enter after the remapping layer, the chord `cu` emits
-  is the one the browser listens for, not the one a human presses.
-
-The chrome-versus-content split survives, then, but for an inverted reason. It
-is not that keys are stable and pixels vary. It is that the keymap is
-*knowable from configuration* while chrome layout is not — so the part that
-varies per browser is still the part that never gets clicked, and the part that
-varies per user is read from disk rather than assumed.
-
-This generalizes past browsers. Any application may rebind anything, so `cu
-key` takes semantic names wherever a mapping is known and never assumes an
-application's defaults.
-
-### The browser registry
-
-Per-browser facts, discovered rather than assumed: executable path (resolved
-through desktop entries as well as `PATH`, since Helium has no `PATH` entry),
-engine family, window class for focus assertion, which read tiers are available
-and how to enable them, and quirks such as Vivaldi's optional decoration.
-
-### What has to be measured before it is trusted
-
-The stealth claims above are hypotheses with a known counter-example — driver
-automation on this host demonstrably got blocked — so they get tested rather
-than asserted. The probe is to load a site known to challenge automation under
-four configurations and compare outcomes: the real browser untouched; the real
-browser with a debug port open; the real browser driven by synthesized input;
-and a driver-launched browser as the known-bad control.
-
-Two specific unknowns feed into it. Recent Chromium versions restrict remote
-debugging against the default profile directory, which may make tier 3
-incompatible with using the user's real Chromium profile at all. And enabling
-the Gecko remote agent may set the `navigator.webdriver` flag, which is the
-single strongest tell there is. Both are cheap to check and both would change
-which tiers are viable per family.
+The resolved action is sent only after the named browser is confirmed to hold
+focus. It is logged by semantic name, so a recipe resolves the current mapping
+again instead of replaying a chord that may have changed.
 
 ## Recipes: turning a successful run into a repeatable one
 
@@ -532,11 +439,13 @@ not about a repository — the same login flow is worth reusing from any project
 The arc journal is deliberately per-project and is the wrong home. Recipes live
 under `$XDG_DATA_HOME/ai-computer-use/recipes/`, keyed by site and task.
 
-A recipe records its steps, its preconditions, a verification step that decides
-whether a replay actually worked, and a revision history carrying outcomes.
-That history is what makes the second request answerable: "do it differently"
-resolves to a superseded revision plus the recorded failure, so the next
-attempt starts from what went wrong rather than from nothing.
+A recipe records its steps, its preconditions, an optional verification step,
+and a revision history carrying outcomes. Promotion creates the verification
+field unset; a recipe without a check reports that the result was not verified
+rather than inventing success. The history is what makes the second request
+answerable: "do it differently" resolves to a superseded revision plus the
+recorded failure, so the next attempt starts from what went wrong rather than
+from nothing.
 
 Pointer steps retain both a window-relative position and the window size they
 were measured against. The fraction survives the window moving; it does not
@@ -617,17 +526,14 @@ for acting on the real screen rather than a headless output — but watchable
 only pays if the person can tell *that* it is happening without staring.
 
 **`cu` publishes state; it does not draw.** The indicator belongs in whatever
-the user already looks at, which on this desktop is the status bar.
+surface the user already watches.
 
 That split is not only taste. An overlay and a screenshot-driven agent compete
-for the same pixels: `grim` captures layer-shell surfaces, so anything `cu`
-drew would land in the frames the model then reads and acts on. Hyprland 0.56
-offers no exclusion — a `noscreenshare` layer rule is accepted and does
-nothing — which leaves hiding the overlay around every capture, or editing it
-back out of the PNG. The status bar is already a layer surface in every frame,
-so an indicator inside it adds no new interference at all. `observe` reports
-that geometry without claiming the layer receives a click, because geometry
-cannot establish its input region.
+for the same pixels: output capture includes layer-shell surfaces, so anything
+`cu` drew could land in the frames the model then reads and acts on. Publishing
+state lets an existing status surface render it without adding another overlay.
+`observe` reports layer geometry without claiming the layer receives a click,
+because geometry cannot establish its input region.
 
 Two artifacts, because there are two questions:
 
@@ -641,11 +547,12 @@ Two artifacts, because there are two questions:
 **It is a registry, not a record.** Nothing stops two harnesses from driving
 one desktop, and a single last-writer-wins record answers the user's question
 wrongly in exactly that case: the second agent's first command erases the
-first's, and the bar shows one agent while two are typing. Each driver is an
-entry keyed by its session, so the answer is a list and the bar shows how many
-things there are to reckon with. Mutations take a lock: atomic replacement
-keeps a *reader* whole, but does nothing to stop two writers building a new
-registry on the same stale copy and one of them winning.
+first's, and the bar shows one agent while two are typing. A bracketed driver is
+keyed by its session id; an unbracketed command is keyed as `pid:<pid>`. The
+answer is a list, so the bar shows how many things there are to reckon with.
+Mutations take a lock: atomic replacement keeps a *reader* whole, but does
+nothing to stop two writers building a new registry on the same stale copy and
+one of them winning.
 
 **A session is named, never inferred.** With two agents present, deriving which
 stretch of work a command belongs to from process ancestry is a guess, and a
@@ -765,13 +672,13 @@ also take `--dry-run`.
 | `cu know` | What past runs learned about an application; aims captures only | no |
 | `cu sandbox` | Create and remove headless outputs, explicitly | no |
 
-`observe`, `shot`, `pixel`, `magnify`, `wait`, and `focus` never touch the input
-path at all, which is what makes the read-heavy loop cheap and safe. `focus`
-earns its place there because `type` and `key` act on whatever holds focus, and
-without it an agent's only way to redirect them would be a click — which needs
-a frame and moves the pointer as a side effect.
+`observe`, `shot`, `pixel`, `magnify`, and `wait` never inject, which is what
+makes the read-heavy loop cheap and safe. `focus` is an action, but it needs no
+uinput device: it asks the compositor to redirect keyboard focus. Without it an
+agent's only way to redirect `type` and `key` would be a click, which needs a
+frame and moves the pointer as a side effect.
 
-### Measured cost per invocation
+### One measured example of invocation cost
 
 | Stage | Cost | Notes |
 | --- | --- | --- |
@@ -780,20 +687,20 @@ a frame and moves the pointer as a side effect.
 | Compositor enumeration | ~6 ms | Hyprland sees a new device quickly |
 | Device teardown | ~6 ms | |
 
-So a read command costs about 30 ms plus whatever `hyprctl` or `grim` takes,
-and an input command about 135 ms. That is comfortable enough that **the
-daemonless design holds** — the earlier worry that per-invocation device
-creation would force a resident process does not survive measurement.
+In this measured run, a read command cost about 30 ms plus whatever `hyprctl` or
+`grim` took, and an input command about 135 ms. That evidence is sufficient for
+the architectural conclusion: per-invocation device creation does not require
+a resident process.
 
 Two consequences do follow. **Batching matters**: `cu type` of a long string
 pays the device cost once, whereas fifty separate `cu key` calls pay it fifty
 times, so composite operations belong inside one invocation.
 
-And the settle delay turned out to be **load-bearing rather than removable**.
-Building the device costs about 30 ms of ioctls; the rest is a deliberate pause
-before the first event, and cutting it silently loses the *leading* keystrokes
-of every command. Typing a marker immediately after construction, four trials
-per setting:
+The same measured environment showed that the settle delay is **load-bearing
+rather than removable**. Building the device took about 30 ms of ioctls; the
+rest was a deliberate pause before the first event, and cutting it silently
+lost the *leading* keystrokes of commands. Typing a marker immediately after
+construction, four trials per setting:
 
 | Settle | Markers arriving intact |
 | --- | --- |
@@ -810,25 +717,21 @@ losses and is the shipped default, tunable as `input.settle_ms`. This is the
 single clearest argument against shaving per-invocation cost by reflex: the
 100 ms was doing something.
 
-## Seams to resolve before building
-
-The design fixes the architecture but leaves four mechanisms unspecified. Each
-is small, and each is load-bearing enough that guessing it during
-implementation would be a rewrite.
+## Implemented contracts
 
 **The frame store.** `--frame f3` is state that outlives a process, and there
 is no daemon to hold it. So frames live on disk under
 `$XDG_RUNTIME_DIR/cu/frames/` — tmpfs, `0700`, cleared on reboot, which suits
-data that is worthless once the screen has changed. Still to fix: how ids are
-allocated, the staleness threshold past which a frame is refused, and when old
-frames are collected.
+data that is worthless once the screen has changed. IDs are short and monotonic,
+allocated under a lock. Staleness checks age and, for a window frame, whether
+the window still exists at the captured geometry. Collection bounds both age
+and count.
 
-**The exit-code taxonomy.** "Stable exit codes" is promised but never
-enumerated, and the agent's behaviour depends entirely on which refusal it got.
-A stale frame means *re-capture and retry*. A focus change means *re-establish
-context*. The user's abort means **stop, and do not retry** — an agent that
-treats that as transient defeats the safety mechanism. These must be distinct
-codes with distinct documented responses.
+**The exit-code taxonomy.** `exits.RESPONSE` enumerates every code and its
+documented caller response, and `cu doctor --json` publishes that table. A stale
+frame means *re-capture and retry*. A focus change means *re-establish context*.
+The user's abort means **stop, and do not retry** — an agent that treats that as
+transient defeats the safety mechanism.
 
 No failure leaves by another door. Every error the package declares maps to a
 code, and anything unanticipated still exits `ERROR` with its type named on
@@ -848,12 +751,11 @@ enumerated rather than guessed at.
 
 An application's table can also state that it has *no* binding for an action,
 by giving it an empty chord. That stops the fallback rather than falling
-through it, and the distinction matters: a terminal that named only its paste
-and copy chords would inherit `ctrl+a` and `ctrl+z` from `*`, where they are a
-shell's beginning-of-line and a suspend signal. An unmapped action refuses; an
-inherited one performs something else and reports success.
+through it. The distinction matters because an application-specific table may
+need to prevent a wildcard chord from performing a different action and
+reporting success. An unmapped action refuses.
 
-**The abort mechanism.** The lockfile is `$XDG_RUNTIME_DIR/cu/abort` — session
+**The abort mechanism.** The flag is `$XDG_RUNTIME_DIR/cu/abort` — session
 state that must not survive a reboot. `cu abort` reports its state, and gives
 the user `--set` and `--clear` commands so every consumer names the interlock
 rather than its private path. Calls marked as agents by `CU_SESSION` or
@@ -861,35 +763,24 @@ rather than its private path. Calls marked as agents by `CU_SESSION` or
 path, retry, or instruction-following agent from changing it by accident; it
 cannot stop a determined agent from bypassing the command.
 
-`escape` carries no binding at all in this session's keymap, so the abort takes
-the modifier shape already used for display control:
-
-```lua
-bind("SUPER + ALT + escape", hl.dsp.exec_cmd("cu abort --set"),
-     { locked = true })
-bind("SUPER + CTRL + ALT + escape", hl.dsp.exec_cmd("cu abort --clear"),
-     { locked = true })
-```
-
-Two properties matter. `locked = true` keeps the abort reachable while the
-session is locked, which is when an unattended agent is least supervised. And
-clearing it is a *different chord* rather than a toggle: a toggle pressed twice
-in a panic would re-enable the thing being stopped.
+The host must bind set and clear as separate controls, with abort reachable
+while the session is locked, when an unattended agent is least supervised. A
+toggle pressed twice in a panic would re-enable the thing being stopped.
 
 ## Implementation
 
-Python with PEP 723 inline dependencies, run through `uv` — the measurements
-above were taken that way, so the approach is exercised rather than assumed.
-`uinput` is struct packing into a file descriptor and capture is subprocess
-orchestration; neither argues for a compiled language, and per-invocation
-overhead is ~28 ms.
+Python packaged from `pyproject.toml` with Hatchling and run through `uv`. The
+package declares no runtime dependencies. `uinput` is struct packing into a
+file descriptor and capture is subprocess orchestration; neither argues for a
+compiled language, and the measured example above keeps interpreter overhead
+visible rather than assumed away.
 
 The tradeoff is honest: a Rust `cu` would be a single distributable artifact,
 which matters if this is ever shared. Python is a reversible choice for now
 because the CLI contract, not the language, is what the harness layer depends
 on.
 
-### Build order
+### Dependency order
 
 Each stage is independently useful, and each is a precondition for the next.
 
@@ -901,23 +792,14 @@ Each stage is independently useful, and each is a precondition for the next.
    references. Worth getting exactly right before anything consumes it.
 4. **Input** — `move`, `click`, `type`, `key`, with the safety interlocks
    landing *with* the first injection rather than after it.
-5. **Browser and recipes** — the largest module, and the one still gated on the
-   fingerprint probe.
+5. **Browser and recipes** — semantic browser actions consume the input layer,
+   and recipes consume the action log and replay through the same interlocks.
 
-The headless-output probe that gated stage 4 is done, and passed — input is
-developable against a screen the user is not sitting in front of.
+## Open question
 
-## Open questions
-
-1. **Fingerprint probe.** The four-configuration test above settles which read
-   tiers are viable per engine family. It needs a site that reliably challenges
-   automation and a willingness to burn a few challenges on the account used.
-2. **AT-SPI coordinate space.** Whether the accessibility tree reports usable
-   coordinates under Wayland with mixed output scales decides whether tier 2 is
-   the backbone of the read path or a footnote.
-3. **Behavioral fingerprinting.** Instant warps between coordinates are a
-   signal in their own right. Interpolated movement with plausible timing
-   belongs to the input layer rather than the browser module, and is unbuilt.
+**Behavioral fingerprinting.** Instant warps between coordinates are a signal
+in their own right. Interpolated movement with plausible timing belongs to the
+input layer rather than the browser module, and is not implemented.
 
 ## Shelved: a Hyprland plugin
 
