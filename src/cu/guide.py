@@ -228,6 +228,12 @@ BROWSERS
   each browser's own configuration; a browser that resolves nothing until the
   user configures it is being honest, not broken.
 
+  Browser chrome may be configured to stay hidden until the pointer reaches a
+  reveal zone. When a browser is known to use hidden UI, inspect and hover the
+  likely window-edge zones before concluding that its address bar, toolbar, or
+  sidebar is absent. The exact edge is application and profile state: observe
+  it on this desktop and record a durable app-specific note with `cu know`.
+
 WHAT EARLIER RUNS LEARNED
   cu know host                   What this machine does differently.
   cu know show zen               Landmarks and notes for an application.
