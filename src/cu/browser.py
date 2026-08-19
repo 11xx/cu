@@ -64,6 +64,7 @@ GECKO_ACTIONS = {
     "forward": "goForwardKb",
     "home": "goHome",
     "reload": "key_reload",
+    "devtools": "key_toggleToolbox",
     "save-page": "key_savePage",
     "open-file": "openFileKb",
     "downloads": "key_openDownloads",
@@ -74,6 +75,45 @@ GECKO_ACTIONS = {
     "find": "key_find",
     "find-again": "key_findAgain",
     "quit": "key_quitApplication",
+}
+
+#: Window classes an installed browser is known to produce, for entries whose
+#: `Exec=` line is authoritative but that declare no `StartupWMClass`. Each one
+#: is a verified reading of a running window, not a guess from the binary name:
+#: a wrong class here would assert focus against a window that is not there.
+WINDOW_CLASSES = {
+    "helium-browser": "helium",
+}
+
+#: Keymaps declared per browser, for browsers that keep no readable binding
+#: file of their own. Chromium-family builds compile their accelerators in, so
+#: there is nothing on disk to read and nothing a user edit could change short
+#: of an extension — which makes a table the honest source rather than a guess.
+#:
+#: The key is the executable name, never the family. A fork is free to rebind
+#: anything, so membership in `CHROMIUM` says only where the binary came from;
+#: an entry here says someone established what this build actually listens for.
+DECLARED_KEYMAPS: dict[str, dict[str, str]] = {
+    "helium-browser": {
+        "focus-urlbar": "ctrl+l",
+        "new-tab": "ctrl+t",
+        "close-tab": "ctrl+w",
+        "reopen-tab": "ctrl+shift+t",
+        "new-window": "ctrl+n",
+        "close-window": "ctrl+shift+w",
+        "private-window": "ctrl+shift+n",
+        "back": "alt+left",
+        "forward": "alt+right",
+        "home": "alt+home",
+        "reload": "ctrl+r",
+        "save-page": "ctrl+s",
+        "open-file": "ctrl+o",
+        "downloads": "ctrl+j",
+        "find": "ctrl+f",
+        "find-again": "ctrl+g",
+        "zoom-reset": "ctrl+0",
+        "devtools": "f12",
+    },
 }
 
 #: Gecko modifier names. `accel` is the platform's primary modifier, which on
@@ -147,7 +187,7 @@ def discover() -> list[dict[str, Any]]:
                 "family": family,
                 # StartupWMClass is the entry's own statement of the window
                 # class it will produce, which is what focus assertion needs.
-                "window_class": entry.get("startupwmclass"),
+                "window_class": entry.get("startupwmclass") or WINDOW_CLASSES.get(name),
                 "profile_home": _profile_home(name),
             }
     return sorted(found.values(), key=lambda b: b["name"].lower())
@@ -262,14 +302,37 @@ def gecko_keymap(profile_home: Path) -> dict[str, str]:
 def keymap_for(browser: dict[str, Any]) -> dict[str, str]:
     """The actions this browser can be driven by, read from its own config.
 
-    A Chromium-family browser yields nothing: it keeps no readable binding
-    file, so every action is unmapped until a user states it in cu's config.
-    That is the honest answer — a table of Chromium defaults would be a guess
-    wearing a schema.
+    A Gecko browser is read from its profile. A browser with no readable
+    binding file resolves against `DECLARED_KEYMAPS`, which is keyed by
+    executable name: a build nobody established bindings for yields nothing,
+    and stays unmapped until a user states it under `[keys]` in cu's config.
     """
     if browser["family"] == "gecko" and browser["profile_home"]:
         return gecko_keymap(Path(browser["profile_home"]))
-    return {}
+    return dict(DECLARED_KEYMAPS.get(Path(browser["binary"]).name, {}))
+
+
+def unmapped_reason(browser: dict[str, Any]) -> str:
+    """Why this browser resolves no actions, and what would give it some.
+
+    An empty map is never a fault in the caller's request, so the report says
+    which of the two silences it is: a profile that could not be read, or a
+    build whose bindings nobody has established.
+    """
+    if browser["family"] == "gecko":
+        if not browser["profile_home"]:
+            return (
+                "no profile directory was found, so its keymap cannot be read; "
+                "state the actions under [keys] in cu's config"
+            )
+        return (
+            "its profile declares no custom keys, and cu will not assume the "
+            "built-in defaults; state the actions under [keys] in cu's config"
+        )
+    return (
+        "it keeps no readable keymap and cu has no declared bindings for this "
+        "build; state the actions under [keys] in cu's config"
+    )
 
 
 def resolve(
@@ -290,7 +353,12 @@ def resolve(
         return override, "cu config"
     keymap = keymap_for(browser)
     if action in keymap:
-        return keymap[action], f"{browser['name']} configuration"
+        # Provenance is part of the answer: a binding read out of the running
+        # browser's own profile and one declared here for a build that keeps
+        # none are worth different amounts of trust when a chord misfires.
+        declared = DECLARED_KEYMAPS.get(Path(browser["binary"]).name, {})
+        origin = "cu declared keymap" if action in declared else f"{browser['name']} configuration"
+        return keymap[action], origin
     return None, "unresolved"
 
 

@@ -189,3 +189,85 @@ def test_a_named_browser_can_be_the_focused_browser(monkeypatch, capsys):
     )
     assert cli.cmd_browser(args) == 0
     assert '"browser": "Zen"' in capsys.readouterr().out
+
+
+# --- browsers that keep no readable keymap -------------------------------
+
+
+def helium(**extra):
+    return entry(
+        id="helium-browser", name="Helium Browser", binary="/usr/bin/helium-browser",
+        family="chromium", window_class="helium", profile_home=None, **extra,
+    )
+
+
+def test_a_declared_build_resolves_the_ordinary_navigation_actions():
+    keymap = browser.keymap_for(helium())
+    assert keymap["focus-urlbar"] and keymap["reload"] and keymap["devtools"]
+
+
+def test_a_chromium_build_nobody_declared_resolves_nothing():
+    """Family membership says where a binary came from, not what it listens
+    for; a fork is free to rebind anything."""
+    assert browser.keymap_for(entry(family="chromium", binary="/usr/bin/brave")) == {}
+
+
+def test_a_declared_chord_says_it_came_from_cu_not_from_the_browser():
+    chord, source = browser.resolve(helium(), "reload", {"keys": {}})
+    assert chord == "ctrl+r"
+    assert source == "cu declared keymap"
+
+
+def test_a_user_binding_still_overrides_a_declared_one():
+    cfg = {"keys": {"helium": {"reload": "ctrl+shift+r"}}}
+    assert browser.resolve(helium(), "reload", cfg) == ("ctrl+shift+r", "cu config")
+
+
+def test_an_empty_keymap_says_which_silence_it_is():
+    chromium = browser.unmapped_reason(entry(family="chromium", binary="/usr/bin/brave"))
+    gecko = browser.unmapped_reason(entry(family="gecko", profile_home="/home/x/.zen"))
+    assert "declared bindings" in chromium
+    assert "profile" in gecko
+    assert "[keys]" in chromium and "[keys]" in gecko
+
+
+def test_a_declared_window_class_stands_in_for_a_missing_desktop_field(monkeypatch):
+    """The entry is authoritative about the Exec line and silent about the
+    class; a verified reading of the running window fills that in."""
+    assert browser.WINDOW_CLASSES["helium-browser"] == "helium"
+    assert browser.for_window_class("helium", [helium()])["name"] == "Helium Browser"
+
+
+def test_a_dry_run_resolves_without_the_browser_holding_focus(monkeypatch, capsys):
+    from argparse import Namespace
+
+    from cu import cli
+
+    monkeypatch.setattr(browser, "discover", lambda: [helium()])
+    monkeypatch.setattr(
+        cli.observe, "snapshot",
+        lambda: {"focused": {"address": "0x1", "class": "Alacritty", "title": "t"}},
+    )
+    args = Namespace(action="reload", browser="helium", backend=None, dry_run=True, json=True)
+    assert cli.cmd_browser(args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["chord"] == "ctrl+r" and payload["focused"] is False
+
+
+def test_a_focused_browser_with_no_actions_reports_why(monkeypatch, capsys):
+    from argparse import Namespace
+
+    from cu import cli
+
+    blank = entry(id="brave", name="Brave", binary="/usr/bin/brave", family="chromium",
+                  window_class="brave")
+    monkeypatch.setattr(browser, "discover", lambda: [blank])
+    monkeypatch.setattr(
+        cli.observe, "snapshot",
+        lambda: {"focused": {"address": "0x1", "class": "brave", "title": "t"}},
+    )
+    args = Namespace(action="actions", browser=None, backend=None, dry_run=False, json=True)
+    assert cli.cmd_browser(args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["actions"] == {}
+    assert "declared bindings" in payload["diagnostic"]

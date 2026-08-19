@@ -414,13 +414,20 @@ to live windows.
 
 Chrome is driven by semantic keyboard actions because its layout is
 user-configurable. The engine family decides where a readable keymap may exist:
-Gecko actions can be translated from the active profile's `customKeys.json`,
-while a browser with no readable mapping resolves no actions of its own. A
-mapping in `cu` configuration takes precedence. If neither source resolves an
-action, `cu` refuses it rather than substituting a default chord.
+Gecko actions can be translated from the active profile's `customKeys.json`.
+A browser that compiles its accelerators in has no such file, and for those a
+keymap may be declared per executable — never per family, because a fork is
+free to rebind anything and family membership says only where a binary came
+from. A build nobody declared resolves no actions of its own, and says which
+silence that is rather than reporting an empty table. A mapping in `cu`
+configuration takes precedence over both. If no source resolves an action, `cu`
+refuses it rather than substituting a default chord, and the reported
+provenance distinguishes a binding read from the running browser from one
+declared here.
 
 The resolved action is sent only after the named browser is confirmed to hold
-focus. It is logged by semantic name, so a recipe resolves the current mapping
+focus, except under `--dry-run`, which sends nothing and therefore answers
+about the browser rather than about what currently holds focus. It is logged by semantic name, so a recipe resolves the current mapping
 again instead of replaying a chord that may have changed.
 
 ## Recipes: turning a successful run into a repeatable one
