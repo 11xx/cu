@@ -889,3 +889,31 @@ def test_a_capture_keeps_the_strongest_identity_the_observer_gave_it():
     # And a document swap the title hides is then caught.
     moved = [{**live, "content_id": "https://a.example/two"}]
     assert frames.content_drift(frame, moved)
+
+
+def test_a_refreshed_capture_takes_the_current_document_identity():
+    """Keeping the older one would label a current picture with what the
+    window used to show, and every action through it would be refused."""
+    from cu import cli
+
+    captured = {"address": "0x1", "class": "zen", "title": "Dashboard",
+                "content_id": "https://a.example/one",
+                "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}
+    live = [{"address": "0x1", "class": "zen", "title": "Dashboard",
+             "content_id": "https://a.example/two",
+             "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}]
+    assert cli._current_window(captured, live)["content_id"] == "https://a.example/two"
+
+
+def test_a_drifting_title_exemption_does_not_excuse_a_changed_document():
+    """The exemption is about titles that move on their own; a document
+    identity changes only when the document does."""
+    rect = {"x": 0, "y": 0, "w": 800, "h": 600}
+    frame = {"id": "f1", "window": {"address": "0x1", "class": "zen", "title": "Mail",
+                                    "content_id": "url:A", "logical_rect": rect}}
+    live = [{"address": "0x1", "class": "zen", "title": "Mail (3)",
+             "content_id": "url:B", "logical_rect": rect}]
+    assert frames.content_drift(frame, live, ["zen"])
+    # The same exemption still absorbs a title that moved on its own.
+    same_document = [{**live[0], "content_id": "url:A"}]
+    assert frames.content_drift(frame, same_document, ["zen"]) is None

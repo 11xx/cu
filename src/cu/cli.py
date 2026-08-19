@@ -317,15 +317,21 @@ def _current_window(
     Only the identity is refreshed. Geometry belongs to the pixels: the image
     depicts the rectangle the capture was aimed at, so adopting a newer one
     would let a window that moved during the capture pass the staleness check
-    it should fail. Anything the capture recorded that is not read back here —
-    a `content_id` an adapter supplied — is carried through untouched.
+    it should fail.
+
+    Every identity the observer can supply is re-read, `content_id` included.
+    Keeping the older one would label a current picture with what the window
+    used to show, and every action through it would be refused.
     """
     if captured is None:
         return None
     live = next((w for w in windows if w["address"] == captured["address"]), None)
     if live is None:
         return captured
-    return {**captured, "class": live["class"], "title": live["title"]}
+    refreshed = {**captured, "class": live["class"], "title": live["title"]}
+    if live.get("content_id"):
+        refreshed["content_id"] = live["content_id"]
+    return refreshed
 
 
 def _frame_capture_scale(frame: dict[str, Any]) -> float:
