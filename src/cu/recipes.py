@@ -132,10 +132,13 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
         # Aimed typing replays as one step for the same reason it runs as one
         # command: splitting it back into a click and a type would reopen the
         # gap between selecting a field and filling it.
-        pointer = entry.get("pointer") or {}
-        if pointer.get("relative") and pointer.get("window_size"):
+        pointer = entry.get("pointer")
+        if pointer is not None:
+            window_class = (pointer.get("window") or {}).get("class")
+            if not (pointer.get("relative") and pointer.get("window_size") and window_class):
+                return None  # nothing that would survive the window moving
             step["relative"] = pointer["relative"]
-            step["window_class"] = (pointer.get("window") or {}).get("class")
+            step["window_class"] = window_class
             step["window_size"] = pointer["window_size"]
             step["button"] = pointer.get("button", "left")
             step["count"] = pointer.get("count", 1)
@@ -525,11 +528,14 @@ def _capture_window(
             visual_tokens=capture.visual_tokens(
                 image_size["w"], image_size["h"], profile
             ),
+            # Re-read after the capture rather than reused from before it:
+            # the title may have moved on while the shot was taken, and the
+            # frame must describe what its pixels actually show.
             window={
-                "address": window["address"],
-                "class": window["class"],
-                "title": window["title"],
-                "logical_rect": window["logical_rect"],
+                "address": live["address"],
+                "class": live["class"],
+                "title": live["title"],
+                "logical_rect": live["logical_rect"],
             },
         )
 

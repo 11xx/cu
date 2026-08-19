@@ -679,6 +679,8 @@ def _aimed(monkeypatch, clicked, focused, *, sent=None):
 def _click_result(win):
     return {
         "frame": "f23", "at": {"x": 455, "y": 320},
+        "_frame": {"id": "f23", "window": {"address": win["address"], "class": win["class"],
+                                          "title": win["title"]}},
         "logical": {"x": 500.0, "y": 400.0},
         "relative": {"x": 0.5, "y": 0.4},
         "button": "left", "count": 1,
@@ -739,3 +741,66 @@ def test_a_recipe_replays_an_aimed_type_as_one_step():
     assert step["action"] == "type"
     assert step["relative"] == {"x": 0.5, "y": 0.4}
     assert step["window_class"] == "zen"
+
+
+def test_an_aim_that_lands_on_no_window_types_nothing(monkeypatch):
+    """An aim with no window under it cannot say which field was selected, so
+    the text would go wherever focus already was."""
+    focused = window(address="0x2", cls="Alacritty")
+    clicked = _click_result(window(cls="zen"))
+    clicked["window"] = None
+    sent = []
+    _aimed(monkeypatch, clicked, focused, sent=sent)
+    recorded = []
+    monkeypatch.setattr(safety, "record", lambda _cfg, entry: recorded.append(entry))
+    with pytest.raises(Refused) as caught:
+        actions.type_text(CFG, "443", frame_id="f23", at=(455, 320), dry_run=False)
+    assert caught.value.code == exits.TARGET_NOT_FOUND
+    assert sent == []
+    # The click still happened, so the log says so.
+    assert [e["action"] for e in recorded] == ["click"]
+    assert recorded[0]["typed"] is False
+
+
+def test_a_click_whose_typing_refuses_is_still_logged(monkeypatch):
+    """Nothing else writes that click down: the aimed action owns it."""
+    aimed_at = window(address="0x1", cls="zen")
+    elsewhere = window(address="0x2", cls="Alacritty")
+    _aimed(monkeypatch, _click_result(aimed_at), elsewhere)
+    recorded = []
+    monkeypatch.setattr(safety, "record", lambda _cfg, entry: recorded.append(entry))
+    with pytest.raises(Refused):
+        actions.type_text(CFG, "443", frame_id="f23", at=(455, 320), dry_run=False)
+    assert [e["action"] for e in recorded] == ["click"]
+    assert "_frame" not in recorded[0]
+
+
+def test_a_page_that_navigates_under_the_click_stops_the_text(monkeypatch):
+    """A click can navigate as well as select, and the plan was about the
+    document that was there before it."""
+    field = window(cls="zen", title="page A", logical_rect={"x": 0, "y": 0, "w": 8, "h": 6})
+    clicked = _click_result(field)
+    clicked["_frame"] = {
+        "id": "f23",
+        "window": {"address": field["address"], "class": "zen", "title": "page A"},
+    }
+    navigated = window(cls="zen", title="page B", logical_rect={"x": 0, "y": 0, "w": 8, "h": 6})
+    sent = []
+    _aimed(monkeypatch, clicked, navigated, sent=sent)
+    with pytest.raises(Refused) as caught:
+        actions.type_text(CFG, "443", frame_id="f23", at=(455, 320), dry_run=False)
+    assert caught.value.code == exits.CONTENT_CHANGED
+    assert sent == []
+
+
+def test_a_pointer_without_a_replayable_position_is_not_promoted():
+    """Downgrading it to an unaimed step would replay by typing into whatever
+    holds focus, which is the gap the aimed action closes."""
+    from cu import recipes
+
+    entry = {
+        "action": "type", "length": 3, "method": "clipboard",
+        "window": {"address": "0x1", "class": "zen"},
+        "pointer": {"button": "left", "count": 1, "window": None},
+    }
+    assert recipes.step_from_log(entry) is None

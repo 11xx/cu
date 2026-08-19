@@ -835,3 +835,26 @@ def test_the_interlock_can_be_turned_off_wholesale(monkeypatch):
     cfg = config.load()
     cfg["safety"]["frame_content_identity"] = False
     safety.check_frame(cfg, _window_frame("YouTube - Helium"), _live("Instagram - Helium"), [])
+
+
+def test_a_reused_frame_re_reads_the_identity_with_the_pixels(monkeypatch, tmp_path):
+    """Identical pixels prove the picture is current, so the identity it
+    depicts is re-read with it — otherwise a frame just re-proven against the
+    screen is refused as depicting content that changed."""
+    from cu import cli
+
+    captured = {"address": "0x1", "class": "zen", "title": "page A",
+                "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}
+    live = [{"address": "0x1", "class": "zen", "title": "page B",
+             "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}]
+    assert cli._current_window(captured, live)["title"] == "page B"
+
+
+def test_a_window_that_vanished_keeps_what_the_capture_recorded():
+    """Staleness answers a missing window; inventing a current identity for
+    one that is gone would be worse than reporting what was seen."""
+    from cu import cli
+
+    captured = {"address": "0x1", "class": "zen", "title": "page A",
+                "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}
+    assert cli._current_window(captured, [])["title"] == "page A"

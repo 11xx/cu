@@ -172,8 +172,18 @@ def click(
     dry_run: bool,
 ) -> dict[str, Any]:
     result = _aimed_click(cfg, frame_id, at, button=button, count=count, dry_run=dry_run)
-    safety.record(cfg, result)
-    return result
+    safety.record(cfg, _loggable(result))
+    return _loggable(result)
+
+
+def _loggable(result: dict[str, Any]) -> dict[str, Any]:
+    """The parts of a result that belong to the caller and the log.
+
+    An aimed action carries the frame descriptor it resolved so a later step
+    can re-assert it without reloading a frame that may since have been
+    collected. That is machinery, not evidence, and the log is evidence.
+    """
+    return {key: value for key, value in result.items() if not key.startswith("_")}
 
 
 def _aimed_click(
@@ -234,6 +244,7 @@ def _aimed_click(
         ),
         "layer_surface": layer_surface,
         "dry_run": dry_run,
+        "_frame": target["frame"],
     }
     return result
 
@@ -340,6 +351,19 @@ def _clipboard_clear() -> None:
         raise ClipboardError(f"wl-copy --clear exited {proc.returncode}")
 
 
+def _record_orphaned_click(cfg: dict[str, Any], pointer: dict[str, Any]) -> None:
+    """Log a click that happened while the action it belonged to did not.
+
+    An aimed type owns its click so the pair promotes as one step, which means
+    nothing else writes that click down. When the typing half refuses, the
+    click still moved the pointer and pressed a button on someone's desktop,
+    and the log is the only record of what an agent did while nobody watched.
+    """
+    if pointer.get("dry_run"):
+        return
+    safety.record(cfg, {**_loggable(pointer), "action": "click", "typed": False})
+
+
 def type_text(
     cfg: dict[str, Any],
     text: str,
@@ -374,10 +398,48 @@ def type_text(
     if (frame_id is None) != (at is None):
         raise ValueError("aimed typing needs both a frame and a point")
 
-    pointer = None
-    if frame_id is not None and at is not None:
-        pointer = _aimed_click(
-            cfg, frame_id, at, button=button, count=count, dry_run=dry_run
+    if frame_id is None or at is None:
+        return _type_into_focus(
+            cfg, text, method=method, restore_clipboard=restore_clipboard,
+            backend=backend, verify=verify, pointer=None, dry_run=dry_run,
+        )
+
+    pointer = _aimed_click(cfg, frame_id, at, button=button, count=count, dry_run=dry_run)
+    try:
+        return _type_into_focus(
+            cfg, text, method=method, restore_clipboard=restore_clipboard,
+            backend=backend, verify=verify, pointer=pointer, dry_run=dry_run,
+        )
+    except BaseException:
+        # The click already happened on someone's desktop. Whatever stopped
+        # the text, the log is the only record that the pointer moved and a
+        # button went down, so it is written before the failure propagates.
+        _record_orphaned_click(cfg, pointer)
+        raise
+
+
+def _type_into_focus(
+    cfg: dict[str, Any],
+    text: str,
+    *,
+    method: str,
+    restore_clipboard: bool,
+    backend: str | None,
+    verify: bool,
+    pointer: dict[str, Any] | None,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Enter text into whatever holds focus, asserting an aim when there was one."""
+    backend = backend or cfg["input"]["key_backend"]
+    if pointer is not None and pointer["window"] is None:
+        # An aim that landed on no window cannot say which field was selected,
+        # and the focus assertion below would have nothing to compare against
+        # — so the text would go wherever focus already was, which is the
+        # failure this command exists to prevent.
+        raise Refused(
+            exits.TARGET_NOT_FOUND,
+            "the aimed point is on no window, so nothing there can receive "
+            "the text; re-observe and aim inside the field's window",
         )
 
     snap = observe.snapshot()
@@ -391,13 +453,17 @@ def type_text(
     if pointer is not None and not dry_run:
         # Clicking a window is how it takes focus, so a click that did not
         # produce it means the text would land somewhere nobody aimed at.
-        aimed_at = (pointer["window"] or {}).get("address")
-        if aimed_at is not None and window["address"] != aimed_at:
+        aimed_at = pointer["window"]["address"]
+        if window["address"] != aimed_at:
             raise Refused(
                 exits.FOCUS_CHANGED,
-                f"the click landed on {(pointer['window'] or {}).get('class')} but "
+                f"the click landed on {pointer['window']['class']} but "
                 f"{window['class']} holds keyboard focus; nothing was typed",
             )
+        # A click can navigate as well as select. Asking again here is what
+        # keeps the text out of a document that replaced the one aimed at
+        # between the plan and the keystroke.
+        safety.check_content(cfg, pointer["_frame"], snap["windows"])
 
     chord = None
     if method == "clipboard":
@@ -693,8 +759,11 @@ def _live_pointer_target(
     cursor = observe.cursor()
     if expected is not None:
         safety.confirm_pointer(cfg, (expected["x"], expected["y"]), cursor)
-    under = observe.window_at(cursor["x"], cursor["y"], observe.windows(monitors))
+    windows = observe.windows(monitors)
+    under = observe.window_at(cursor["x"], cursor["y"], windows)
     safety.preflight_pointer(cfg, under, frame)
+    if frame is not None:
+        safety.check_content(cfg, frame, windows)
     return under, cursor
 
 

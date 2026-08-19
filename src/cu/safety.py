@@ -152,15 +152,29 @@ def check_frame(
     )
     if why:
         raise Refused(exits.STALE_FRAME, f"frame {frame['id']}: {why}")
-    # A separate code from staleness because the caller's next move differs:
-    # a stale frame is recaptured and the plan stands, while content that
-    # changed underneath means the plan was made about something else.
-    if cfg["safety"]["frame_content_identity"]:
-        drifted = frames.content_drift(
-            frame, windows, cfg["safety"]["title_drift_classes"]
-        )
-        if drifted:
-            raise Refused(exits.CONTENT_CHANGED, drifted)
+    check_content(cfg, frame, windows)
+
+
+def check_content(
+    cfg: dict[str, Any], frame: dict[str, Any], windows: list[dict[str, Any]]
+) -> None:
+    """Refuse when the window still holds the frame's place but shows something else.
+
+    A separate code from staleness because the caller's next move differs: a
+    stale frame is recaptured and the plan stands, while content that changed
+    underneath means the plan was made about something else.
+
+    Called again immediately before the event, not only when the frame is
+    resolved. Device enumeration takes long enough for a page to navigate, and
+    a check that stops at the plan cannot see that.
+    """
+    if not cfg["safety"]["frame_content_identity"]:
+        return
+    drifted = frames.content_drift(
+        frame, windows, cfg["safety"]["title_drift_classes"]
+    )
+    if drifted:
+        raise Refused(exits.CONTENT_CHANGED, drifted)
 
 
 def confirm_pointer(cfg: dict[str, Any], want: tuple[float, float], got: dict[str, float]) -> None:

@@ -232,6 +232,12 @@ def content_drift(
     A class listed in `drift_classes` is exempt: some titles carry a clock or
     an unread count and move on their own, and refusing those would train a
     caller to turn the whole interlock off.
+
+    A title is what every window has, not what every change moves: a document
+    swap that keeps the title passes this. It narrows the window in which a
+    coordinate can be wrong rather than closing it, which is why a frame is
+    still bound to a moment and why `content_id` exists for an adapter that
+    can name the document itself.
     """
     window = frame.get("window")
     captured = content_identity(frame)
