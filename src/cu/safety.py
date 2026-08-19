@@ -152,6 +152,15 @@ def check_frame(
     )
     if why:
         raise Refused(exits.STALE_FRAME, f"frame {frame['id']}: {why}")
+    # A separate code from staleness because the caller's next move differs:
+    # a stale frame is recaptured and the plan stands, while content that
+    # changed underneath means the plan was made about something else.
+    if cfg["safety"]["frame_content_identity"]:
+        drifted = frames.content_drift(
+            frame, windows, cfg["safety"]["title_drift_classes"]
+        )
+        if drifted:
+            raise Refused(exits.CONTENT_CHANGED, drifted)
 
 
 def confirm_pointer(cfg: dict[str, Any], want: tuple[float, float], got: dict[str, float]) -> None:

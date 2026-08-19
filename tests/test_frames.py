@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cu import capture, exits, frames, png
+from cu import capture, config, exits, frames, png
 from cu.cli import _parse_region
 
 MONITORS = [
@@ -762,3 +762,76 @@ def test_after_re_reads_the_cursor_only_when_promoting(monkeypatch, capsys):
     assert result["wait"]["probes"] == 2
     assert result["cursor_logical"] == {"x": 53, "y": 59}
     assert reads == [True]
+
+
+# --- content identity ----------------------------------------------------
+
+
+def _window_frame(title="page A", address="0x1", cls="helium"):
+    return {
+        "id": "f60",
+        "window": {"address": address, "class": cls, "title": title,
+                   "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}},
+        "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600},
+        "image_size": {"w": 800, "h": 600},
+        "captured_at": time.time(),
+    }
+
+
+def _live(title="page A", address="0x1", cls="helium"):
+    return [{"address": address, "class": cls, "title": title,
+             "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}]
+
+
+def test_the_same_window_showing_the_same_thing_has_not_drifted():
+    assert frames.content_drift(_window_frame(), _live()) is None
+
+
+def test_a_tab_that_navigated_is_reported_with_both_identities():
+    why = frames.content_drift(_window_frame("YouTube - Helium"), _live("Instagram - Helium"))
+    assert "YouTube - Helium" in why and "Instagram - Helium" in why
+
+
+def test_geometry_alone_cannot_see_a_navigation():
+    """The window did not move, so staleness is silent — which is the whole
+    reason content identity is a separate question."""
+    frame = _window_frame("YouTube - Helium")
+    assert frames.staleness(frame, _live("Instagram - Helium"), []) is None
+
+
+def test_a_class_whose_title_drifts_can_be_exempted():
+    frame = _window_frame("inbox (3)", cls="thunderbird")
+    live = _live("inbox (4)", cls="thunderbird")
+    assert frames.content_drift(frame, live, ["Thunderbird"]) is None
+
+
+def test_an_output_frame_depicts_no_window_and_asserts_nothing():
+    assert frames.content_drift({"id": "f1", "monitor": {"name": "DP-2"}}, _live()) is None
+
+
+def test_a_better_identity_wins_over_the_title():
+    """A browser adapter that can name the document should be believed over a
+    title, which a page controls and can leave unchanged across a navigation."""
+    frame = _window_frame()
+    frame["window"]["content_id"] = "https://a.example/one"
+    live = _live()
+    live[0]["content_id"] = "https://a.example/two"
+    assert "one" in frames.content_drift(frame, live)
+
+
+def test_a_frame_backed_action_refuses_before_injecting(monkeypatch):
+    from cu import exits, safety
+
+    cfg = config.load()
+    frame = _window_frame("YouTube - Helium")
+    with pytest.raises(safety.Refused) as caught:
+        safety.check_frame(cfg, frame, _live("Instagram - Helium"), [])
+    assert caught.value.code == exits.CONTENT_CHANGED
+
+
+def test_the_interlock_can_be_turned_off_wholesale(monkeypatch):
+    from cu import safety
+
+    cfg = config.load()
+    cfg["safety"]["frame_content_identity"] = False
+    safety.check_frame(cfg, _window_frame("YouTube - Helium"), _live("Instagram - Helium"), [])

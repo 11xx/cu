@@ -97,7 +97,14 @@ cu click --frame f3 --at 412,300
 
 That pairing is what makes the whole thing safe. `cu` rejects a click against a
 frame whose window has since moved, resized, or closed, and against a frame
-older than a staleness threshold. Focus is not a pointer-staleness condition:
+older than a staleness threshold. Geometry is only half the question: a window
+that renders documents keeps its address, class, and rectangle while the
+document inside it is replaced, so a frame also carries the identity of what it
+depicted — a title, or a better identity where an adapter has one — and an
+action through a frame whose window now shows something else is refused rather
+than aimed at the old picture's coordinate. Classes whose titles drift on their
+own can be exempted explicitly, which is a narrower relaxation than turning the
+check off. Focus is not a pointer-staleness condition:
 clicking an unfocused window is how it becomes focused. The common catastrophic
 failure of pixel computer use — acting on coordinates read off a screenshot of
 a different monitor, or of a screen that has since changed — becomes a refused
@@ -731,8 +738,10 @@ is no daemon to hold it. So frames live on disk under
 `$XDG_RUNTIME_DIR/cu/frames/` — tmpfs, `0700`, cleared on reboot, which suits
 data that is worthless once the screen has changed. IDs are short and monotonic,
 allocated under a lock. Staleness checks age and, for a window frame, whether
-the window still exists at the captured geometry. Collection bounds both age
-and count.
+the window still exists at the captured geometry; content identity is checked
+separately, because recapturing fixes a stale frame while content that changed
+underneath means the plan was made about something else. Collection bounds both
+age and count.
 
 **The exit-code taxonomy.** `exits.RESPONSE` enumerates every code and its
 documented caller response, and `cu doctor --json` publishes that table. A stale

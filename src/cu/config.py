@@ -78,6 +78,18 @@ DEFAULTS: dict[str, Any] = {
         "denylist_titles": ["password", "passphrase", "unlock", "sign in", "2fa"],
         # A frame older than this no longer describes the screen.
         "frame_max_age": 60.0,
+        # Whether a window frame is bound to the content it depicted as well
+        # as to the window that held it. A browser tab that navigates keeps
+        # its address, class, and geometry while every coordinate in the
+        # capture now points at a different document, which no geometric
+        # check can see. Strict is the default because that failure injects
+        # confidently into the wrong page.
+        "frame_content_identity": True,
+        # Window classes whose titles legitimately drift while the content
+        # stands still — a clock, an unread count, a progress percentage.
+        # Listing one exempts it from the title check and nothing else, and
+        # it is a deliberate relaxation rather than a default.
+        "title_drift_classes": [],
         # How far the cursor may sit from where cu warped it before cu
         # concludes a human is driving the mouse and yields.
         "cursor_drift_tolerance": 12.0,
