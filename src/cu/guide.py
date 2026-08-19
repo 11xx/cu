@@ -210,8 +210,17 @@ TYPING AND KEYS
   cu type 'some text'            Clipboard by default; restores unless --no-restore.
   cu type 'some text' --verify   Read the field back and confirm it arrived.
   cu type 'x' --method keys      Per-character, for fields that reject a paste.
+  cu type '443' --frame f23 --at 455,320 --verify
   cu key --action paste          Semantic, resolved for the focused application.
   cu key --chord ctrl+alt+shift+f4
+
+  Filling a visual form aims with the same command that types. A separate
+  click releases the desktop before `type` takes it again, and in that gap
+  focus can move inside the same window or the page can replace the control
+  while the window's address and title stand still — after which the text goes
+  somewhere nobody looked at. Given --frame and --at, `type` revalidates the
+  target, clicks, confirms the click produced keyboard focus, injects, and
+  verifies, all under one hold on the desktop.
 
   Use --verify for anything that matters. Without it, a paste an application
   silently rejected is indistinguishable from success. It answers `ok`, or

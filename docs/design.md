@@ -437,6 +437,22 @@ focus, except under `--dry-run`, which sends nothing and therefore answers
 about the browser rather than about what currently holds focus. It is logged by semantic name, so a recipe resolves the current mapping
 again instead of replaying a chord that may have changed.
 
+### Aimed typing is one action, not two
+
+Entering a value into a visual form is a click and a keystroke, and between two
+commands the desktop lock is released and retaken. Focus can move within the
+same window, or a page can replace the control, while the window's address and
+title are unchanged — so the second command validates exactly what it would
+have validated anyway and types into something else. Read-back catches some of
+that, but only after the text has landed.
+
+So `type` optionally owns the aim: given a frame and a point it revalidates the
+frame-backed target, warps and clicks under the existing pointer interlocks,
+confirms that the click produced keyboard focus for the window it aimed at,
+injects, and verifies — one transaction under one hold. The pointer target and
+the typing result are both recorded, and a recipe replays the combined action
+as one step rather than decomposing it back into an unsafe gap.
+
 ## Recipes: turning a successful run into a repeatable one
 
 Driving a site well once is worth keeping. The natural requests are "you did

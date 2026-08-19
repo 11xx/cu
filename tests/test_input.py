@@ -654,3 +654,88 @@ def test_an_empty_read_back_is_unverified_not_a_failure():
 def test_verification_failure_is_not_retryable():
     """Retyping blindly can duplicate whatever did land."""
     assert exits.VERIFY_FAILED not in exits.RETRYABLE
+
+
+# --- aimed typing ---------------------------------------------------------
+
+
+def _aimed(monkeypatch, clicked, focused, *, sent=None):
+    """Stub the click half of an aimed type and report what typing saw."""
+    monkeypatch.setattr(safety, "_common", lambda *a: None)
+    monkeypatch.setattr(
+        observe, "snapshot", lambda: {"focused": focused, "windows": [focused]}
+    )
+    monkeypatch.setattr(
+        actions, "_aimed_click", lambda *a, **k: clicked
+    )
+    monkeypatch.setattr(actions.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(actions, "_clipboard_read", lambda: None)
+    monkeypatch.setattr(actions, "_clipboard_write", (sent if sent is not None else []).append)
+    monkeypatch.setattr(actions, "_clipboard_clear", lambda: None)
+    monkeypatch.setattr(actions, "send_chords", lambda *a, **k: None)
+    monkeypatch.setattr(actions.time, "sleep", lambda _seconds: None)
+
+
+def _click_result(win):
+    return {
+        "frame": "f23", "at": {"x": 455, "y": 320},
+        "logical": {"x": 500.0, "y": 400.0},
+        "relative": {"x": 0.5, "y": 0.4},
+        "button": "left", "count": 1,
+        "window": {"address": win["address"], "class": win["class"], "title": win["title"]},
+        "window_size": {"w": 800, "h": 600},
+    }
+
+
+def test_an_aimed_type_records_both_halves(monkeypatch):
+    field = window(cls="zen", logical_rect={"x": 0, "y": 0, "w": 800, "h": 600})
+    sent = []
+    _aimed(monkeypatch, _click_result(field), field, sent=sent)
+    result = actions.type_text(CFG, "443", frame_id="f23", at=(455, 320), dry_run=False)
+    assert sent == [b"443"]
+    assert result["pointer"]["at"] == {"x": 455, "y": 320}
+    assert result["pointer"]["relative"] == {"x": 0.5, "y": 0.4}
+
+
+def test_a_click_that_did_not_take_focus_refuses_before_any_text(monkeypatch):
+    """The click landing somewhere the keyboard did not follow is exactly the
+    gap this command exists to close, so nothing is typed."""
+    aimed_at = window(address="0x1", cls="zen", logical_rect={"x": 0, "y": 0, "w": 8, "h": 6})
+    elsewhere = window(address="0x2", cls="Alacritty")
+    sent = []
+    _aimed(monkeypatch, _click_result(aimed_at), elsewhere, sent=sent)
+    with pytest.raises(Refused) as caught:
+        actions.type_text(CFG, "443", frame_id="f23", at=(455, 320), dry_run=False)
+    assert caught.value.code == exits.FOCUS_CHANGED
+    assert sent == []
+
+
+def test_half_an_aim_is_a_usage_error():
+    with pytest.raises(ValueError):
+        actions.type_text(CFG, "x", frame_id="f1", dry_run=True)
+
+
+def test_an_unaimed_type_is_unchanged(monkeypatch):
+    focused = window(cls="zen")
+    sent = []
+    _aimed(monkeypatch, None, focused, sent=sent)
+    result = actions.type_text(CFG, "hello", dry_run=False)
+    assert "pointer" not in result
+    assert sent == [b"hello"]
+
+
+def test_a_recipe_replays_an_aimed_type_as_one_step():
+    from cu import recipes
+
+    entry = {
+        "action": "type", "length": 3, "method": "clipboard",
+        "window": {"address": "0x1", "class": "zen"},
+        "pointer": {
+            "relative": {"x": 0.5, "y": 0.4}, "window_size": {"w": 800, "h": 600},
+            "window": {"class": "zen"}, "button": "left", "count": 1,
+        },
+    }
+    step = recipes.step_from_log(entry)
+    assert step["action"] == "type"
+    assert step["relative"] == {"x": 0.5, "y": 0.4}
+    assert step["window_class"] == "zen"
