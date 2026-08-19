@@ -129,6 +129,16 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
         step["param"] = None  # assigned when the recipe is assembled
         step["length"] = entry.get("length")
         step["method"] = entry.get("method", "clipboard")
+        # Aimed typing replays as one step for the same reason it runs as one
+        # command: splitting it back into a click and a type would reopen the
+        # gap between selecting a field and filling it.
+        pointer = entry.get("pointer") or {}
+        if pointer.get("relative") and pointer.get("window_size"):
+            step["relative"] = pointer["relative"]
+            step["window_class"] = (pointer.get("window") or {}).get("class")
+            step["window_size"] = pointer["window_size"]
+            step["button"] = pointer.get("button", "left")
+            step["count"] = pointer.get("count", 1)
     elif action == "key":
         step["chord"] = entry.get("chord")
         step["semantic"] = entry.get("semantic")
@@ -354,9 +364,19 @@ def replay(
                     f"step {index} types the parameter {param!r}, which was not "
                     f"supplied; pass --param {param}=..."
                 )
+            frame_id = None
+            at = None
+            if step.get("relative"):
+                snap = observe.snapshot()
+                window = _window_by_class(step["window_class"], snap)
+                frame = _capture_window(window, snap["monitors"], cfg, profile_name)
+                frame_id = frame["id"]
+                at = _point_in_frame(step, window, frame)
             performed.append(
                 actions.type_text(
                     cfg, params[param], method=step.get("method", "clipboard"),
+                    frame_id=frame_id, at=at,
+                    button=step.get("button", "left"), count=step.get("count", 1),
                     dry_run=dry_run,
                 )
             )

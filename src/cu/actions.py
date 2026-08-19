@@ -171,6 +171,26 @@ def click(
     count: int = 1,
     dry_run: bool,
 ) -> dict[str, Any]:
+    result = _aimed_click(cfg, frame_id, at, button=button, count=count, dry_run=dry_run)
+    safety.record(cfg, result)
+    return result
+
+
+def _aimed_click(
+    cfg: dict[str, Any],
+    frame_id: str,
+    at: tuple[float, float],
+    *,
+    button: str = "left",
+    count: int = 1,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """The click itself, unrecorded, so a larger action can own the log entry.
+
+    A click that only exists to select the widget a following keystroke is
+    aimed at is not a separate thing that happened, and logging it as one
+    would promote into a recipe that replays the gap this exists to close.
+    """
     if count < 1:
         raise ValueError("click count must be at least 1")
     target = resolve_target(frame_id, at, cfg)
@@ -207,10 +227,14 @@ def click(
         "button": button,
         "count": count,
         "window": _describe(under),
+        "window_size": (
+            {axis: under["logical_rect"][axis] for axis in ("w", "h")}
+            if under and under.get("logical_rect")
+            else None
+        ),
         "layer_surface": layer_surface,
         "dry_run": dry_run,
     }
-    safety.record(cfg, result)
     return result
 
 
@@ -324,17 +348,38 @@ def type_text(
     restore_clipboard: bool = True,
     backend: str | None = None,
     verify: bool = False,
+    frame_id: str | None = None,
+    at: tuple[float, float] | None = None,
+    button: str = "left",
+    count: int = 1,
     dry_run: bool,
 ) -> dict[str, Any]:
-    """Enter text into whatever holds focus.
+    """Enter text into whatever holds focus, or into a target it aims at first.
 
     Clipboard is the default because it is layout-independent and pays the
     device cost once regardless of length. Its two failure modes are known —
     applications that reject synthetic paste, and a paste chord this desktop
     has rebound — so `--method keys` exists, and the resolved chord comes from
     configuration rather than from a universal assumption.
+
+    Given a frame and a point, the aim belongs to this command rather than to
+    a preceding one. Two commands hold the desktop lock twice, and between
+    them focus can move inside the same window, or the page can replace the
+    control, while the window's address and title stand still — after which
+    typing validates the window it was always going to validate and puts the
+    text somewhere else. Owning the click makes the target, the focus
+    transition, the injection, and the read-back one transaction.
     """
     backend = backend or cfg["input"]["key_backend"]
+    if (frame_id is None) != (at is None):
+        raise ValueError("aimed typing needs both a frame and a point")
+
+    pointer = None
+    if frame_id is not None and at is not None:
+        pointer = _aimed_click(
+            cfg, frame_id, at, button=button, count=count, dry_run=dry_run
+        )
+
     snap = observe.snapshot()
     focus = snap["focused"]
     window = next((w for w in snap["windows"] if focus and w["address"] == focus["address"]), None)
@@ -343,6 +388,16 @@ def type_text(
         raise Refused(
             exits.TARGET_NOT_FOUND, "no window holds focus; nothing would receive the text"
         )
+    if pointer is not None and not dry_run:
+        # Clicking a window is how it takes focus, so a click that did not
+        # produce it means the text would land somewhere nobody aimed at.
+        aimed_at = (pointer["window"] or {}).get("address")
+        if aimed_at is not None and window["address"] != aimed_at:
+            raise Refused(
+                exits.FOCUS_CHANGED,
+                f"the click landed on {(pointer['window'] or {}).get('class')} but "
+                f"{window['class']} holds keyboard focus; nothing was typed",
+            )
 
     chord = None
     if method == "clipboard":
@@ -363,6 +418,19 @@ def type_text(
         "window": _describe(window),
         "dry_run": dry_run,
     }
+    if pointer is not None:
+        # Both halves of the transaction, so the log and the JSON say where
+        # the text was aimed as well as what happened to it.
+        result["pointer"] = {
+            "frame": pointer["frame"],
+            "at": pointer["at"],
+            "logical": pointer["logical"],
+            "relative": pointer["relative"],
+            "button": pointer["button"],
+            "count": pointer["count"],
+            "window": pointer["window"],
+            "window_size": pointer["window_size"],
+        }
 
     if dry_run:
         safety.record(cfg, result)

@@ -842,7 +842,11 @@ def _render_action(result: dict[str, Any]) -> None:
     elif result["action"] == "scroll":
         detail = f"dy {result['dy']} dx {result['dx']}"
     elif result["action"] == "type":
-        detail = f"{result['length']} chars via {result['method']}"
+        detail = ""
+        pointer = result.get("pointer")
+        if pointer:
+            detail = f"at image {pointer['at']['x']:g},{pointer['at']['y']:g} → "
+        detail += f"{result['length']} chars via {result['method']}"
         if result["chord"]:
             detail += f" ({result['chord']})"
         detail += f" [{result['backend']}]"
@@ -986,8 +990,12 @@ def _describe_step(step: dict[str, Any]) -> str:
     if action == "scroll":
         return f"scroll dy {step.get('dy',0)} dx {step.get('dx',0)}"
     if action == "type":
+        aimed = ""
+        if step.get("relative"):
+            rel = step["relative"]
+            aimed = f"into {rel['x']:.3f},{rel['y']:.3f} of {step['window_class']}, "
         return (
-            f"type parameter {step.get('param')!r} "
+            f"type parameter {step.get('param')!r} {aimed}"
             f"({step.get('length')} chars via {step.get('method')})"
         )
     if action == "key":
@@ -1437,6 +1445,8 @@ def cmd_scroll(args: argparse.Namespace) -> int:
 def cmd_type(args: argparse.Namespace) -> int:
     cfg = config.load()
     text = sys.stdin.read() if args.text == "-" else args.text
+    if (args.frame is None) != (args.at is None):
+        raise ValueError("--frame and --at are given together or not at all")
     result = actions.type_text(
         cfg,
         text,
@@ -1444,6 +1454,10 @@ def cmd_type(args: argparse.Namespace) -> int:
         restore_clipboard=not args.no_restore,
         backend=args.backend,
         verify=args.verify,
+        frame_id=args.frame,
+        at=_parse_at(args.at) if args.at else None,
+        button=args.button,
+        count=args.count,
         dry_run=args.dry_run,
     )
     _emit(result, args.json, _render_action)
@@ -1877,8 +1891,20 @@ def build_parser() -> argparse.ArgumentParser:
     scroll.add_argument("--dy", type=int, default=0, help="Vertical detents, negative scrolls down")
     scroll.add_argument("--dx", type=int, default=0, help="Horizontal detents")
 
-    typing = add_injecting("type", "Enter text into the focused window", cmd_type)
+    typing = add_injecting("type", "Enter text into a field, aimed or focused", cmd_type)
     typing.add_argument("text", help="The text, or '-' to read stdin")
+    # Aiming is optional: typing into whatever holds focus is the ordinary
+    # case. Supplying a frame and a point makes the click part of this
+    # command's contract instead of a separate command with a gap after it.
+    add_aim(typing, required=False)
+    typing.add_argument(
+        "--button", choices=sorted(uinput.BUTTONS), default="left",
+        help="Which button aims the field, with --frame",
+    )
+    typing.add_argument(
+        "--count", type=int, default=1,
+        help="Click count when aiming (2 selects a word)",
+    )
     typing.add_argument(
         "--method",
         choices=("clipboard", "keys"),
