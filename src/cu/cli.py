@@ -303,6 +303,37 @@ def _watched_pixels(rgba: bytes, image_width: int, box: dict[str, int]) -> bytes
     )
 
 
+def _current_window(
+    captured: dict[str, Any] | None, windows: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """The window a frame depicts, re-read at capture time.
+
+    A frame records what it depicts so a later action can tell that the window
+    now shows something else. Copying a reference frame's record into a fresh
+    capture would carry that identity past the moment it was true, and the
+    picture — which is current — would then be refused as describing content
+    that has changed.
+
+    Only the identity is refreshed. Geometry belongs to the pixels: the image
+    depicts the rectangle the capture was aimed at, so adopting a newer one
+    would let a window that moved during the capture pass the staleness check
+    it should fail.
+
+    Every identity the observer can supply is re-read, `content_id` included.
+    Keeping the older one would label a current picture with what the window
+    used to show, and every action through it would be refused.
+    """
+    if captured is None:
+        return None
+    live = next((w for w in windows if w["address"] == captured["address"]), None)
+    if live is None:
+        return captured
+    refreshed = {**captured, "class": live["class"], "title": live["title"]}
+    if live.get("content_id"):
+        refreshed["content_id"] = live["content_id"]
+    return refreshed
+
+
 def _frame_capture_scale(frame: dict[str, Any]) -> float:
     if "capture_scale" in frame:
         return float(frame["capture_scale"])
@@ -464,7 +495,9 @@ def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, A
                         probe_width, probe_height, profile
                     ),
                     cursor_logical=observe.cursor(),
-                    window=reference.get("window"),
+                    window=_current_window(
+                        reference.get("window"), observe.snapshot()["windows"]
+                    ),
                     wait={
                         "after": reference["id"],
                         "watch": watch,
@@ -609,6 +642,12 @@ def cmd_shot(args: argparse.Namespace) -> int:
                 # let a frame proven current a moment ago be refused as too old.
                 previous["captured_at"] = time.time()
                 previous["cursor_logical"] = observe.cursor()
+                # Identical pixels are proof the picture is current, so the
+                # identity it depicts is re-read with it. Keeping the old one
+                # would refuse a frame just re-proven against the screen.
+                previous["window"] = _current_window(
+                    previous.get("window"), observe.windows(snap["monitors"])
+                )
                 frames.save(previous)
                 payload = {**previous, "changed": False}
                 _emit(payload, args.json, lambda p: print(f"unchanged; reusing {p['id']}"))
@@ -639,6 +678,14 @@ def cmd_shot(args: argparse.Namespace) -> int:
                     "class": window["class"],
                     "title": window["title"],
                     "logical_rect": window["logical_rect"],
+                    # Carried when the observer can name the document itself,
+                    # so the frame is checked by the stronger of the two
+                    # identities for the rest of its life.
+                    **(
+                        {"content_id": window["content_id"]}
+                        if window.get("content_id")
+                        else {}
+                    ),
                 }
                 if window
                 else None

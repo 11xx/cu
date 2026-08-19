@@ -104,7 +104,14 @@ depicted — a title, or a better identity where an adapter has one — and an
 action through a frame whose window now shows something else is refused rather
 than aimed at the old picture's coordinate. Classes whose titles drift on their
 own can be exempted explicitly, which is a narrower relaxation than turning the
-check off. Focus is not a pointer-staleness condition:
+check off.
+
+The identity is only as strong as what the compositor reports. A title catches
+the ordinary navigation and misses a document swap that keeps the same title,
+so this narrows the window in which a coordinate can be wrong rather than
+closing it; a frame is still bound to a moment. An adapter that can name the
+document — a tab URL — records that instead, and gets a check that does not
+depend on a page choosing to retitle itself. Focus is not a pointer-staleness condition:
 clicking an unfocused window is how it becomes focused. The common catastrophic
 failure of pixel computer use — acting on coordinates read off a screenshot of
 a different monitor, or of a screen that has since changed — becomes a refused

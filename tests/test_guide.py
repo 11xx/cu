@@ -98,3 +98,56 @@ def test_the_guide_states_the_codes_whose_response_is_not_retry():
 
 def test_the_guide_points_at_per_command_help():
     assert "cu <command> --help" in guide.GUIDE
+
+
+# --- the auto-hidden-UI tactic -------------------------------------------
+
+def _section(title):
+    """One guide section, up to the next unindented heading."""
+    rest = guide.GUIDE[guide.GUIDE.index(title) + len(title):]
+    lines = []
+    for line in rest.splitlines():
+        if line and not line.startswith(" "):
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
+HIDDEN_UI = _section("CONTROLS THAT HIDE UNTIL THE POINTER ARRIVES")
+
+
+def test_the_tactic_names_no_browser_and_no_fixed_edge():
+    """The edge and the controls behind it are the user's configuration. A
+    named browser or a named side would turn one host's reading into a false
+    product invariant."""
+    section = HIDDEN_UI.lower()
+    for host_reading in ("helium", "zen", "vivaldi", "firefox", "the top edge is"):
+        assert host_reading not in section
+
+
+def test_the_tactic_asks_what_was_learned_before_probing():
+    assert "cu know show" in HIDDEN_UI
+    assert "learned state" in HIDDEN_UI
+
+
+def test_the_tactic_requires_a_fresh_capture_before_acting():
+    """A revealed control is not in the frame that was hovered from, and a
+    coordinate is only ever valid in its own frame."""
+    assert "cu shot --after" in HIDDEN_UI
+    assert "fresh frame" in HIDDEN_UI
+    assert "coordinates never cross frames" in HIDDEN_UI
+
+
+def test_the_tactic_prefers_widening_to_guessing_an_edge():
+    assert "widen the capture rather than hovering each edge" in HIDDEN_UI
+
+
+@pytest.mark.parametrize("command", ["cu know show", "cu move --frame", "cu shot --after",
+                                     "cu know note"])
+def test_every_command_the_tactic_names_exists(command):
+    """A guide that promises more than the tool does is worse than none."""
+    parser = cli.build_parser()
+    name = command.split()[1]
+    subparsers = [a for a in parser._actions if hasattr(a, "choices") and a.choices]
+    assert any(name in (a.choices or {}) for a in subparsers)
+    assert command in guide.GUIDE

@@ -99,6 +99,11 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
     action = entry.get("action")
     if action not in REPLAYABLE or entry.get("dry_run"):
         return None
+    if entry.get("typed") is False:
+        # A click logged because the typing it belonged to refused. It was
+        # part of a failure, not of a working run, and replaying it alone
+        # would repeat the click without the text that gave it a purpose.
+        return None
     window = entry.get("window") or {}
     step: dict[str, Any] = {"action": action}
     if action in {"click", "move"}:
@@ -132,10 +137,19 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
         # Aimed typing replays as one step for the same reason it runs as one
         # command: splitting it back into a click and a type would reopen the
         # gap between selecting a field and filling it.
-        pointer = entry.get("pointer") or {}
-        if pointer.get("relative") and pointer.get("window_size"):
+        pointer = entry.get("pointer")
+        if pointer is not None:
+            window_class = (pointer.get("window") or {}).get("class")
+            if not (pointer.get("relative") and pointer.get("window_size") and window_class):
+                # Dropping it would leave a recipe that types without aiming,
+                # which is a different procedure from the one recorded — so
+                # this refuses the promotion rather than quietly changing it.
+                raise RecipeError(
+                    "a typing action in that slice was aimed at a position "
+                    "that cannot be replayed; re-record it"
+                )
             step["relative"] = pointer["relative"]
-            step["window_class"] = (pointer.get("window") or {}).get("class")
+            step["window_class"] = window_class
             step["window_size"] = pointer["window_size"]
             step["button"] = pointer.get("button", "left")
             step["count"] = pointer.get("count", 1)
@@ -525,11 +539,19 @@ def _capture_window(
             visual_tokens=capture.visual_tokens(
                 image_size["w"], image_size["h"], profile
             ),
+            # The identity is re-read after the capture rather than reused
+            # from before it, since the title may have moved on while the shot
+            # was taken. The geometry stays the one the pixels depict: it was
+            # already asserted unchanged above.
             window={
                 "address": window["address"],
-                "class": window["class"],
-                "title": window["title"],
+                "class": live["class"],
+                "title": live["title"],
                 "logical_rect": window["logical_rect"],
+                # Carried when the observer can name the document itself. A
+                # frame that fell back to the title would be checked by the
+                # weaker identity of the two for the rest of its life.
+                **({"content_id": live["content_id"]} if live.get("content_id") else {}),
             },
         )
 

@@ -232,17 +232,27 @@ def content_drift(
     A class listed in `drift_classes` is exempt: some titles carry a clock or
     an unread count and move on their own, and refusing those would train a
     caller to turn the whole interlock off.
+
+    A title is what every window has, not what every change moves: a document
+    swap that keeps the title passes this. It narrows the window in which a
+    coordinate can be wrong rather than closing it, which is why a frame is
+    still bound to a moment and why `content_id` exists for an adapter that
+    can name the document itself.
     """
     window = frame.get("window")
     captured = content_identity(frame)
     if window is None or captured is None:
         return None
-    if window.get("class", "").lower() in {c.lower() for c in drift_classes}:
-        return None
     live = next((w for w in windows if w["address"] == window["address"]), None)
     if live is None:
         return None  # the window is gone, which `staleness` already reports
     current = live.get("content_id") or live.get("title")
+    # The exemption is about titles that move on their own. It says nothing
+    # about a document identity, which changes only when the document does —
+    # so an exempt class is still refused when that is what disagrees.
+    by_title = not (window.get("content_id") and live.get("content_id"))
+    if by_title and window.get("class", "").lower() in {c.lower() for c in drift_classes}:
+        return None
     if current == captured:
         return None
     # Both identities, because the caller has to be able to tell a page that

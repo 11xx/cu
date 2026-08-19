@@ -835,3 +835,85 @@ def test_the_interlock_can_be_turned_off_wholesale(monkeypatch):
     cfg = config.load()
     cfg["safety"]["frame_content_identity"] = False
     safety.check_frame(cfg, _window_frame("YouTube - Helium"), _live("Instagram - Helium"), [])
+
+
+def test_a_reused_frame_re_reads_the_identity_with_the_pixels(monkeypatch, tmp_path):
+    """Identical pixels prove the picture is current, so the identity it
+    depicts is re-read with it — otherwise a frame just re-proven against the
+    screen is refused as depicting content that changed."""
+    from cu import cli
+
+    captured = {"address": "0x1", "class": "zen", "title": "page A",
+                "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}
+    live = [{"address": "0x1", "class": "zen", "title": "page B",
+             "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}]
+    assert cli._current_window(captured, live)["title"] == "page B"
+
+
+def test_a_window_that_vanished_keeps_what_the_capture_recorded():
+    """Staleness answers a missing window; inventing a current identity for
+    one that is gone would be worse than reporting what was seen."""
+    from cu import cli
+
+    captured = {"address": "0x1", "class": "zen", "title": "page A",
+                "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}
+    assert cli._current_window(captured, [])["title"] == "page A"
+
+
+def test_a_refreshed_identity_keeps_the_geometry_the_pixels_depict():
+    """The image depicts the rectangle the capture was aimed at. Adopting a
+    newer geometry would let a window that moved during the capture pass the
+    staleness check it should fail."""
+    from cu import cli
+
+    captured = {"address": "0x1", "class": "zen", "title": "page A",
+                "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600},
+                "content_id": "https://a.example/one"}
+    live = [{"address": "0x1", "class": "zen", "title": "page B",
+             "logical_rect": {"x": 40, "y": 40, "w": 800, "h": 600}}]
+    refreshed = cli._current_window(captured, live)
+    assert refreshed["logical_rect"] == captured["logical_rect"]
+    assert refreshed["title"] == "page B"
+    # A stronger identity the capture recorded survives the refresh.
+    assert refreshed["content_id"] == "https://a.example/one"
+
+
+def test_a_capture_keeps_the_strongest_identity_the_observer_gave_it():
+    """A frame that fell back to the title would be checked by the weaker of
+    the two identities for the rest of its life."""
+    live = {"address": "0x1", "class": "zen", "title": "Dashboard",
+            "content_id": "https://a.example/one",
+            "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}
+    frame = {"id": "f1", "window": {**live}}
+    assert frames.content_identity(frame) == "https://a.example/one"
+    # And a document swap the title hides is then caught.
+    moved = [{**live, "content_id": "https://a.example/two"}]
+    assert frames.content_drift(frame, moved)
+
+
+def test_a_refreshed_capture_takes_the_current_document_identity():
+    """Keeping the older one would label a current picture with what the
+    window used to show, and every action through it would be refused."""
+    from cu import cli
+
+    captured = {"address": "0x1", "class": "zen", "title": "Dashboard",
+                "content_id": "https://a.example/one",
+                "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}
+    live = [{"address": "0x1", "class": "zen", "title": "Dashboard",
+             "content_id": "https://a.example/two",
+             "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}]
+    assert cli._current_window(captured, live)["content_id"] == "https://a.example/two"
+
+
+def test_a_drifting_title_exemption_does_not_excuse_a_changed_document():
+    """The exemption is about titles that move on their own; a document
+    identity changes only when the document does."""
+    rect = {"x": 0, "y": 0, "w": 800, "h": 600}
+    frame = {"id": "f1", "window": {"address": "0x1", "class": "zen", "title": "Mail",
+                                    "content_id": "url:A", "logical_rect": rect}}
+    live = [{"address": "0x1", "class": "zen", "title": "Mail (3)",
+             "content_id": "url:B", "logical_rect": rect}]
+    assert frames.content_drift(frame, live, ["zen"])
+    # The same exemption still absorbs a title that moved on its own.
+    same_document = [{**live[0], "content_id": "url:A"}]
+    assert frames.content_drift(frame, same_document, ["zen"]) is None
