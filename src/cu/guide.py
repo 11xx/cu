@@ -93,6 +93,12 @@ ACT THROUGH THE FRAME YOU READ
   Every injecting command takes --dry-run, which runs each interlock and writes
   the same log entry without emitting an event.
 
+  A frame is bound to what it depicted, not only to where. A window that keeps
+  its place while its content changes — a tab that navigated, a view that was
+  replaced — refuses with 26 rather than clicking the old picture's coordinate
+  on the new page. Capture again and decide again; the plan itself may no
+  longer apply.
+
 WAIT ON COMPOSITOR EVENTS, WATCH PIXELS FOR REPAINTS
   cu wait window-open --class zen --timeout 20
 
@@ -112,6 +118,7 @@ EXIT CODES ARE THE CONTRACT
   23  Region crosses/is off an output   Aim wholly within one output
   24  Awaited event never arrived       Re-observe; it may have happened first
   25  Verification did not match state  Read actual state; do NOT blindly retry
+  26  Same window, different content    Re-observe; the plan was about something else
   30  Denylist, lock, unreviewed recipe Do not retry; tell the user
   40  The user aborted                  Stop. Do not retry. Do not clear it.
   41  The user is moving the mouse      Yield; wait before retrying

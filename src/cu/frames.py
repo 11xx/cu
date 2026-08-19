@@ -167,6 +167,18 @@ def age(frame: dict[str, Any]) -> float:
     return time.time() - frame["captured_at"]
 
 
+def content_identity(frame: dict[str, Any]) -> str | None:
+    """What the frame recorded about *what* it depicted, not where.
+
+    A window's address, class, and geometry all survive the document inside it
+    being replaced, so they cannot answer whether the pixels still mean what
+    they meant. The title is the identity every window has; an adapter with a
+    better one — a tab URL — records it here instead.
+    """
+    window = frame.get("window") or {}
+    return window.get("content_id") or window.get("title")
+
+
 def staleness(
     frame: dict[str, Any],
     windows: list[dict[str, Any]],
@@ -179,6 +191,9 @@ def staleness(
     geometry, while an output or region frame is checked against its output's
     geometry. Either can move every coordinate while the image still looks
     perfectly plausible.
+
+    What the window *shows* is a separate question with a separate answer;
+    see `content_drift`.
     """
     if age(frame) > max_age:
         return f"frame is {age(frame):.0f}s old (limit {max_age:.0f}s)"
@@ -200,6 +215,42 @@ def staleness(
     if live["logical_rect"] != window["logical_rect"]:
         return f"window {window['class']} moved or resized since capture"
     return None
+
+
+def content_drift(
+    frame: dict[str, Any],
+    windows: list[dict[str, Any]],
+    drift_classes: tuple[str, ...] | list[str] = (),
+) -> str | None:
+    """Why the window no longer shows what the frame depicts, or None.
+
+    Geometry answers where a window is, never what is inside it. A browser tab
+    that navigates leaves the address, the class, and the rectangle untouched
+    while replacing everything a coordinate could mean, and a frame that passes
+    every geometric check then aims a click at a document nobody looked at.
+
+    A class listed in `drift_classes` is exempt: some titles carry a clock or
+    an unread count and move on their own, and refusing those would train a
+    caller to turn the whole interlock off.
+    """
+    window = frame.get("window")
+    captured = content_identity(frame)
+    if window is None or captured is None:
+        return None
+    if window.get("class", "").lower() in {c.lower() for c in drift_classes}:
+        return None
+    live = next((w for w in windows if w["address"] == window["address"]), None)
+    if live is None:
+        return None  # the window is gone, which `staleness` already reports
+    current = live.get("content_id") or live.get("title")
+    if current == captured:
+        return None
+    # Both identities, because the caller has to be able to tell a page that
+    # navigated from a title that merely ticked over.
+    return (
+        f"window {window['class']} showed {captured!r} when frame {frame['id']} "
+        f"was captured and shows {current!r} now"
+    )
 
 
 def collect() -> int:

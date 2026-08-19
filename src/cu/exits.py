@@ -18,6 +18,7 @@ TARGET_NOT_FOUND = 22
 DEGENERATE_AIM = 23
 TIMED_OUT = 24
 VERIFY_FAILED = 25
+CONTENT_CHANGED = 26
 DENIED_BY_POLICY = 30
 ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
@@ -55,6 +56,10 @@ RESPONSE = {
         "Verification did not match the actual state. Read the actual state before retrying; "
         "retrying blindly can repeat what did land."
     ),
+    CONTENT_CHANGED: (
+        "The window still holds the frame's place, but shows different content. "
+        "Re-observe and decide again: the plan was made about something else."
+    ),
     DENIED_BY_POLICY: "Refused by the denylist or a locked session. Do not retry; tell the user.",
     ABORTED_BY_USER: (
         "The user aborted. Stop. Do not retry, and do not attempt to clear the abort."
@@ -91,6 +96,7 @@ RETRYABLE = frozenset(
     {
         STALE_FRAME,
         FOCUS_CHANGED,
+        CONTENT_CHANGED,
         TARGET_NOT_FOUND,
         TIMED_OUT,
         HUMAN_ACTIVE,
