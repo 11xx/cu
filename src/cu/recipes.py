@@ -99,6 +99,11 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
     action = entry.get("action")
     if action not in REPLAYABLE or entry.get("dry_run"):
         return None
+    if entry.get("typed") is False:
+        # A click logged because the typing it belonged to refused. It was
+        # part of a failure, not of a working run, and replaying it alone
+        # would repeat the click without the text that gave it a purpose.
+        return None
     window = entry.get("window") or {}
     step: dict[str, Any] = {"action": action}
     if action in {"click", "move"}:
@@ -136,7 +141,13 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
         if pointer is not None:
             window_class = (pointer.get("window") or {}).get("class")
             if not (pointer.get("relative") and pointer.get("window_size") and window_class):
-                return None  # nothing that would survive the window moving
+                # Dropping it would leave a recipe that types without aiming,
+                # which is a different procedure from the one recorded — so
+                # this refuses the promotion rather than quietly changing it.
+                raise RecipeError(
+                    "a typing action in that slice was aimed at a position "
+                    "that cannot be replayed; re-record it"
+                )
             step["relative"] = pointer["relative"]
             step["window_class"] = window_class
             step["window_size"] = pointer["window_size"]
@@ -528,14 +539,15 @@ def _capture_window(
             visual_tokens=capture.visual_tokens(
                 image_size["w"], image_size["h"], profile
             ),
-            # Re-read after the capture rather than reused from before it:
-            # the title may have moved on while the shot was taken, and the
-            # frame must describe what its pixels actually show.
+            # The identity is re-read after the capture rather than reused
+            # from before it, since the title may have moved on while the shot
+            # was taken. The geometry stays the one the pixels depict: it was
+            # already asserted unchanged above.
             window={
-                "address": live["address"],
+                "address": window["address"],
                 "class": live["class"],
                 "title": live["title"],
-                "logical_rect": live["logical_rect"],
+                "logical_rect": window["logical_rect"],
             },
         )
 

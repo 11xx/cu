@@ -313,18 +313,19 @@ def _current_window(
     capture would carry that identity past the moment it was true, and the
     picture — which is current — would then be refused as describing content
     that has changed.
+
+    Only the identity is refreshed. Geometry belongs to the pixels: the image
+    depicts the rectangle the capture was aimed at, so adopting a newer one
+    would let a window that moved during the capture pass the staleness check
+    it should fail. Anything the capture recorded that is not read back here —
+    a `content_id` an adapter supplied — is carried through untouched.
     """
     if captured is None:
         return None
     live = next((w for w in windows if w["address"] == captured["address"]), None)
     if live is None:
         return captured
-    return {
-        "address": live["address"],
-        "class": live["class"],
-        "title": live["title"],
-        "logical_rect": live["logical_rect"],
-    }
+    return {**captured, "class": live["class"], "title": live["title"]}
 
 
 def _frame_capture_scale(frame: dict[str, Any]) -> float:
@@ -638,7 +639,9 @@ def cmd_shot(args: argparse.Namespace) -> int:
                 # Identical pixels are proof the picture is current, so the
                 # identity it depicts is re-read with it. Keeping the old one
                 # would refuse a frame just re-proven against the screen.
-                previous["window"] = _current_window(previous.get("window"), snap["windows"])
+                previous["window"] = _current_window(
+                    previous.get("window"), observe.windows(snap["monitors"])
+                )
                 frames.save(previous)
                 payload = {**previous, "changed": False}
                 _emit(payload, args.json, lambda p: print(f"unchanged; reusing {p['id']}"))

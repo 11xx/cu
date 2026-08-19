@@ -795,12 +795,27 @@ def test_a_page_that_navigates_under_the_click_stops_the_text(monkeypatch):
 
 def test_a_pointer_without_a_replayable_position_is_not_promoted():
     """Downgrading it to an unaimed step would replay by typing into whatever
-    holds focus, which is the gap the aimed action closes."""
+    holds focus, which is the gap the aimed action closes — and dropping it
+    would promote a different procedure from the one recorded."""
     from cu import recipes
 
     entry = {
         "action": "type", "length": 3, "method": "clipboard",
         "window": {"address": "0x1", "class": "zen"},
         "pointer": {"button": "left", "count": 1, "window": None},
+    }
+    with pytest.raises(recipes.RecipeError):
+        recipes.step_from_log(entry)
+
+
+def test_a_click_left_behind_by_a_refused_type_is_not_replayable():
+    """It was part of a failure, not of a working run."""
+    from cu import recipes
+
+    entry = {
+        "action": "click", "typed": False, "button": "left", "count": 1,
+        "relative": {"x": 0.5, "y": 0.4},
+        "window": {"address": "0x1", "class": "zen",
+                   "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}},
     }
     assert recipes.step_from_log(entry) is None

@@ -858,3 +858,21 @@ def test_a_window_that_vanished_keeps_what_the_capture_recorded():
     captured = {"address": "0x1", "class": "zen", "title": "page A",
                 "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}
     assert cli._current_window(captured, [])["title"] == "page A"
+
+
+def test_a_refreshed_identity_keeps_the_geometry_the_pixels_depict():
+    """The image depicts the rectangle the capture was aimed at. Adopting a
+    newer geometry would let a window that moved during the capture pass the
+    staleness check it should fail."""
+    from cu import cli
+
+    captured = {"address": "0x1", "class": "zen", "title": "page A",
+                "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600},
+                "content_id": "https://a.example/one"}
+    live = [{"address": "0x1", "class": "zen", "title": "page B",
+             "logical_rect": {"x": 40, "y": 40, "w": 800, "h": 600}}]
+    refreshed = cli._current_window(captured, live)
+    assert refreshed["logical_rect"] == captured["logical_rect"]
+    assert refreshed["title"] == "page B"
+    # A stronger identity the capture recorded survives the refresh.
+    assert refreshed["content_id"] == "https://a.example/one"

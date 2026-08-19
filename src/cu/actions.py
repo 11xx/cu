@@ -351,6 +351,15 @@ def _clipboard_clear() -> None:
         raise ClipboardError(f"wl-copy --clear exited {proc.returncode}")
 
 
+def _mark_logged(
+    cfg: dict[str, Any], result: dict[str, Any], logged: list[bool] | None
+) -> None:
+    """Write the action down, and say that it was written."""
+    safety.record(cfg, result)
+    if logged is not None:
+        logged.append(True)
+
+
 def _record_orphaned_click(cfg: dict[str, Any], pointer: dict[str, Any]) -> None:
     """Log a click that happened while the action it belonged to did not.
 
@@ -405,16 +414,23 @@ def type_text(
         )
 
     pointer = _aimed_click(cfg, frame_id, at, button=button, count=count, dry_run=dry_run)
+    # Set once the typing half has written its own entry, which already names
+    # the pointer target. A failure after that point — a read-back that did
+    # not match, a clipboard that would not restore — is a failure of an
+    # action the log already describes, not an unrecorded click.
+    logged: list[bool] = []
     try:
         return _type_into_focus(
             cfg, text, method=method, restore_clipboard=restore_clipboard,
-            backend=backend, verify=verify, pointer=pointer, dry_run=dry_run,
+            backend=backend, verify=verify, pointer=pointer, logged=logged,
+            dry_run=dry_run,
         )
     except BaseException:
-        # The click already happened on someone's desktop. Whatever stopped
-        # the text, the log is the only record that the pointer moved and a
-        # button went down, so it is written before the failure propagates.
-        _record_orphaned_click(cfg, pointer)
+        # The click already happened on someone's desktop. If the text never
+        # got as far as being written down, the log is otherwise silent about
+        # a pointer that moved and a button that went down.
+        if not logged:
+            _record_orphaned_click(cfg, pointer)
         raise
 
 
@@ -428,6 +444,7 @@ def _type_into_focus(
     verify: bool,
     pointer: dict[str, Any] | None,
     dry_run: bool,
+    logged: list[bool] | None = None,
 ) -> dict[str, Any]:
     """Enter text into whatever holds focus, asserting an aim when there was one."""
     backend = backend or cfg["input"]["key_backend"]
@@ -499,7 +516,7 @@ def _type_into_focus(
         }
 
     if dry_run:
-        safety.record(cfg, result)
+        _mark_logged(cfg, result, logged)
         return result
 
     if method == "clipboard":
@@ -543,7 +560,7 @@ def _type_into_focus(
                 if previous is not None:
                     _clipboard_write(previous)
 
-    safety.record(cfg, result)
+    _mark_logged(cfg, result, logged)
     if verify and result.get("verified", {}).get("status") == "mismatch":
         raise Refused(
             exits.VERIFY_FAILED,
