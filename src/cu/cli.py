@@ -49,6 +49,70 @@ from .safety import Refused
 from .sandbox import SandboxError
 from .uinput import UinputError
 
+
+class _Formatter(argparse.HelpFormatter):
+    """Two-column help with room for a sentence, not a fragment.
+
+    argparse's default wraps descriptions at whatever the flag names leave
+    over, which for a command set of any size is a ragged column two words
+    wide. A fixed, generous split reads like the help of the sibling tools.
+    """
+
+    def __init__(self, prog: str) -> None:
+        super().__init__(prog, max_help_position=32, width=96)
+
+    def _format_action(self, action: argparse.Action) -> str:
+        # The subcommand group prints its own metavar above the commands it
+        # holds, which says nothing the commands do not. Render the children
+        # and drop the header.
+        if isinstance(action, argparse._SubParsersAction):
+            return "".join(
+                super(_Formatter, self)._format_action(child)
+                for child in action._get_subactions()
+            )
+        return super()._format_action(action)
+
+
+class _Parser(argparse.ArgumentParser):
+    """An argparse parser that renders the way the sibling tools do.
+
+    The description leads, the usage line follows it, and the sections are
+    named for what they hold rather than for argparse's internal categories.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("formatter_class", _Formatter)
+        super().__init__(*args, **kwargs)
+        self._optionals.title = "Options"
+        for action in self._actions:
+            if isinstance(action, argparse._HelpAction):
+                action.help = "Print help"
+
+    def format_help(self) -> str:
+        # A parser's positionals are its subcommands or its arguments, never
+        # both, so the group is named for whichever it turned out to hold.
+        self._positionals.title = (
+            "Commands"
+            if any(isinstance(a, argparse._SubParsersAction) for a in self._actions)
+            else "Arguments"
+        )
+        formatter = self._get_formatter()
+        if self.description:
+            formatter.add_text(self.description)
+        formatter.add_usage(
+            self.usage, self._actions, self._mutually_exclusive_groups, prefix="Usage: "
+        )
+        for group in self._action_groups:
+            if not group._group_actions:
+                continue
+            formatter.start_section(group.title)
+            formatter.add_text(group.description)
+            formatter.add_arguments(group._group_actions)
+            formatter.end_section()
+        formatter.add_text(self.epilog)
+        return formatter.format_help()
+
+
 STATUS_MARK = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL"}
 MAX_MAGNIFIED_LONG_EDGE = 8192
 
@@ -1458,26 +1522,28 @@ def cmd_session(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="cu",
         description="Computer use for Hyprland.",
         epilog="Run `cu` with no arguments for the workflow guide.",
     )
-    parser.add_argument("--json", action="store_true", help="emit JSON on stdout")
-    parser.add_argument("--why", metavar="TEXT", default="", help="what this is for")
+    parser.add_argument("--json", action="store_true", help="Emit JSON on stdout")
+    parser.add_argument("--why", metavar="TEXT", default="", help="What this is for")
     # Optional, so a bare `cu` is a request for the guide rather than a usage
     # error. Every other malformed invocation still fails at 2: an unknown
     # command, an unrecognized flag, and a subcommand missing a required
     # argument are all rejected by argparse before this matters.
-    sub = parser.add_subparsers(dest="command", required=False)
+    sub = parser.add_subparsers(
+        dest="command", required=False, metavar="<command>", parser_class=_Parser
+    )
 
     # Repeating --json per subcommand accepts both `cu --json observe` and the
     # `cu observe --json` an agent is far more likely to write. SUPPRESS keeps
     # an omitted flag from overwriting the value parsed before the subcommand.
     def add(name: str, help: str, run) -> argparse.ArgumentParser:
-        p = sub.add_parser(name, help=help)
+        p = sub.add_parser(name, help=help, description=help)
         p.add_argument(
-            "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON"
+            "--json", action="store_true", default=argparse.SUPPRESS, help="Emit JSON"
         )
         if name in NON_PUBLISHING_COMMANDS:
             p.set_defaults(run=run, injects=False)
@@ -1489,7 +1555,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--why",
             metavar="TEXT",
             default=argparse.SUPPRESS,
-            help="a short description of the intent, shown to the user",
+            help="A short description of the intent, shown to the user",
         )
         # Which stretch of work this command belongs to. Never inferred: with
         # two agents on one desktop, guessing from process ancestry files one
@@ -1498,82 +1564,88 @@ def build_parser() -> argparse.ArgumentParser:
             "--session",
             metavar="ID",
             default=argparse.SUPPRESS,
-            help=f"session from `cu session begin` (default: ${status.SESSION_ENV})",
+            help=f"Session from `cu session begin` (default: ${status.SESSION_ENV})",
         )
         p.set_defaults(run=run, injects=False)
         return p
 
-    command = add("status", "who is driving the desktop, for a status bar", cmd_status)
+    command = add("status", "Who is driving the desktop, for a status bar", cmd_status)
     command.add_argument(
-        "--follow", action="store_true", help="emit changed status objects as a JSON feed"
+        "--follow", action="store_true", help="Emit changed status objects as a JSON feed"
     )
     command.set_defaults(parser=command)
 
-    session = add("session", "bracket a stretch of work as one activity", cmd_session)
+    session = add("session", "Bracket a stretch of work as one activity", cmd_session)
     ssub2 = session.add_subparsers(dest="subcommand", required=True)
-    begin = ssub2.add_parser("begin", help="say an agent has started working")
+    begin = ssub2.add_parser(
+        "begin",
+        help="Say an agent has started working",
+        description="Say an agent has started working",
+    )
     begin.add_argument(
         "detail",
         nargs="?",
         default=None,
         metavar="PURPOSE",
-        help="standing purpose, not a command's --why intent",
+        help="Standing purpose, not a command's --why intent",
     )
     begin.add_argument(
         "--why",
         dest="purpose",
         metavar="TEXT",
         default=None,
-        help="standing purpose, not a command's --why intent",
+        help="Standing purpose, not a command's --why intent",
     )
     begin.add_argument(
         "--pid", type=int,
-        help="end the session when this process does; omit if there is none",
+        help="End the session when this process does; omit if there is none",
     )
     begin.add_argument(
         "--exclusive",
         action="store_true",
-        help="reserve injection for commands naming this session",
+        help="Reserve injection for commands naming this session",
     )
     begin.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     begin.set_defaults(parser=begin)
-    ended = ssub2.add_parser("end", help="say it has stopped")
+    ended = ssub2.add_parser(
+        "end", help="Say it has stopped", description="Say it has stopped"
+    )
     ended.add_argument(
         "--session",
         metavar="ID",
         default=argparse.SUPPRESS,
-        help=f"which session to end (default: ${status.SESSION_ENV}, "
+        help=f"Which session to end (default: ${status.SESSION_ENV}, "
         "or the only one open)",
     )
     ended.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
 
-    abort = add("abort", "report or change the user's abort interlock", cmd_abort)
+    abort = add("abort", "Report or change the user's abort interlock", cmd_abort)
     mutation = abort.add_mutually_exclusive_group()
-    mutation.add_argument("--set", action="store_true", help="set the abort flag")
-    mutation.add_argument("--clear", action="store_true", help="clear the abort flag")
+    mutation.add_argument("--set", action="store_true", help="Set the abort flag")
+    mutation.add_argument("--clear", action="store_true", help="Clear the abort flag")
     abort.add_argument(
         "--session",
         metavar="ID",
         default=None,
-        help=f"agent session; mutations refuse (default: ${status.SESSION_ENV})",
+        help=f"Agent session; mutations refuse (default: ${status.SESSION_ENV})",
     )
 
-    add("doctor", "verify every environment precondition", cmd_doctor)
-    add("profiles", "what a capture costs each configured consumer", cmd_profiles)
-    add("observe", "monitors, windows, focus, cursor", cmd_observe)
+    add("doctor", "Verify every environment precondition", cmd_doctor)
+    add("profiles", "What a capture costs each configured consumer", cmd_profiles)
+    add("observe", "Monitors, windows, focus, cursor", cmd_observe)
 
-    shot = add("shot", "capture a frame", cmd_shot)
+    shot = add("shot", "Capture a frame", cmd_shot)
     shot.add_argument(
         "--window",
         metavar="SELECTOR",
         help="'active' (default), a window address, or a class substring",
     )
-    shot.add_argument("--output", metavar="NAME", help="a whole monitor")
+    shot.add_argument("--output", metavar="NAME", help="A whole monitor")
     shot.add_argument(
         "--region",
         metavar="'x,y wxh'",
         help=(
-            "an arbitrary strip; with --output, x,y are output-relative and "
+            "An arbitrary strip; with --output, x,y are output-relative and "
             "logical_rect is absolute"
         ),
     )
@@ -1584,9 +1656,9 @@ def build_parser() -> argparse.ArgumentParser:
     shot.add_argument(
         "--landmark",
         metavar="APP/NAME",
-        help="a remembered region of a window; aims the capture, never a click",
+        help="A remembered region of a window; aims the capture, never a click",
     )
-    shot.add_argument("--context", metavar="NAME", help="scope a landmark, e.g. a site")
+    shot.add_argument("--context", metavar="NAME", help="Scope a landmark, e.g. a site")
     # Choices come from the config rather than the code, so a profile added
     # there is selectable without touching this file. Default is None so the
     # configured profile is what applies when --for is absent.
@@ -1594,114 +1666,114 @@ def build_parser() -> argparse.ArgumentParser:
         "--for",
         dest="profile",
         metavar="CONSUMER",
-        help="capture budget of the consuming model; see `cu profiles`",
+        help="Capture budget of the consuming model; see `cu profiles`",
     )
     shot.add_argument(
         "--if-changed",
         action="store_true",
-        help="reuse the previous frame when the pixels are identical",
+        help="Reuse the previous frame when the pixels are identical",
     )
     shot.add_argument(
         "--after",
         metavar="FRAME_ID",
-        help="recapture a frame's region after watched pixels change and settle",
+        help="Recapture a frame's region after watched pixels change and settle",
     )
     shot.add_argument(
         "--watch",
         metavar="'x,y wxh'|full",
-        help="required with --after; box in the reference frame's image pixels",
+        help="Required with --after; box in the reference frame's image pixels",
     )
     shot.add_argument(
         "--poll-ms",
         type=float,
         default=100,
-        help="milliseconds between --after probes (default: 100)",
+        help="Milliseconds between --after probes (default: 100)",
     )
     shot.add_argument(
         "--quiet-ms",
         type=float,
         default=200,
-        help="unchanged milliseconds before --after settles (default: 200)",
+        help="Unchanged milliseconds before --after settles (default: 200)",
     )
     shot.add_argument(
         "--timeout",
         type=float,
         default=10.0,
-        help="seconds before --after gives up (default: 10)",
+        help="Seconds before --after gives up (default: 10)",
     )
 
-    pixel = add("pixel", "read a colour from an existing frame", cmd_pixel)
-    pixel.add_argument("--frame", metavar="ID", required=True, help="frame to read")
+    pixel = add("pixel", "Read a colour from an existing frame", cmd_pixel)
+    pixel.add_argument("--frame", metavar="ID", required=True, help="Frame to read")
     pixel.add_argument(
-        "--at", metavar="X,Y", required=True, help="integer coordinate in image pixels"
+        "--at", metavar="X,Y", required=True, help="Integer coordinate in image pixels"
     )
     pixel.add_argument(
         "--radius",
         type=int,
         default=0,
         metavar="N",
-        help="median in a square of radius N around the point (default: 0)",
+        help="Median in a square of radius N around the point (default: 0)",
     )
 
-    magnify = add("magnify", "upscale an existing frame without recapturing", cmd_magnify)
-    magnify.add_argument("--frame", metavar="ID", required=True, help="frame to derive from")
+    magnify = add("magnify", "Upscale an existing frame without recapturing", cmd_magnify)
+    magnify.add_argument("--frame", metavar="ID", required=True, help="Frame to derive from")
     magnify.add_argument(
         "--scale",
         type=int,
         required=True,
         metavar="N",
-        help=f"integer factor at least 2; maximum output long edge {MAX_MAGNIFIED_LONG_EDGE}px",
+        help=f"Integer factor at least 2; maximum output long edge {MAX_MAGNIFIED_LONG_EDGE}px",
     )
 
-    sbox = add("sandbox", "create and remove headless outputs, explicitly", cmd_sandbox)
+    sbox = add("sandbox", "Create and remove headless outputs, explicitly", cmd_sandbox)
     ssub = sbox.add_subparsers(dest="subcommand", required=True)
     for name, help_text in (
-        ("create", "add a headless output nobody can see"),
-        ("list", "headless outputs that exist"),
-        ("remove", "take one away; refuses anything but a headless output"),
+        ("create", "Add a headless output nobody can see"),
+        ("list", "Headless outputs that exist"),
+        ("remove", "Take one away; refuses anything but a headless output"),
     ):
-        sp = ssub.add_parser(name, help=help_text)
+        sp = ssub.add_parser(name, help=help_text, description=help_text)
         sp.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
         if name == "remove":
-            sp.add_argument("name", nargs="?", help="which output")
-            sp.add_argument("--all", action="store_true", help="every headless output")
+            sp.add_argument("name", nargs="?", help="Which output")
+            sp.add_argument("--all", action="store_true", help="Every headless output")
 
-    know = add("know", "what past runs learned about an application", cmd_know)
+    know = add("know", "What past runs learned about an application", cmd_know)
     ksub = know.add_subparsers(dest="subcommand", required=True)
     for name, help_text in (
-        ("list", "applications with stored knowledge"),
-        ("show", "landmarks and notes for one application"),
-        ("set", "record where something is, as a fraction of the window"),
-        ("note", "record a fact that has no coordinate"),
-        ("confirm", "the landmark pointed at the right thing"),
-        ("miss", "it did not"),
-        ("forget", "drop a landmark, or everything for an application"),
-        ("host", "what runs learned about this machine, not about an application"),
+        ("list", "Applications with stored knowledge"),
+        ("show", "Landmarks and notes for one application"),
+        ("set", "Record where something is, as a fraction of the window"),
+        ("note", "Record a fact that has no coordinate"),
+        ("confirm", "The landmark pointed at the right thing"),
+        ("miss", "It did not"),
+        ("forget", "Drop a landmark, or everything for an application"),
+        ("host", "What runs learned about this machine, not about an application"),
     ):
-        kp = ksub.add_parser(name, help=help_text)
+        kp = ksub.add_parser(name, help=help_text, description=help_text)
         kp.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
         if name not in {"list", "host"}:
-            kp.add_argument("app", help="window class, or any name you key it by")
+            kp.add_argument("app", help="Window class, or any name you key it by")
         if name in {"set", "confirm", "miss"}:
-            kp.add_argument("name", help="what the landmark is called")
+            kp.add_argument("name", help="What the landmark is called")
         if name == "forget":
-            kp.add_argument("name", nargs="?", help="omit to forget the application")
+            kp.add_argument("name", nargs="?", help="Omit to forget the application")
         if name == "set":
             kp.add_argument("--rect", required=True, metavar="X,Y[,W,H]",
-                            help="fractions of the window")
-            kp.add_argument("--note", help="what it is")
+                            help="Fractions of the window")
+            kp.add_argument("--note", help="What it is")
             kp.add_argument("--window", metavar="SELECTOR",
-                            help="the window measured against (default: the app)")
+                            help="The window measured against (default: the app)")
             # Naming how a control follows its window narrows what a later
             # capture has to cover. Unnamed is the honest default: the run that
             # learned a fraction usually cannot tell either, and covering every
             # possibility costs pixels rather than correctness.
             kp.add_argument("--anchor-x", choices=knowledge.ANCHORS["x"],
-                            default="auto", help="how it follows a width change")
+                            default="auto", help="How it follows a width change")
             kp.add_argument("--anchor-y", choices=knowledge.ANCHORS["y"],
-                            default="auto", help="how it follows a height change")
+                            default="auto", help="How it follows a height change")
         if name == "note":
-            kp.add_argument("text", help="the fact worth keeping")
+            kp.add_argument("text", help="The fact worth keeping")
         if name == "host":
             # Host facts are notes only, and are addressed by the position the
             # listing prints: a machine has no name to key a fact by. Adding and
@@ -1709,24 +1781,24 @@ def build_parser() -> argparse.ArgumentParser:
             # a caller who wrote both meant one of them, and argparse refusing
             # is the only outcome that does not silently discard the other.
             host_action = kp.add_mutually_exclusive_group()
-            host_action.add_argument("text", nargs="?", help="a fact about this machine")
+            host_action.add_argument("text", nargs="?", help="A fact about this machine")
             host_action.add_argument(
                 "--forget", nargs="?", type=int, const=0, metavar="N",
-                help="drop note N, or every host note when given no number",
+                help="Drop note N, or every host note when given no number",
             )
         else:
-            kp.add_argument("--context", metavar="NAME", help="scope, e.g. a site")
+            kp.add_argument("--context", metavar="NAME", help="Scope, e.g. a site")
 
-    waiting = add("wait", "block until a compositor event happens", cmd_wait)
+    waiting = add("wait", "Block until a compositor event happens", cmd_wait)
     waiting.add_argument(
         "condition",
         choices=sorted(wait.EVENTS),
-        help="what to wait for; checked once against the current state first",
+        help="What to wait for; checked once against the current state first",
     )
-    waiting.add_argument("--class", metavar="SUBSTRING", help="restrict to a window class")
-    waiting.add_argument("--title", metavar="SUBSTRING", help="restrict to a window title")
+    waiting.add_argument("--class", metavar="SUBSTRING", help="Restrict to a window class")
+    waiting.add_argument("--title", metavar="SUBSTRING", help="Restrict to a window title")
     waiting.add_argument(
-        "--timeout", type=float, default=30.0, help="seconds before giving up (default: 30)"
+        "--timeout", type=float, default=30.0, help="Seconds before giving up (default: 30)"
     )
 
     # Everything below injects. --dry-run runs every interlock and writes the
@@ -1737,7 +1809,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--dry-run",
             action="store_true",
-            help="check and log the action without injecting it",
+            help="Check and log the action without injecting it",
         )
         # Marks the commands that reach the shared pointer, focus, or
         # clipboard, and so must hold the desktop while they run. `main`
@@ -1748,71 +1820,71 @@ def build_parser() -> argparse.ArgumentParser:
     def add_aim(p: argparse.ArgumentParser, required: bool) -> None:
         p.add_argument(
             "--frame", metavar="ID", required=required,
-            help="frame the coordinate came from",
+            help="Frame the coordinate came from",
         )
-        p.add_argument("--at", metavar="X,Y", required=required, help="coordinate in image pixels")
+        p.add_argument("--at", metavar="X,Y", required=required, help="Coordinate in image pixels")
 
-    focus = add_injecting("focus", "give a window keyboard focus", cmd_focus)
+    focus = add_injecting("focus", "Give a window keyboard focus", cmd_focus)
     focus.add_argument(
         "selector",
         help="'active', a window address, or a class substring",
     )
 
-    move = add_injecting("move", "warp the pointer to a frame coordinate", cmd_move)
+    move = add_injecting("move", "Warp the pointer to a frame coordinate", cmd_move)
     add_aim(move, required=True)
 
-    click = add_injecting("click", "warp, assert focus, press and release", cmd_click)
+    click = add_injecting("click", "Warp, assert focus, press and release", cmd_click)
     add_aim(click, required=True)
     click.add_argument(
-        "--button", choices=sorted(uinput.BUTTONS), default="left", help="which button"
+        "--button", choices=sorted(uinput.BUTTONS), default="left", help="Which button"
     )
-    click.add_argument("--count", type=int, default=1, help="click count (2 for double)")
+    click.add_argument("--count", type=int, default=1, help="Click count (2 for double)")
 
-    scroll = add_injecting("scroll", "wheel events, optionally aimed first", cmd_scroll)
+    scroll = add_injecting("scroll", "Wheel events, optionally aimed first", cmd_scroll)
     add_aim(scroll, required=False)
-    scroll.add_argument("--dy", type=int, default=0, help="vertical detents, negative scrolls down")
-    scroll.add_argument("--dx", type=int, default=0, help="horizontal detents")
+    scroll.add_argument("--dy", type=int, default=0, help="Vertical detents, negative scrolls down")
+    scroll.add_argument("--dx", type=int, default=0, help="Horizontal detents")
 
-    typing = add_injecting("type", "enter text into the focused window", cmd_type)
-    typing.add_argument("text", help="the text, or '-' to read stdin")
+    typing = add_injecting("type", "Enter text into the focused window", cmd_type)
+    typing.add_argument("text", help="The text, or '-' to read stdin")
     typing.add_argument(
         "--method",
         choices=("clipboard", "keys"),
         default="clipboard",
-        help="clipboard is layout-independent; keys synthesizes each character",
+        help="Clipboard is layout-independent; keys synthesizes each character",
     )
     typing.add_argument(
         "--verify",
         action="store_true",
-        help="read the field back and confirm the text arrived intact",
+        help="Read the field back and confirm the text arrived intact",
     )
     typing.add_argument(
         "--backend",
         choices=("uinput", "compositor"),
-        help="compositor injection leaves sleeping monitors asleep",
+        help="Compositor injection leaves sleeping monitors asleep",
     )
     typing.add_argument(
         "--no-restore",
         action="store_true",
-        help="leave the text on the clipboard instead of restoring what was there",
+        help="Leave the text on the clipboard instead of restoring what was there",
     )
 
-    key = add_injecting("key", "a semantic action, or a literal chord", cmd_key)
+    key = add_injecting("key", "A semantic action, or a literal chord", cmd_key)
     target = key.add_mutually_exclusive_group(required=True)
     target.add_argument(
-        "--action", metavar="NAME", help="a semantic action, resolved per application"
+        "--action", metavar="NAME", help="A semantic action, resolved per application"
     )
     target.add_argument(
-        "--chord", metavar="CHORD", help="a literal chord such as 'ctrl+alt+shift+f4'"
+        "--chord", metavar="CHORD", help="A literal chord such as 'ctrl+alt+shift+f4'"
     )
-    key.add_argument("--repeat", type=int, default=1, help="how many times to send it")
+    key.add_argument("--repeat", type=int, default=1, help="How many times to send it")
     key.add_argument(
         "--backend",
         choices=("uinput", "compositor"),
-        help="compositor injection leaves sleeping monitors asleep",
+        help="Compositor injection leaves sleeping monitors asleep",
     )
 
-    recipe = add_injecting("recipe", "save, review, and replay a procedure", cmd_recipe)
+    recipe = add_injecting("recipe", "Save, review, and replay a procedure", cmd_recipe)
     # Only `replay` injects; listing and reading recipes must not queue behind
     # an agent that is driving the desktop. The subparser's default wins over
     # the one add_injecting set here.
@@ -1823,56 +1895,56 @@ def build_parser() -> argparse.ArgumentParser:
         """Nested subcommands repeat the global flags for the same reason the
         top level does: `cu recipe list --json` is the form an agent writes,
         and argparse accepts a flag only on the parser that declares it."""
-        p = rsub.add_parser(name, help=help_text)
+        p = rsub.add_parser(name, help=help_text, description=help_text)
         p.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
         p.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS)
         return p
 
-    add_recipe("list", "every stored recipe and whether it is reviewed")
-    rsave = add_recipe("save", "promote recent actions from the log")
-    rsave.add_argument("name", help="lowercase name; it becomes the filename")
-    rsave.add_argument("--last", type=int, default=20, help="how many log entries to promote")
-    rsave.add_argument("--site", help="what site this is for")
-    rsave.add_argument("--task", help="what it accomplishes")
+    add_recipe("list", "Every stored recipe and whether it is reviewed")
+    rsave = add_recipe("save", "Promote recent actions from the log")
+    rsave.add_argument("name", help="Lowercase name; it becomes the filename")
+    rsave.add_argument("--last", type=int, default=20, help="How many log entries to promote")
+    rsave.add_argument("--site", help="What site this is for")
+    rsave.add_argument("--task", help="What it accomplishes")
     rsave.add_argument(
         "--for",
         dest="profile",
         metavar="CONSUMER",
-        help="capture budget the replay should use; see `cu profiles`",
+        help="Capture budget the replay should use; see `cu profiles`",
     )
     for name, help_text in (
-        ("show", "print every step"),
-        ("review", "read the steps, and approve them with --approve"),
-        ("replay", "run a reviewed recipe"),
+        ("show", "Print every step"),
+        ("review", "Read the steps, and approve them with --approve"),
+        ("replay", "Run a reviewed recipe"),
     ):
         sub_parser = add_recipe(name, help_text)
         sub_parser.add_argument("name")
         if name == "review":
             sub_parser.add_argument(
-                "--approve", action="store_true", help="record that you have read every step"
+                "--approve", action="store_true", help="Record that you have read every step"
             )
         if name == "replay":
             sub_parser.set_defaults(injects=True)
             sub_parser.add_argument(
                 "--param", action="append", metavar="NAME=VALUE",
-                help="supply a typed value; recipes never store the text itself",
+                help="Supply a typed value; recipes never store the text itself",
             )
 
     browsing = add_injecting(
-        "browser", "a semantic browser action, resolved per browser", cmd_browser
+        "browser", "A semantic browser action, resolved per browser", cmd_browser
     )
     browsing.add_argument(
         "action",
-        help="an action such as focus-urlbar or close-tab; "
+        help="An action such as focus-urlbar or close-tab; "
         "'list' shows installed browsers and 'actions' shows what one resolves",
     )
     browsing.add_argument(
-        "--browser", metavar="NAME", help="which browser (default: the focused window's)"
+        "--browser", metavar="NAME", help="Which browser (default: the focused window's)"
     )
     browsing.add_argument(
         "--backend",
         choices=("uinput", "compositor"),
-        help="compositor injection leaves sleeping monitors asleep",
+        help="Compositor injection leaves sleeping monitors asleep",
     )
 
     return parser
