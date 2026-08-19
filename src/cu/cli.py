@@ -1257,31 +1257,63 @@ def cmd_browser(args: argparse.Namespace) -> int:
 
     if args.action == "actions":
         keymap = browser.keymap_for(target)
-        payload = {"browser": target["name"], "family": target["family"], "actions": keymap}
+        payload = {
+            "browser": target["name"],
+            "family": target["family"],
+            "window_class": target["window_class"],
+            "actions": keymap,
+            # An installed, focused browser that resolves nothing is a
+            # configuration gap, and saying which gap is the difference
+            # between a caller retrying and a caller fixing it.
+            "diagnostic": None if keymap else browser.unmapped_reason(target),
+        }
 
         def render(data: Any) -> None:
             print(f"{data['browser']} ({data['family']})")
-            if not data["actions"]:
-                print("  no actions resolvable — this browser keeps no readable keymap;")
-                print("  state them under [keys] in cu's config to drive it")
+            if data["diagnostic"]:
+                print(f"  no actions resolvable — {data['diagnostic']}")
             for action, chord in sorted(data["actions"].items()):
                 print(f"  {action:<18} {chord}")
 
         _emit(payload, args.json, render)
         return exits.OK
 
-    chord, _source = browser.resolve(target, args.action, cfg)
+    chord, source = browser.resolve(target, args.action, cfg)
     if chord is None:
-        known = sorted(browser.keymap_for(target)) or ["none"]
+        keymap = browser.keymap_for(target)
+        known = sorted(keymap) or ["none"]
         print(
             f"cu: {target['name']} has no binding for {args.action!r}. "
             f"Known: {', '.join(known)}.",
             file=sys.stderr,
         )
+        if not keymap:
+            print(f"cu: {browser.unmapped_reason(target)}", file=sys.stderr)
         print(f"cu: {exits.RESPONSE[exits.NOT_MAPPED]}", file=sys.stderr)
         return exits.NOT_MAPPED
 
     if window is None:
+        # A dry run sends nothing, so it can answer about the browser rather
+        # than about which window happens to hold focus — which is what makes
+        # it usable for checking a resolution before arranging the desktop.
+        if args.dry_run:
+            _emit(
+                {
+                    "action": "browser",
+                    "semantic": args.action,
+                    "browser": target["name"],
+                    "chord": chord,
+                    "resolved_from": source,
+                    "dry_run": True,
+                    "focused": False,
+                },
+                args.json,
+                lambda r: print(
+                    f"would send {r['semantic']} → {r['chord']}  "
+                    f"[{r['browser']}, via {r['resolved_from']}, not focused]"
+                ),
+            )
+            return exits.OK
         print(
             "cu: --browser names a browser but no window of it holds focus; "
             "focus one first",
