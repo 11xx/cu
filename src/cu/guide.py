@@ -244,11 +244,9 @@ BROWSERS
   each browser's own configuration; a browser that resolves nothing until the
   user configures it is being honest, not broken.
 
-  Browser chrome may be configured to stay hidden until the pointer reaches a
-  reveal zone. When a browser is known to use hidden UI, inspect and hover the
-  likely window-edge zones before concluding that its address bar, toolbar, or
-  sidebar is absent. The exact edge is application and profile state: observe
-  it on this desktop and record a durable app-specific note with `cu know`.
+  A browser may be configured to keep its chrome hidden until the pointer
+  reaches an edge, so an address bar missing from a capture may be revealable
+  rather than absent. That is one instance of the pattern below.
 
 WHAT EARLIER RUNS LEARNED
   cu know host                   What this machine does differently.
@@ -284,6 +282,29 @@ WHEN A CAPTURE SURPRISES YOU, WIDEN
   loudly; narrow ones fail quietly. On the first surprise go to --window, then
   --output, rather than re-aiming repeatedly — two aimed captures that disagree
   with expectation cost more than one full-output capture.
+
+CONTROLS THAT HIDE UNTIL THE POINTER ARRIVES
+  cu know show <app>             Whether a reveal edge was learned here.
+  cu move --frame f3 --at 640,2  Hover the learned edge, through the frame read.
+  cu shot --after f3 --watch '0,0 1280x40'
+  cu know note <app> 'the toolbar reveals on the top edge'
+
+  A capture can honestly show an application while omitting controls it hides
+  until the pointer comes near. Absence in the picture is then not evidence of
+  absence — and guessing a keyboard chord instead is how a keystroke performs
+  some other command.
+
+  The revealing edge is learned state, not a default: which edge, and what sits
+  behind it, are the user's configuration. Ask `cu know` first. If a placement
+  is recorded, hover it through the frame you read, wait for the reveal with
+  `cu shot --after` watching a narrow strip along that edge, and act only
+  through the fresh frame that comes back — the revealed control does not exist
+  in the frame you hovered from, and coordinates never cross frames. Record a
+  placement you verify, so the next run does not rediscover it.
+
+  If nothing is known, widen the capture rather than hovering each edge in
+  turn. A probe per edge is four pointer moves on a live desktop to answer a
+  question one --output capture may answer on its own.
 
 THE INTERLOCKS, AND WHAT TO TELL THE USER
   `cu` refuses to type into password managers, lock screens, and windows whose
