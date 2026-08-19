@@ -548,6 +548,10 @@ def _capture_window(
                 "class": live["class"],
                 "title": live["title"],
                 "logical_rect": window["logical_rect"],
+                # Carried when the observer can name the document itself. A
+                # frame that fell back to the title would be checked by the
+                # weaker identity of the two for the rest of its life.
+                **({"content_id": live["content_id"]} if live.get("content_id") else {}),
             },
         )
 

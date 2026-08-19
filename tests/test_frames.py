@@ -876,3 +876,16 @@ def test_a_refreshed_identity_keeps_the_geometry_the_pixels_depict():
     assert refreshed["title"] == "page B"
     # A stronger identity the capture recorded survives the refresh.
     assert refreshed["content_id"] == "https://a.example/one"
+
+
+def test_a_capture_keeps_the_strongest_identity_the_observer_gave_it():
+    """A frame that fell back to the title would be checked by the weaker of
+    the two identities for the rest of its life."""
+    live = {"address": "0x1", "class": "zen", "title": "Dashboard",
+            "content_id": "https://a.example/one",
+            "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}}
+    frame = {"id": "f1", "window": {**live}}
+    assert frames.content_identity(frame) == "https://a.example/one"
+    # And a document swap the title hides is then caught.
+    moved = [{**live, "content_id": "https://a.example/two"}]
+    assert frames.content_drift(frame, moved)

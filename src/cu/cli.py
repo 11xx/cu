@@ -672,6 +672,14 @@ def cmd_shot(args: argparse.Namespace) -> int:
                     "class": window["class"],
                     "title": window["title"],
                     "logical_rect": window["logical_rect"],
+                    # Carried when the observer can name the document itself,
+                    # so the frame is checked by the stronger of the two
+                    # identities for the rest of its life.
+                    **(
+                        {"content_id": window["content_id"]}
+                        if window.get("content_id")
+                        else {}
+                    ),
                 }
                 if window
                 else None

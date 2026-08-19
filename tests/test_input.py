@@ -819,3 +819,22 @@ def test_a_click_left_behind_by_a_refused_type_is_not_replayable():
                    "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600}},
     }
     assert recipes.step_from_log(entry) is None
+
+
+def test_text_that_landed_is_never_logged_as_a_bare_click(monkeypatch):
+    """Once keystrokes are on their way the action is the typing, so a failure
+    in the cleanup after it must not read as a click that did nothing."""
+    field = window(cls="zen", logical_rect={"x": 0, "y": 0, "w": 800, "h": 600})
+    _aimed(monkeypatch, _click_result(field), field)
+    recorded = []
+    monkeypatch.setattr(safety, "record", lambda _cfg, entry: recorded.append(entry))
+    monkeypatch.setattr(actions, "_clipboard_read", lambda: b"before")
+
+    def restore_fails(data):
+        if data == b"before":
+            raise actions.ClipboardError("wl-copy exited 1")
+
+    monkeypatch.setattr(actions, "_clipboard_write", restore_fails)
+    with pytest.raises(actions.ClipboardError):
+        actions.type_text(CFG, "443", frame_id="f23", at=(455, 320), dry_run=False)
+    assert [e["action"] for e in recorded] == []
