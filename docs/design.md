@@ -817,11 +817,11 @@ toggle pressed twice in a panic would re-enable the thing being stopped.
 
 ## Implementation
 
-Python packaged from `pyproject.toml` with Hatchling and run through `uv`. The
-package declares no runtime dependencies. `uinput` is struct packing into a
-file descriptor and capture is subprocess orchestration; neither argues for a
-compiled language, and the measured example above keeps interpreter overhead
-visible rather than assumed away.
+Python packaged from `pyproject.toml` with Hatchling and run through `uv`. Pillow supplies native PNG scanline reconstruction and RGBA conversion.
+CU validates chunk CRCs, supported formats, scanline sizes and filters before
+decoding, with a 64-megapixel allocation limit. Ancillary colour profiles and
+transparency metadata do not change the raw-channel API. `uinput` is struct
+packing into a file descriptor and capture is subprocess orchestration.
 
 The tradeoff is honest: a Rust `cu` would be a single distributable artifact,
 which matters if this is ever shared. Python is a reversible choice for now

@@ -2,21 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import struct
 import zlib
 
+from PIL import Image
+
+MAX_PIXELS = 64 * 1024 * 1024
+
 SIGNATURE = b"\x89PNG\r\n\x1a\n"
 CHANNELS = {0: 1, 2: 3, 4: 2, 6: 4}
-
-
-def _paeth(left: int, above: int, upper_left: int) -> int:
-    estimate = left + above - upper_left
-    distances = (
-        abs(estimate - left),
-        abs(estimate - above),
-        abs(estimate - upper_left),
-    )
-    return (left, above, upper_left)[distances.index(min(distances))]
 
 
 def _chunk(kind: bytes, data: bytes) -> bytes:
@@ -77,46 +72,37 @@ def decode(data: bytes) -> tuple[int, int, bytes]:
     if not compressed or not saw_end:
         raise ValueError("PNG is missing IDAT or IEND")
 
+    if width * height > MAX_PIXELS:
+        raise ValueError(f"PNG exceeds the {MAX_PIXELS} pixel limit")
+    stride = width * CHANNELS[colour_type]
+    expected = height * (stride + 1)
     try:
-        filtered = zlib.decompress(compressed)
+        decoder = zlib.decompressobj()
+        filtered = decoder.decompress(compressed, expected + 1)
     except zlib.error as exc:
         raise ValueError(f"cannot decompress PNG pixels: {exc}") from exc
-    channels = CHANNELS[colour_type]
-    stride = width * channels
-    if len(filtered) != height * (stride + 1):
+    if len(filtered) != expected:
         raise ValueError("PNG scanline data has the wrong size")
-
-    previous = bytearray(stride)
-    decoded = bytearray()
-    for row_number in range(height):
-        start = row_number * (stride + 1)
-        filter_type = filtered[start]
+    if not decoder.eof:
+        raise ValueError("cannot decompress PNG pixels: incomplete stream")
+    for filter_type in filtered[::stride + 1]:
         if filter_type > 4:
             raise ValueError(f"unsupported PNG filter type {filter_type}")
-        row = bytearray(filtered[start + 1 : start + 1 + stride])
-        for index, value in enumerate(row):
-            left = row[index - channels] if index >= channels else 0
-            above = previous[index]
-            upper_left = previous[index - channels] if index >= channels else 0
-            predictor = (0, left, above, (left + above) // 2, 0)[filter_type]
-            if filter_type == 4:
-                predictor = _paeth(left, above, upper_left)
-            row[index] = (value + predictor) & 0xFF
-        decoded.extend(row)
-        previous = row
+    del filtered
 
-    if colour_type == 6:
-        return width, height, bytes(decoded)
-    rgba = bytearray()
-    for index in range(0, len(decoded), channels):
-        pixel = decoded[index : index + channels]
-        if colour_type == 2:
-            rgba.extend((*pixel, 255))
-        elif colour_type == 0:
-            rgba.extend((pixel[0], pixel[0], pixel[0], 255))
-        else:
-            rgba.extend((pixel[0], pixel[0], pixel[0], pixel[1]))
-    return width, height, bytes(rgba)
+    # Only pixel-bearing chunks reach Pillow. Ancillary colour profiles and
+    # tRNS do not alter this API's raw channels or introduce metadata decoding.
+    canonical = b"".join((
+        SIGNATURE,
+        _chunk(b"IHDR", struct.pack(">IIBBBBB", *header)),
+        _chunk(b"IDAT", bytes(compressed)),
+        _chunk(b"IEND", b""),
+    ))
+    try:
+        with Image.open(io.BytesIO(canonical)) as image:
+            return width, height, image.convert("RGBA").tobytes()
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot decode PNG pixels: {exc}") from exc
 
 
 def encode(width: int, height: int, rgba: bytes) -> bytes:
