@@ -22,6 +22,7 @@ from typing import Any
 from . import (
     actions,
     browser,
+    browser_read_cli,
     capture,
     checks,
     config,
@@ -2188,6 +2189,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compositor injection leaves sleeping monitors asleep",
     )
 
+    web = add(
+        "web", "Read granted browser semantics without input delivery", browser_read_cli.run
+    )
+    browser_read_cli.configure(web)
     return parser
 
 

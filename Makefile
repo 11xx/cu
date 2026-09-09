@@ -43,6 +43,6 @@ build:
 	uv build
 
 test-adapters:
-	node --test adapters/observation.test.mjs
+	node --test adapters/observation.test.mjs browser-extension/*.test.mjs
 
 check: test test-adapters lint build

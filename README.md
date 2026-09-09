@@ -148,6 +148,17 @@ harness's native image return, with no daemon or extra transport. The CLI guide
 contains its safety and capture-selection rules. Adapter tests require Node.js
 22+ and run as part of `make check`; the Python CLI does not require Node.
 
+## Optional Firefox page evidence
+
+[`browser-extension/`](browser-extension/README.md) supplies a passive read tier
+with explicit per-tab grants. `cu web setup` registers its browser-owned native
+host; `cu web hosts` and `cu web read` discover and query granted documents.
+No DOM input, all-sites permission, TCP listener, or persistent page archive is
+required. Browser evidence is optional and untrusted; pixel capture works without
+it. CSS rectangles are not mapped to desktop frames, and iframe/shadow-tree
+contents are unsupported. Run bare `cu` for the consent, freshness and refusal
+contracts before enabling a tab.
+
 ## The eww indicator
 
 `eww/cu.yuck` and `eww/cu.scss` are a ready widget: one mark per driving agent,

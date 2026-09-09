@@ -30,6 +30,13 @@ ABORT_CONTROLLED_BY_USER = 43
 DESKTOP_RESERVED = 44
 RESERVATION_UNAVAILABLE = 45
 NOT_MAPPED = 50
+BROWSER_READ_UNAVAILABLE = 51
+BROWSER_DOCUMENT_STALE = 52
+BROWSER_READ_PROTOCOL = 53
+BROWSER_READ_TIMEOUT = 54
+BROWSER_READ_AMBIGUOUS = 55
+BROWSER_READ_REFUSED = 56
+BROWSER_READ_BUDGET = 57
 
 #: What a caller should do on each code. Shipped in `cu doctor --json` and
 #: summarized in the bare-`cu` guide, so the contract has exactly one source.
@@ -98,6 +105,13 @@ RESPONSE = {
         "The desktop reservation state is unavailable. Do not inject or retry; "
         "the registry must be repaired first."
     ),
+    BROWSER_READ_UNAVAILABLE: "Enable the optional Firefox read session, or use pixel capture.",
+    BROWSER_DOCUMENT_STALE: "Browser document/generation changed. Read again and reconsider.",
+    BROWSER_READ_PROTOCOL: "Protocol mismatch. Check extension and native-host versions.",
+    BROWSER_READ_TIMEOUT: "Browser read timed out. Inspect the tab and helper state.",
+    BROWSER_READ_AMBIGUOUS: "Select an explicit browser helper and granted tab; do not guess.",
+    BROWSER_READ_REFUSED: "Read not authorized/supported. Inspect the grant; do not bypass it.",
+    BROWSER_READ_BUDGET: "Evidence exceeds its bound. Narrow the query or reduce the limit.",
     NOT_MAPPED: (
         "No known binding for this action in this application. "
         "Do not guess a default chord."

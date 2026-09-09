@@ -1,0 +1,1132 @@
+"""Bounded local transport for the Firefox passive-read extension.
+
+The browser owns the helper and its private Unix socket. Only explicit read
+requests cross it; responses are relayed without a persistent page archive.
+"""
+
+from __future__ import annotations
+
+import errno
+import json
+import math
+import os
+import re
+import secrets
+import selectors
+import signal
+import socket
+import stat
+import struct
+import sys
+import threading
+import time
+import uuid
+from collections.abc import Mapping
+from contextlib import suppress
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, BinaryIO, Self
+
+PROTOCOL = "cu-browser-read"
+VERSION = 1
+MAX_MESSAGE_BYTES = 1 << 20
+MAX_RECV_CHUNK_BYTES = 64 << 10
+MAX_PENDING_REQUESTS = 64
+MAX_CLIENTS = 4
+DEFAULT_TIMEOUT = 2.0
+MAX_TIMEOUT = 30.0
+MAX_SESSION_CHARS = 128
+MAX_REQUEST_ID_CHARS = 128
+MAX_DOCUMENT_ID_CHARS = 128
+MAX_HELPER_ID_CHARS = 128
+MAX_SOCKET_PATH_CHARS = 4096
+MAX_QUERY_CHARS = 256
+MAX_ROLE_CHARS = 64
+MAX_PAGE = 1_000
+MAX_PAGE_SIZE = 100
+MAX_ELEMENTS = 128
+MAX_GRANTS = 16
+MAX_ERROR_CODE_CHARS = 64
+MAX_ERROR_MESSAGE_CHARS = 256
+SOCKET_PREFIX = "helper-"
+SOCKET_SUFFIX = ".sock"
+
+READ_OPERATIONS = frozenset({"observe", "query"})
+_OBSERVE_FIELDS = frozenset({"include_values", "limit"})
+_QUERY_FIELDS = frozenset({"search", "role", "visible", "page", "page_size", "include_values"})
+_FRAME_HEADER = struct.Struct("=I")
+_SOCKET_NAME = f"{SOCKET_PREFIX}[0-9a-f]{{8,32}}{SOCKET_SUFFIX}"
+
+
+class BrowserReadError(RuntimeError):
+    """Base class for local read transport failures."""
+
+
+class ProtocolError(BrowserReadError):
+    """A frame or protocol message cannot be accepted."""
+
+
+class OversizeMessage(ProtocolError):
+    """A message body exceeds the transport budget."""
+
+
+class StaleHelper(BrowserReadError):
+    """A discovered helper socket is absent or no longer serving."""
+
+
+class BrowserReadTimeout(BrowserReadError):
+    """A bounded client operation did not finish before its deadline."""
+
+
+class MismatchedResponse(ProtocolError):
+    """A response did not match the request waiting on the socket."""
+
+
+class HelperUnavailable(BrowserReadError):
+    """The helper connection could not be used."""
+
+
+def protocol_limits() -> dict[str, int | float]:
+    """The limits a caller needs to construct a bounded request."""
+    return {
+        "max_message_bytes": MAX_MESSAGE_BYTES,
+        "max_pending_requests": MAX_PENDING_REQUESTS,
+        "max_query_chars": MAX_QUERY_CHARS,
+        "max_page": MAX_PAGE,
+        "max_page_size": MAX_PAGE_SIZE,
+        "max_elements": MAX_ELEMENTS,
+        "default_timeout_seconds": DEFAULT_TIMEOUT,
+        "max_timeout_seconds": MAX_TIMEOUT,
+    }
+
+
+def _json_bytes(message: Mapping[str, Any]) -> bytes:
+    if not isinstance(message, Mapping):
+        raise ProtocolError("protocol messages must be JSON objects")
+    try:
+        encoded = json.dumps(
+            dict(message), ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise ProtocolError("message is not valid JSON") from exc
+    if len(encoded) > MAX_MESSAGE_BYTES:
+        raise OversizeMessage(f"message exceeds {MAX_MESSAGE_BYTES} bytes")
+    return encoded
+
+
+def encode_frame(message: Mapping[str, Any]) -> bytes:
+    """Encode one native-messaging frame using the host's native byte order."""
+    body = _json_bytes(message)
+    return _FRAME_HEADER.pack(len(body)) + body
+
+
+def _decode_body(body: bytes) -> dict[str, Any]:
+    try:
+        message = json.loads(
+            body.decode("utf-8"),
+            parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
+        raise ProtocolError("message body is not valid UTF-8 JSON") from exc
+    if not isinstance(message, dict):
+        raise ProtocolError("protocol messages must be JSON objects")
+    return message
+
+
+def _read_once(stream: BinaryIO | socket.socket, size: int, deadline: float | None = None) -> bytes:
+    if isinstance(stream, socket.socket):
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("frame deadline exceeded")
+            stream.settimeout(remaining)
+        return stream.recv(size)
+    data = stream.read(size)
+    return b"" if data is None else data
+
+
+def _read_exact(
+    stream: BinaryIO | socket.socket, size: int, deadline: float | None = None
+) -> bytes:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = _read_once(stream, remaining, deadline)
+        if not chunk:
+            raise ProtocolError("unexpected EOF in a partial frame")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def read_frame(stream: BinaryIO | socket.socket) -> dict[str, Any] | None:
+    """Read one bounded frame, returning ``None`` only at a clean frame EOF."""
+    timeout = stream.gettimeout() if isinstance(stream, socket.socket) else None
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    header = _read_once(stream, 1, deadline)
+    if not header:
+        return None
+    try:
+        header += _read_exact(stream, _FRAME_HEADER.size - 1, deadline)
+    except ProtocolError as exc:
+        raise ProtocolError("unexpected EOF in a partial frame header") from exc
+    (length,) = _FRAME_HEADER.unpack(header)
+    if length == 0:
+        raise ProtocolError("empty frames are not valid messages")
+    if length > MAX_MESSAGE_BYTES:
+        raise OversizeMessage(f"message exceeds {MAX_MESSAGE_BYTES} bytes")
+    return _decode_body(_read_exact(stream, length, deadline))
+
+
+def _write_all(stream: BinaryIO | socket.socket, data: bytes) -> None:
+    if hasattr(stream, "sendall"):
+        stream.sendall(data)  # type: ignore[union-attr]
+        return
+    offset = 0
+    while offset < len(data):
+        written = stream.write(data[offset:])
+        if written is None:
+            written = len(data) - offset
+        if written <= 0:
+            raise ProtocolError("stream refused a frame write")
+        offset += written
+    flush = getattr(stream, "flush", None)
+    if flush is not None:
+        flush()
+
+
+def write_frame(stream: BinaryIO | socket.socket, message: Mapping[str, Any]) -> None:
+    """Write one complete bounded frame to a native or Unix stream."""
+    _write_all(stream, encode_frame(message))
+
+
+class FrameDecoder:
+    """Incrementally decode bounded frames without retaining an open-ended body."""
+
+    def __init__(self, max_bytes: int = MAX_MESSAGE_BYTES) -> None:
+        if max_bytes <= 0 or max_bytes > MAX_MESSAGE_BYTES:
+            raise ValueError("max_bytes is outside the protocol budget")
+        self.max_bytes = max_bytes
+        self._buffer = bytearray()
+
+    def feed(self, chunk: bytes | bytearray | memoryview) -> list[dict[str, Any]]:
+        if not isinstance(chunk, (bytes, bytearray, memoryview)):
+            raise TypeError("frame input must be bytes")
+        if len(chunk) > MAX_RECV_CHUNK_BYTES:
+            raise OversizeMessage("input chunk exceeds the receive budget")
+        self._buffer.extend(chunk)
+        messages: list[dict[str, Any]] = []
+        while len(self._buffer) >= _FRAME_HEADER.size:
+            (length,) = _FRAME_HEADER.unpack(self._buffer[: _FRAME_HEADER.size])
+            if length == 0:
+                raise ProtocolError("empty frames are not valid messages")
+            if length > self.max_bytes:
+                raise OversizeMessage(f"message exceeds {self.max_bytes} bytes")
+            end = _FRAME_HEADER.size + length
+            if len(self._buffer) < end:
+                break
+            body = bytes(self._buffer[_FRAME_HEADER.size : end])
+            del self._buffer[:end]
+            messages.append(_decode_body(body))
+        if len(self._buffer) > self.max_bytes + _FRAME_HEADER.size:
+            raise ProtocolError("frame decoder retained more than one bounded frame")
+        return messages
+
+    def finish(self) -> None:
+        if self._buffer:
+            raise ProtocolError("unexpected EOF in a partial frame")
+
+
+def _bounded_string(value: Any, name: str, maximum: int, *, empty: bool = False) -> str:
+    if not isinstance(value, str) or (not empty and not value) or len(value) > maximum:
+        qualifier = "non-empty " if not empty else ""
+        raise ProtocolError(f"{name} must be a {qualifier}string of at most {maximum} characters")
+    return value
+
+
+def _bounded_int(value: Any, name: str, maximum: int, *, minimum: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum or value > maximum:
+        raise ProtocolError(f"{name} must be an integer from {minimum} through {maximum}")
+    return value
+
+
+def _bounded_bool(value: Any, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ProtocolError(f"{name} must be a boolean")
+    return value
+
+
+def _object(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ProtocolError(f"{name} must be an object")
+    return dict(value)
+
+
+def _exact_fields(message: Mapping[str, Any], required: set[str], allowed: set[str]) -> None:
+    keys = set(message)
+    missing = required - keys
+    if missing:
+        raise ProtocolError(f"message is missing {sorted(missing)[0]}")
+    unknown = keys - allowed
+    if unknown:
+        raise ProtocolError(f"unsupported message field {sorted(unknown)[0]}")
+
+
+def _validate_envelope(message: Mapping[str, Any], message_type: str) -> None:
+    if (
+        message.get("protocol") != PROTOCOL
+        or type(message.get("version")) is not int
+        or message["version"] != VERSION
+    ):
+        raise ProtocolError("unsupported protocol version")
+    if message.get("type") != message_type:
+        raise ProtocolError(f"expected {message_type} message")
+
+
+def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
+    if not isinstance(operation, str) or operation not in READ_OPERATIONS:
+        raise ProtocolError("operation is not a supported passive read")
+    payload_object = _object({} if payload is None else payload, "payload")
+    allowed = _OBSERVE_FIELDS if operation == "observe" else _QUERY_FIELDS
+    unknown = set(payload_object) - allowed
+    if unknown:
+        raise ProtocolError(f"unsupported {operation} field {sorted(unknown)[0]}")
+
+    include_values = payload_object.get("include_values", False)
+    _bounded_bool(include_values, "include_values")
+    if operation == "observe":
+        limit = payload_object.get("limit", MAX_ELEMENTS)
+        _bounded_int(limit, "limit", MAX_ELEMENTS, minimum=1)
+        return {"include_values": include_values, "limit": limit}
+
+    search = payload_object.get("search", "")
+    _bounded_string(search, "search", MAX_QUERY_CHARS, empty=True)
+    role = payload_object.get("role")
+    if role is not None:
+        _bounded_string(role, "role", MAX_ROLE_CHARS)
+    visible = payload_object.get("visible")
+    if visible is not None:
+        _bounded_bool(visible, "visible")
+    page = payload_object.get("page", 0)
+    page_size = payload_object.get("page_size", MAX_PAGE_SIZE)
+    _bounded_int(page, "page", MAX_PAGE)
+    _bounded_int(page_size, "page_size", MAX_PAGE_SIZE, minimum=1)
+    return {
+        "search": search,
+        "role": role,
+        "visible": visible,
+        "page": page,
+        "page_size": page_size,
+        "include_values": include_values,
+    }
+
+
+def validate_request(message: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and normalize the only request shape the broker forwards."""
+    request = _object(message, "request")
+    allowed = {
+        "protocol",
+        "version",
+        "type",
+        "id",
+        "operation",
+        "session",
+        "tab_id",
+        "document_id",
+        "generation",
+        "payload",
+    }
+    _exact_fields(request, allowed, allowed)
+    _validate_envelope(request, "request")
+    request_id = _bounded_string(request["id"], "id", MAX_REQUEST_ID_CHARS)
+    operation = request["operation"]
+    if not isinstance(operation, str) or operation not in READ_OPERATIONS:
+        raise ProtocolError("operation is not a supported passive read")
+    session = _bounded_string(request["session"], "session", MAX_SESSION_CHARS)
+    tab_id = _bounded_int(request["tab_id"], "tab_id", 2**31 - 1, minimum=1)
+    document_id = _bounded_string(request["document_id"], "document_id", MAX_DOCUMENT_ID_CHARS)
+    generation = request["generation"]
+    if generation is not None:
+        _bounded_int(generation, "generation", 2**53 - 1)
+    payload = validate_payload(operation, request["payload"])
+    return {
+        "protocol": PROTOCOL,
+        "version": VERSION,
+        "type": "request",
+        "id": request_id,
+        "operation": operation,
+        "session": session,
+        "tab_id": tab_id,
+        "document_id": document_id,
+        "generation": generation,
+        "payload": payload,
+    }
+
+
+def make_request(
+    operation: str,
+    *,
+    session: str,
+    tab_id: int,
+    document_id: str,
+    generation: int | None = None,
+    payload: Mapping[str, Any] | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Build a request after applying the same allowlist used by the host."""
+    message = {
+        "protocol": PROTOCOL,
+        "version": VERSION,
+        "type": "request",
+        "id": request_id or uuid.uuid4().hex,
+        "operation": operation,
+        "session": session,
+        "tab_id": tab_id,
+        "document_id": document_id,
+        "generation": generation,
+        "payload": dict(payload or {}),
+    }
+    return validate_request(message)
+
+
+def _validate_grant(grant: Mapping[str, Any]) -> dict[str, Any]:
+    value = _object(grant, "grant")
+    allowed = {"session", "tab_id", "window_id", "document_id", "generation", "active", "hidden"}
+    _exact_fields(value, allowed, allowed)
+    session = _bounded_string(value["session"], "grant session", MAX_SESSION_CHARS)
+    tab_id = _bounded_int(value["tab_id"], "grant tab_id", 2**31 - 1, minimum=1)
+    window_id = _bounded_int(value["window_id"], "grant window_id", 2**31 - 1, minimum=1)
+    document_id = _bounded_string(value["document_id"], "grant document_id", MAX_DOCUMENT_ID_CHARS)
+    generation = _bounded_int(value["generation"], "grant generation", 2**53 - 1)
+    active = _bounded_bool(value["active"], "grant active")
+    hidden = _bounded_bool(value["hidden"], "grant hidden")
+    return {
+        "session": session,
+        "tab_id": tab_id,
+        "window_id": window_id,
+        "document_id": document_id,
+        "generation": generation,
+        "active": active,
+        "hidden": hidden,
+    }
+
+
+def _validate_grants(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or len(value) > MAX_GRANTS:
+        raise ProtocolError(f"grants must contain at most {MAX_GRANTS} entries")
+    grants = [_validate_grant(grant) for grant in value]
+    keys = [(grant["session"], grant["tab_id"]) for grant in grants]
+    if len(keys) != len(set(keys)):
+        raise ProtocolError("grants contain a duplicate session and tab")
+    return grants
+
+
+def _validate_response(message: Mapping[str, Any]) -> dict[str, Any]:
+    response = _object(message, "response")
+    allowed = {
+        "protocol",
+        "version",
+        "type",
+        "id",
+        "session",
+        "tab_id",
+        "document_id",
+        "ok",
+        "result",
+        "error",
+    }
+    _exact_fields(response, {"protocol", "version", "type", "id", "ok"}, allowed)
+    _validate_envelope(response, "response")
+    _bounded_string(response["id"], "response id", MAX_REQUEST_ID_CHARS)
+    ok = _bounded_bool(response["ok"], "response ok")
+    if "session" in response:
+        _bounded_string(response["session"], "response session", MAX_SESSION_CHARS)
+    if "tab_id" in response:
+        _bounded_int(response["tab_id"], "response tab_id", 2**31 - 1, minimum=1)
+    if "document_id" in response:
+        _bounded_string(response["document_id"], "response document_id", MAX_DOCUMENT_ID_CHARS)
+    if ok:
+        _exact_fields(response, {"session", "tab_id", "document_id"}, allowed)
+        if "result" not in response or not isinstance(response["result"], Mapping):
+            raise ProtocolError("successful responses require a result object")
+    else:
+        error = _object(response.get("error"), "response error")
+        if set(error) - {"code", "state", "message"}:
+            raise ProtocolError("response error contains an unsupported field")
+        _bounded_string(error.get("code"), "error code", MAX_ERROR_CODE_CHARS)
+        _bounded_string(error.get("state", "unsupported"), "error state", MAX_ERROR_CODE_CHARS)
+        _bounded_string(
+            error.get("message", "request refused"), "error message", MAX_ERROR_MESSAGE_CHARS
+        )
+    return response
+
+
+def _error_response(request_id: str | None, code: str, message: str) -> dict[str, Any]:
+    response: dict[str, Any] = {
+        "protocol": PROTOCOL,
+        "version": VERSION,
+        "type": "response",
+        "ok": False,
+        "error": {"code": code, "state": "unsupported", "message": message},
+    }
+    if request_id is not None:
+        response["id"] = request_id
+    return response
+
+
+def _safe_request_id(message: Mapping[str, Any]) -> str | None:
+    value = message.get("id")
+    if isinstance(value, str) and value and len(value) <= MAX_REQUEST_ID_CHARS:
+        return value
+    return None
+
+
+def _helper_socket_directory(*, create: bool = False) -> Path:
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime:
+        raise BrowserReadError("XDG_RUNTIME_DIR is required for browser read transport")
+    root = Path(runtime)
+    if not root.is_absolute():
+        raise BrowserReadError("XDG_RUNTIME_DIR must be an absolute path")
+    directory = root / "cu" / "browser"
+    if create:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(directory, 0o700)
+    return directory
+
+
+def _socket_path(path: str | os.PathLike[str]) -> Path:
+    candidate = Path(path)
+    directory = _helper_socket_directory()
+    if not candidate.is_absolute() or candidate.parent != directory:
+        raise StaleHelper("helper socket is outside the browser runtime directory")
+    if not re.fullmatch(_SOCKET_NAME, candidate.name):
+        raise StaleHelper("helper socket name is not recognized")
+    if len(str(candidate)) > MAX_SOCKET_PATH_CHARS:
+        raise StaleHelper("helper socket path is too long")
+    return candidate
+
+
+def _owned_socket_file(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+        return False
+    return stat.S_IMODE(info.st_mode) == 0o600
+
+
+def discover_socket_paths() -> list[Path]:
+    """List candidate helper sockets without removing stale entries."""
+    directory = _helper_socket_directory()
+    try:
+        entries = list(directory.iterdir())
+    except FileNotFoundError:
+        return []
+    paths = [
+        entry
+        for entry in entries
+        if re.fullmatch(_SOCKET_NAME, entry.name) and _owned_socket_file(entry)
+    ]
+    return sorted(paths, key=lambda path: path.name)
+
+
+class HelperSocket:
+    """A helper listener whose cleanup is limited to its own inode and path."""
+
+    def __init__(self, listener: socket.socket, path: Path, identity: tuple[int, int]) -> None:
+        self.listener = listener
+        self.path = path
+        self._identity = identity
+        self._closed = False
+
+    @classmethod
+    def create(cls) -> HelperSocket:
+        directory = _helper_socket_directory(create=True)
+        available = 107 - len(os.fsencode(str(directory))) - 1
+        hex_chars = min(32, available - len(SOCKET_PREFIX) - len(SOCKET_SUFFIX))
+        if hex_chars < 8:
+            raise BrowserReadError("XDG_RUNTIME_DIR leaves no usable Unix socket path")
+        for _ in range(8):
+            token = secrets.token_hex((hex_chars + 1) // 2)[:hex_chars]
+            path = directory / f"{SOCKET_PREFIX}{token}{SOCKET_SUFFIX}"
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            bound = False
+            try:
+                listener.bind(str(path))
+                bound = True
+                listener.listen(MAX_CLIENTS)
+                os.chmod(path, 0o600)
+                info = path.stat()
+                return cls(listener, path, (info.st_dev, info.st_ino))
+            except OSError as exc:
+                listener.close()
+                if bound:
+                    path.unlink(missing_ok=True)
+                if exc.errno != errno.EADDRINUSE:
+                    raise
+        raise HelperUnavailable("could not allocate a unique helper socket")
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.listener.close()
+        try:
+            info = self.path.lstat()
+        except FileNotFoundError:
+            return
+        if (info.st_dev, info.st_ino) == self._identity:
+            with suppress(FileNotFoundError):
+                self.path.unlink()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        self.close()
+
+
+class BrowserReadClient:
+    """A bounded synchronous client for one browser-owned helper socket."""
+
+    def __init__(self, connection: socket.socket, path: Path, metadata: dict[str, Any]) -> None:
+        self._connection = connection
+        self.socket_path = path
+        self.metadata = metadata
+        self._lock = threading.Lock()
+        self._closed = False
+        self._timeout = DEFAULT_TIMEOUT
+
+    @classmethod
+    def connect(
+        cls, path: str | os.PathLike[str], timeout: float = DEFAULT_TIMEOUT
+    ) -> BrowserReadClient:
+        deadline = _deadline(timeout)
+        candidate = _socket_path(path)
+        if not _owned_socket_file(candidate):
+            raise StaleHelper(f"helper socket is stale: {candidate}")
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(max(0.001, deadline - time.monotonic()))
+        try:
+            connection.connect(str(candidate))
+            connection.settimeout(max(0.001, deadline - time.monotonic()))
+            hello = read_frame(connection)
+            if hello is None:
+                raise StaleHelper("helper closed before its hello message")
+            metadata = _validate_local_hello(hello)
+        except TimeoutError as exc:
+            connection.close()
+            raise BrowserReadTimeout("helper hello exceeded the client deadline") from exc
+        except (OSError, ProtocolError) as exc:
+            connection.close()
+            if isinstance(exc, ProtocolError):
+                raise
+            raise StaleHelper(f"helper socket is not serving: {candidate}") from exc
+        client = cls(connection, candidate, metadata)
+        client._timeout = timeout
+        connection.settimeout(timeout)
+        return client
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        with suppress(OSError):
+            self._connection.shutdown(socket.SHUT_RDWR)
+        self._connection.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        self.close()
+
+    def _event(self, message: Mapping[str, Any]) -> None:
+        message_type = message.get("type")
+        if message_type == "hello":
+            self.metadata = _validate_local_hello(message)
+        elif message_type == "grant":
+            grant = _validate_grant(message.get("grant"))
+            grants = [
+                item
+                for item in self.metadata["grants"]
+                if (item["session"], item["tab_id"]) != (grant["session"], grant["tab_id"])
+            ]
+            self.metadata = {**self.metadata, "grants": [*grants, grant]}
+        elif message_type == "revoke":
+            session = _bounded_string(message.get("session"), "revoke session", MAX_SESSION_CHARS)
+            tab_id = _bounded_int(message.get("tab_id"), "revoke tab_id", 2**31 - 1, minimum=1)
+            grants = [
+                item
+                for item in self.metadata["grants"]
+                if (item["session"], item["tab_id"]) != (session, tab_id)
+            ]
+            self.metadata = {**self.metadata, "grants": grants}
+        else:
+            raise ProtocolError("unexpected helper event")
+
+    def request(
+        self,
+        operation: str,
+        *,
+        session: str,
+        tab_id: int,
+        document_id: str,
+        generation: int | None = None,
+        payload: Mapping[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        request = make_request(
+            operation,
+            session=session,
+            tab_id=tab_id,
+            document_id=document_id,
+            generation=generation,
+            payload=payload,
+        )
+        wait = self._timeout if timeout is None else timeout
+        deadline = _deadline(wait)
+        if not self._lock.acquire(timeout=wait):
+            raise BrowserReadTimeout("another request holds this client past the deadline")
+        try:
+            if self._closed:
+                raise HelperUnavailable("browser read client is closed")
+            try:
+                self._connection.settimeout(max(0.001, deadline - time.monotonic()))
+                write_frame(self._connection, request)
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise BrowserReadTimeout("browser read request exceeded its deadline")
+                    self._connection.settimeout(remaining)
+                    response = read_frame(self._connection)
+                    if response is None:
+                        raise StaleHelper("browser read helper closed the connection")
+                    if response.get("type") in {"hello", "grant", "revoke"}:
+                        self._event(response)
+                        continue
+                    if response.get("type") != "response":
+                        raise ProtocolError("helper returned an unsupported message")
+                    if response.get("id") != request["id"]:
+                        raise MismatchedResponse("helper response id did not match the request")
+                    validated = _validate_response(response)
+                    if validated["ok"] and any(
+                        validated[field] != request[field]
+                        for field in ("session", "tab_id", "document_id")
+                    ):
+                        raise MismatchedResponse(
+                            "helper response identity did not match the request"
+                        )
+                    return validated
+            except TimeoutError as exc:
+                self.close()
+                raise BrowserReadTimeout("browser read request exceeded its deadline") from exc
+            except (BrokenPipeError, ConnectionError, OSError) as exc:
+                self.close()
+                raise HelperUnavailable("browser read helper is unavailable") from exc
+            except (BrowserReadTimeout, MismatchedResponse, ProtocolError, StaleHelper):
+                self.close()
+                raise
+        finally:
+            self._lock.release()
+
+    def observe(
+        self,
+        *,
+        session: str,
+        tab_id: int,
+        document_id: str,
+        generation: int | None = None,
+        include_values: bool = False,
+        limit: int = MAX_ELEMENTS,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        return self.request(
+            "observe",
+            session=session,
+            tab_id=tab_id,
+            document_id=document_id,
+            generation=generation,
+            payload={"include_values": include_values, "limit": limit},
+            timeout=timeout,
+        )
+
+    def query(
+        self,
+        *,
+        session: str,
+        tab_id: int,
+        document_id: str,
+        search: str = "",
+        role: str | None = None,
+        visible: bool | None = None,
+        page: int = 0,
+        page_size: int = MAX_PAGE_SIZE,
+        generation: int | None = None,
+        include_values: bool = False,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        return self.request(
+            "query",
+            session=session,
+            tab_id=tab_id,
+            document_id=document_id,
+            generation=generation,
+            payload={
+                "search": search,
+                "role": role,
+                "visible": visible,
+                "page": page,
+                "page_size": page_size,
+                "include_values": include_values,
+            },
+            timeout=timeout,
+        )
+
+
+def _validate_timeout(timeout: float) -> float:
+    if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
+        raise ValueError("timeout must be a finite positive number")
+    if not math.isfinite(timeout) or timeout <= 0 or timeout > MAX_TIMEOUT:
+        raise ValueError(f"timeout must be between 0 and {MAX_TIMEOUT} seconds")
+    return float(timeout)
+
+
+def _deadline(timeout: float) -> float:
+    return time.monotonic() + _validate_timeout(timeout)
+
+
+def _validate_local_hello(message: Mapping[str, Any]) -> dict[str, Any]:
+    value = _object(message, "hello")
+    allowed = {"protocol", "version", "type", "helper_id", "socket", "limits", "grants"}
+    _exact_fields(value, allowed, allowed)
+    _validate_envelope(value, "hello")
+    helper_id = _bounded_string(value["helper_id"], "helper_id", MAX_HELPER_ID_CHARS)
+    socket_path = _bounded_string(value["socket"], "socket", MAX_SOCKET_PATH_CHARS)
+    limits = _object(value["limits"], "limits")
+    if limits != protocol_limits():
+        raise ProtocolError("helper limits do not match the protocol")
+    grants = _validate_grants(value["grants"])
+    return {
+        "protocol": PROTOCOL,
+        "version": VERSION,
+        "type": "hello",
+        "helper_id": helper_id,
+        "socket": socket_path,
+        "limits": limits,
+        "grants": grants,
+    }
+
+
+def _validate_native_message(message: Mapping[str, Any]) -> dict[str, Any]:
+    value = _object(message, "native message")
+    message_type = value.get("type")
+    if message_type == "hello":
+        allowed = {"protocol", "version", "type", "grants"}
+        _exact_fields(value, allowed, allowed)
+        _validate_envelope(value, "hello")
+        return {
+            "protocol": PROTOCOL,
+            "version": VERSION,
+            "type": "hello",
+            "grants": _validate_grants(value["grants"]),
+        }
+    if message_type == "grant":
+        allowed = {"protocol", "version", "type", "grant"}
+        _exact_fields(value, allowed, allowed)
+        _validate_envelope(value, "grant")
+        return {
+            "protocol": PROTOCOL,
+            "version": VERSION,
+            "type": "grant",
+            "grant": _validate_grant(value["grant"]),
+        }
+    if message_type == "revoke":
+        allowed = {"protocol", "version", "type", "session", "tab_id", "document_id", "reason"}
+        _exact_fields(value, {"protocol", "version", "type", "session", "tab_id"}, allowed)
+        _validate_envelope(value, "revoke")
+        result = {
+            "protocol": PROTOCOL,
+            "version": VERSION,
+            "type": "revoke",
+            "session": _bounded_string(value["session"], "revoke session", MAX_SESSION_CHARS),
+            "tab_id": _bounded_int(value["tab_id"], "revoke tab_id", 2**31 - 1, minimum=1),
+        }
+        if "document_id" in value:
+            result["document_id"] = _bounded_string(
+                value["document_id"], "revoke document_id", MAX_DOCUMENT_ID_CHARS
+            )
+        if "reason" in value:
+            result["reason"] = _bounded_string(
+                value["reason"], "revoke reason", MAX_ERROR_CODE_CHARS
+            )
+        return result
+    if message_type == "response":
+        return _validate_response(value)
+    raise ProtocolError("unsupported native message type")
+
+
+@dataclass
+class _Peer:
+    connection: socket.socket
+    decoder: FrameDecoder
+
+
+class NativeMessagingHost:
+    """The browser-owned stdio helper and its in-memory local broker."""
+
+    def __init__(self, stdin: BinaryIO | None = None, stdout: BinaryIO | None = None) -> None:
+        self.stdin = stdin or sys.stdin.buffer
+        self.stdout = stdout or sys.stdout.buffer
+        self.helper: HelperSocket | None = None
+        self.grants: dict[tuple[str, int], dict[str, Any]] = {}
+        self.peers: list[_Peer] = []
+        self.pending: dict[str, tuple[_Peer, dict[str, Any]]] = {}
+        self._selector: selectors.BaseSelector | None = None
+        self._running = False
+        self._native_output = bytearray()
+
+    def _ready(self) -> dict[str, Any]:
+        if self.helper is None:
+            raise HelperUnavailable("native helper socket has not been created")
+        return {
+            "protocol": PROTOCOL,
+            "version": VERSION,
+            "type": "ready",
+            "helper_id": self.helper.path.stem,
+            "socket": str(self.helper.path),
+            "limits": protocol_limits(),
+        }
+
+    def _local_hello(self) -> dict[str, Any]:
+        if self.helper is None:
+            raise HelperUnavailable("native helper socket has not been created")
+        return {
+            "protocol": PROTOCOL,
+            "version": VERSION,
+            "type": "hello",
+            "helper_id": self.helper.path.stem,
+            "socket": str(self.helper.path),
+            "limits": protocol_limits(),
+            "grants": list(self.grants.values()),
+        }
+
+    def _write_local(self, peer: _Peer, message: Mapping[str, Any]) -> None:
+        peer.connection.settimeout(0.5)
+        try:
+            write_frame(peer.connection, message)
+        finally:
+            peer.connection.setblocking(False)
+
+    def _remove_peer(self, peer: _Peer) -> None:
+        if peer in self.peers:
+            self.peers.remove(peer)
+        if self._selector is not None:
+            with suppress(KeyError, ValueError):
+                self._selector.unregister(peer.connection)
+        for request_id, (owner, _) in list(self.pending.items()):
+            if owner is peer:
+                del self.pending[request_id]
+        peer.connection.close()
+
+    def _broadcast(self, message: Mapping[str, Any]) -> None:
+        for peer in list(self.peers):
+            try:
+                self._write_local(peer, message)
+            except OSError:
+                self._remove_peer(peer)
+
+    def _send_native(self, message: Mapping[str, Any]) -> None:
+        frame = encode_frame(message)
+        if len(self._native_output) + len(frame) > MAX_MESSAGE_BYTES + 4:
+            raise OversizeMessage("native output queue exceeds the message budget")
+        if not self._native_output:
+            self._selector.register(self.stdout, selectors.EVENT_WRITE, ("native-output", None))
+        self._native_output.extend(frame)
+
+    def _flush_native(self) -> None:
+        try:
+            written = os.write(self.stdout.fileno(), self._native_output)
+        except BlockingIOError:
+            return
+        del self._native_output[:written]
+        if not self._native_output:
+            self._selector.unregister(self.stdout)
+
+    def _handle_local(self, peer: _Peer, message: Mapping[str, Any]) -> None:
+        try:
+            request = validate_request(message)
+        except ProtocolError as exc:
+            request_id = _safe_request_id(message)
+            if request_id is None:
+                self._remove_peer(peer)
+                return
+            try:
+                self._write_local(peer, _error_response(request_id, "invalid-request", str(exc)))
+            except OSError:
+                self._remove_peer(peer)
+            return
+
+        request_id = request["id"]
+        key = (request["session"], request["tab_id"])
+        grant = self.grants.get(key)
+        if grant is None:
+            response = _error_response(
+                request_id, "tab-not-granted", "the tab has no active read grant"
+            )
+        elif grant["document_id"] != request["document_id"]:
+            response = _error_response(request_id, "stale-document", "the document grant is stale")
+        elif request_id in self.pending:
+            response = _error_response(
+                request_id, "duplicate-request-id", "request id is already pending"
+            )
+        elif len(self.pending) >= MAX_PENDING_REQUESTS:
+            response = _error_response(request_id, "busy", "the helper request budget is full")
+        else:
+            self.pending[request_id] = (peer, request)
+            try:
+                self._send_native(request)
+            except OSError:
+                del self.pending[request_id]
+                self._remove_peer(peer)
+            return
+        try:
+            self._write_local(peer, response)
+        except OSError:
+            self._remove_peer(peer)
+
+    def _handle_native(self, message: Mapping[str, Any]) -> None:
+        value = _validate_native_message(message)
+        message_type = value["type"]
+        if message_type == "hello":
+            self.grants = {(grant["session"], grant["tab_id"]): grant for grant in value["grants"]}
+            self._broadcast(self._local_hello())
+            return
+        if message_type == "grant":
+            grant = value["grant"]
+            self.grants[(grant["session"], grant["tab_id"])] = grant
+            self._broadcast(value)
+            return
+        if message_type == "revoke":
+            key = (value["session"], value["tab_id"])
+            self.grants.pop(key, None)
+            self._broadcast(value)
+            return
+        request_id = value["id"]
+        pending = self.pending.pop(request_id, None)
+        if pending is None:
+            return  # The local caller can time out and close before the browser replies.
+        peer, request = pending
+        for field in ("session", "tab_id", "document_id"):
+            if field in value and value[field] != request[field]:
+                raise MismatchedResponse(f"native response {field} did not match the request")
+        try:
+            self._write_local(peer, value)
+        except OSError:
+            self._remove_peer(peer)
+
+    def _accept(self, listener: socket.socket) -> None:
+        while len(self.peers) < MAX_CLIENTS:
+            try:
+                connection, _ = listener.accept()
+            except BlockingIOError:
+                return
+            connection.setblocking(False)
+            peer = _Peer(connection, FrameDecoder())
+            self.peers.append(peer)
+            if self._selector is None:
+                raise HelperUnavailable("native helper selector is not running")
+            self._selector.register(connection, selectors.EVENT_READ, ("local", peer))
+            try:
+                self._write_local(peer, self._local_hello())
+            except OSError:
+                self._remove_peer(peer)
+        try:
+            connection, _ = listener.accept()
+        except BlockingIOError:
+            return
+        connection.close()
+
+    def _read_native(self) -> bool:
+        try:
+            chunk = os.read(self.stdin.fileno(), MAX_RECV_CHUNK_BYTES)
+        except OSError:
+            return False
+        if not chunk:
+            self._native_decoder.finish()
+            return False
+        messages = self._native_decoder.feed(chunk)
+        for message in messages:
+            self._handle_native(message)
+        return True
+
+    def _read_local(self, peer: _Peer) -> None:
+        try:
+            chunk = peer.connection.recv(MAX_RECV_CHUNK_BYTES)
+            if not chunk:
+                self._remove_peer(peer)
+                return
+            for message in peer.decoder.feed(chunk):
+                self._handle_local(peer, message)
+        except (OSError, ProtocolError):
+            self._remove_peer(peer)
+
+    def run(self) -> int:
+        self.helper = HelperSocket.create()
+        self._selector = selectors.DefaultSelector()
+        self._native_decoder = FrameDecoder()
+        self._running = True
+        listener = self.helper.listener
+        listener.setblocking(False)
+        self._selector.register(listener, selectors.EVENT_READ, ("listener", listener))
+        self._selector.register(self.stdin, selectors.EVENT_READ, ("native", self.stdin))
+        os.set_blocking(self.stdout.fileno(), False)
+        try:
+            self._send_native(self._ready())
+            while self._running:
+                events = self._selector.select()
+                for key, _ in events:
+                    kind, value = key.data
+                    if kind == "native-output":
+                        self._flush_native()
+                    elif kind == "listener":
+                        self._accept(value)
+                    elif kind == "native":
+                        if not self._read_native():
+                            self._running = False
+                            break
+                    else:
+                        self._read_local(value)
+        except (BrokenPipeError, ConnectionError, OSError, ProtocolError):
+            return 2
+        finally:
+            self._running = False
+            for peer in list(self.peers):
+                self._remove_peer(peer)
+            try:
+                self._selector.unregister(self.stdin)
+                self._selector.unregister(listener)
+            except (KeyError, ValueError):
+                pass
+            self._selector.close()
+            self._selector = None
+            self.helper.close()
+            self.helper = None
+        return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments != ["host"]:
+        return 2
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        return NativeMessagingHost().run()
+    except (BrowserReadError, OSError):
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
