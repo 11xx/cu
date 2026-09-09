@@ -40,7 +40,9 @@ def test_window_capture_refuses_obstructed_identity(world, obstruction, capsys):
     elif obstruction == "overlap":
         world["windows"].append({**world["windows"][0], "address": "0x2", "focused": False})
     else:
-        world["layer_surfaces"] = [{"level": 3, "logical_rect": world["windows"][0]["logical_rect"]}]
+        world["layer_surfaces"] = [
+            {"level": 3, "logical_rect": world["windows"][0]["logical_rect"]}
+        ]
     assert cli.main(["shot", "--json"]) == 27
     assert capsys.readouterr().out == ""
     assert not list(frames.store_dir().glob("f*.json"))

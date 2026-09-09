@@ -1,0 +1,2 @@
+[gates.check]
+command = "make check"
