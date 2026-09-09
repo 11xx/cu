@@ -216,6 +216,7 @@ YOU MAY NOT BE ALONE HERE
 TYPING AND KEYS
   cu type 'some text'            Clipboard by default; restores unless --no-restore.
   cu type 'some text' --verify   Read the field back and confirm it arrived.
+  cu type 'new value' --replace --verify  Replace a populated field; exact read-back.
   cu type 'x' --method keys      Per-character, for fields that reject a paste.
   cu type '443' --frame f23 --at 455,320 --verify
   cu key --action paste          Semantic, resolved for the focused application.
@@ -228,6 +229,12 @@ TYPING AND KEYS
   somewhere nobody looked at. Given --frame and --at, `type` revalidates the
   target, clicks, confirms the click produced keyboard focus, injects, and
   verifies, all under one hold on the desktop.
+
+  --replace selects the whole field after any aimed click, under the same
+  desktop hold. It requires a known select-all binding and nonempty text;
+  --replace --verify compares exact equality, while insertion verifies only
+  containment. Replacement never submits the field. Read-back can still be
+  unverified; inspect before submitting. Recipes retain replacement and verification.
 
   Use --verify for anything that matters. Without it, a paste an application
   silently rejected is indistinguishable from success. It answers `ok`, or

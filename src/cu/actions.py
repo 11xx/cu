@@ -378,6 +378,7 @@ def type_text(
     restore_clipboard: bool = True,
     backend: str | None = None,
     verify: bool = False,
+    replace: bool = False,
     frame_id: str | None = None,
     at: tuple[float, float] | None = None,
     button: str = "left",
@@ -401,13 +402,15 @@ def type_text(
     transition, the injection, and the read-back one transaction.
     """
     backend = backend or cfg["input"]["key_backend"]
+    if replace and not text:
+        raise ValueError("--replace requires nonempty text; empty fields cannot be copied reliably")
     if (frame_id is None) != (at is None):
         raise ValueError("aimed typing needs both a frame and a point")
 
     if frame_id is None or at is None:
         return _type_into_focus(
             cfg, text, method=method, restore_clipboard=restore_clipboard,
-            backend=backend, verify=verify, pointer=None, dry_run=dry_run,
+            backend=backend, verify=verify, replace=replace, pointer=None, dry_run=dry_run,
         )
 
     pointer = _aimed_click(cfg, frame_id, at, button=button, count=count, dry_run=dry_run)
@@ -420,7 +423,7 @@ def type_text(
     try:
         return _type_into_focus(
             cfg, text, method=method, restore_clipboard=restore_clipboard,
-            backend=backend, verify=verify, pointer=pointer, injected=injected,
+            backend=backend, verify=verify, replace=replace, pointer=pointer, injected=injected,
             dry_run=dry_run,
         )
     except BaseException:
@@ -440,6 +443,7 @@ def _type_into_focus(
     restore_clipboard: bool,
     backend: str | None,
     verify: bool,
+    replace: bool,
     pointer: dict[str, Any] | None,
     dry_run: bool,
     injected: list[bool] | None = None,
@@ -490,8 +494,15 @@ def _type_into_focus(
                 f"set keys.\"{window['class']}\".paste or use --method keys",
             )
 
+    select = config.chord_for(cfg, window["class"], "select-all") if replace else None
+    if replace and select is None:
+        raise Refused(exits.NOT_MAPPED, f"no select-all binding known for {window['class']}")
+    if select:
+        uinput.parse_chord(select)
+
     result = {
         "action": "type",
+        "replace": replace,
         "method": method,
         "length": len(text),
         "chord": chord,
@@ -526,7 +537,7 @@ def _type_into_focus(
         try:
             send_chords(
                 cfg,
-                [chord],
+                [select, chord] if select else [chord],
                 backend,
                 before_send=lambda: _recheck_keyboard(cfg, window),
             )
@@ -535,7 +546,10 @@ def _type_into_focus(
             # restoring too eagerly pastes the *previous* contents.
             time.sleep(0.12)
             if verify:
-                result["verified"] = read_back(cfg, window, text, backend)
+                result["verified"] = (
+                    read_back(cfg, window, text, backend, exact=True) if replace
+                    else read_back(cfg, window, text, backend)
+                )
         finally:
             if can_restore:
                 _clipboard_write(previous) if previous is not None else _clipboard_clear()
@@ -548,8 +562,10 @@ def _type_into_focus(
             )
         send_chords(
             cfg,
-            [f"shift+{name}" if shifted else name
-             for name, shifted in (uinput.char_to_key(c) for c in text)],
+            ([select] if select else []) + [
+                f"shift+{name}" if shifted else name
+                for name, shifted in (uinput.char_to_key(c) for c in text)
+            ],
             backend,
             before_send=lambda: _recheck_keyboard(cfg, window),
         )
@@ -557,10 +573,13 @@ def _type_into_focus(
         if verify:
             previous = _clipboard_read() if restore_clipboard else None
             try:
-                result["verified"] = read_back(cfg, window, text, backend)
+                result["verified"] = (
+                    read_back(cfg, window, text, backend, exact=True) if replace
+                    else read_back(cfg, window, text, backend)
+                )
             finally:
-                if previous is not None:
-                    _clipboard_write(previous)
+                if restore_clipboard:
+                    _clipboard_write(previous) if previous is not None else _clipboard_clear()
 
     safety.record(cfg, result)
     if verify and result.get("verified", {}).get("status") == "mismatch":
@@ -577,6 +596,8 @@ def read_back(
     window: dict[str, Any],
     expected: str,
     backend: str | None,
+    *,
+    exact: bool = False,
 ) -> dict[str, Any]:
     """Read a field's contents back and compare them to what was sent.
 
@@ -585,8 +606,8 @@ def read_back(
     dropped, look exactly like success at the call site. Reading the field back
     is the only thing that distinguishes them.
 
-    The comparison is containment rather than equality, because select-all
-    returns whatever else the field already held. And a field that cannot be
+    Insertion uses containment; explicit replacement requires equality.
+    Select-all returns whatever else the field already held. And a field that cannot be
     read back reports `unverified` rather than `ok` — claiming verification
     that did not happen would be worse than not offering it.
     """
@@ -606,10 +627,10 @@ def read_back(
     )
     time.sleep(0.12)
     got = (_clipboard_read() or b"").decode(errors="replace")
-    return compare_text(expected, got)
+    return compare_text(expected, got, exact=exact)
 
 
-def compare_text(expected: str, got: str) -> dict[str, Any]:
+def compare_text(expected: str, got: str, *, exact: bool = False) -> dict[str, Any]:
     """Judge a read-back against what was sent.
 
     Containment rather than equality, because select-all returns whatever else
@@ -623,8 +644,10 @@ def compare_text(expected: str, got: str) -> dict[str, Any]:
             "status": "unverified",
             "detail": "the field returned nothing; it may not support select-all",
         }
-    if expected in got:
-        return {"status": "ok", "detail": f"field contains all {len(expected)} characters"}
+    matches = expected == got if exact else expected in got
+    if matches:
+        verb = "equals" if exact else "contains all"
+        return {"status": "ok", "detail": f"field {verb} {len(expected)} characters"}
     shared = 0
     for sent, arrived in zip(expected, got, strict=False):
         if sent != arrived:

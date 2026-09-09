@@ -109,6 +109,61 @@ def test_recipe_replay_preserves_repeat(world, monkeypatch):
     assert calls[0]["repeat"] == 3
 
 
+@pytest.mark.parametrize("initial", ["old value", ""])
+def test_explicit_replacement_selects_and_verifies_exactly(
+    initial, world, monkeypatch, capsys,
+):
+    field = [initial]
+    selected = [False]
+    clipboard = [b"previous"]
+    monkeypatch.setattr(actions.shutil, "which", lambda name: name)
+    monkeypatch.setattr(actions, "_clipboard_read", lambda: clipboard[0])
+    monkeypatch.setattr(actions, "_clipboard_write", lambda value: clipboard.__setitem__(0, value))
+    def send(cfg, chords, backend, *, before_send):
+        for chord in chords:
+            before_send()
+            if chord == "ctrl+a":
+                selected[0] = True
+            elif chord == "ctrl+v":
+                field[0] = ("" if selected[0] else field[0]) + clipboard[0].decode()
+                selected[0] = False
+            elif chord == "ctrl+c":
+                clipboard[0] = field[0].encode()
+    monkeypatch.setattr(actions, "send_chords", send)
+    monkeypatch.setattr(actions.time, "sleep", lambda _: None)
+    assert cli.main(["type", "new value", "--replace", "--verify", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert field[0] == "new value"
+    assert result["verified"]["status"] == "ok"
+    assert clipboard[0] == b"previous"
+
+
+def test_replacement_stops_when_focus_moves_after_selection(world, monkeypatch):
+    sent = []
+    def send(cfg, chords, backend, *, before_send):
+        for chord in chords:
+            before_send()
+            sent.append(chord)
+            world["focused"] = {**world["focused"], "address": "0x2"}
+    monkeypatch.setattr(actions, "send_chords", send)
+    monkeypatch.setattr(actions, "_clipboard_read", lambda: b"previous")
+    monkeypatch.setattr(actions, "_clipboard_write", lambda _: None)
+    assert cli.main(["type", "value", "--replace"]) == exits.FOCUS_CHANGED
+    assert sent == ["ctrl+a"]
+
+
+def test_replacement_without_selection_mapping_sends_nothing(world, monkeypatch):
+    world["windows"][0]["class"] = "Alacritty"
+    sent = []
+    monkeypatch.setattr(actions, "send_chords", lambda *a, **k: sent.append(True))
+    assert cli.main(["type", "value", "--replace"]) == exits.NOT_MAPPED
+    assert sent == []
+
+
+def test_replacement_verification_rejects_inserted_substring():
+    assert actions.compare_text("new", "oldnew", exact=True)["status"] == "mismatch"
+
+
 def test_failed_verification_is_not_promoted():
     entry = {"action": "type", "length": 3, "verified": {"status": "mismatch"}}
     assert recipes.step_from_log(entry) is None

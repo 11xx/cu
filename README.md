@@ -15,7 +15,9 @@ make install                         # puts `cu` on PATH
 
 An editable install, so the command on PATH is this checkout rather than a copy
 of it — a stale binary is not a failure mode this project should have. It also
-means the checkout has to stay put. Without installing, `bin/cu` is the same
+means the checkout has to stay put. Run `make install` when declared dependencies
+change; editable source tracking does not refresh the installed environment.
+Without installing, `bin/cu` is the same
 command and needs no knowledge of `uv`; every example below works either way.
 
 ## Orientation
@@ -55,6 +57,7 @@ cu click --frame f3 --at 412,300 # warp, check the target, press and release
 cu scroll --dy -3                # wheel where the pointer already is
 cu type 'hello'                  # clipboard by default, --method keys to synthesize
 cu type 'hello' --verify         # read the field back and confirm it arrived
+cu type 'new value' --replace --verify # whole-field replacement, exact read-back
 cu key --action paste            # a semantic action, resolved per application
 cu browser list                  # installed browsers and what each resolves
 cu browser focus-urlbar          # a semantic browser action, never a chord

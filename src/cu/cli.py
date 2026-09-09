@@ -1509,6 +1509,7 @@ def cmd_type(args: argparse.Namespace) -> int:
         restore_clipboard=not args.no_restore,
         backend=args.backend,
         verify=args.verify,
+        replace=args.replace,
         frame_id=args.frame,
         at=_parse_at(args.at) if args.at else None,
         button=args.button,
@@ -1965,6 +1966,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("clipboard", "keys"),
         default="clipboard",
         help="Clipboard is layout-independent; keys synthesizes each character",
+    )
+    typing.add_argument(
+        "--replace", action="store_true",
+        help="Select the entire field before nonempty text; --verify requires exact equality",
     )
     typing.add_argument(
         "--verify",

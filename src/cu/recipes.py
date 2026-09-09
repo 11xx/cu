@@ -136,6 +136,8 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
         step["param"] = None  # assigned when the recipe is assembled
         step["length"] = entry.get("length")
         step["method"] = entry.get("method", "clipboard")
+        step["replace"] = entry.get("replace", False)
+        step["verify"] = "verified" in entry
         # Aimed typing replays as one step for the same reason it runs as one
         # command: splitting it back into a click and a type would reopen the
         # gap between selecting a field and filling it.
@@ -392,6 +394,7 @@ def replay(
             performed.append(
                 actions.type_text(
                     cfg, params[param], method=step.get("method", "clipboard"),
+                    replace=step.get("replace", False), verify=step.get("verify", False),
                     frame_id=frame_id, at=at,
                     button=step.get("button", "left"), count=step.get("count", 1),
                     dry_run=dry_run,
