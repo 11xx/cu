@@ -11,6 +11,7 @@ import argparse
 import contextlib
 import io
 import json
+import math
 import os
 import signal
 import sys
@@ -29,6 +30,7 @@ from . import (
     frames,
     guide,
     knowledge,
+    metrics,
     observe,
     png,
     recipes,
@@ -132,7 +134,9 @@ def fmt_rect(r: dict[str, float]) -> str:
     return f"{_num(r['w'])}x{_num(r['h'])}+{_num(r['x'])}+{_num(r['y'])}"
 
 
+@metrics.timed("output_publication")
 def _emit(data: Any, as_json: bool, render) -> None:
+    metrics.frame(data)
     if as_json:
         json.dump(data, sys.stdout, indent=2)
         sys.stdout.write("\n")
@@ -270,6 +274,8 @@ def _parse_region(text: str) -> dict[str, float]:
     if len(parts) != 4:
         raise ValueError(f"region must be 'x,y wxh' or 'x,y,w,h', got {text!r}")
     x, y, w, h = (float(p) for p in parts)
+    if not all(math.isfinite(value) for value in (x, y, w, h)):
+        raise ValueError("region coordinates and dimensions must be finite")
     if w <= 0 or h <= 0:
         raise ValueError("region width and height must be positive")
     return {"x": x, "y": y, "w": w, "h": h}
@@ -295,6 +301,7 @@ def _parse_watch(text: str, image_size: dict[str, int]) -> dict[str, int]:
     return box
 
 
+@metrics.timed("crop_compare")
 def _watched_pixels(rgba: bytes, image_width: int, box: dict[str, int]) -> bytes:
     row_bytes = image_width * 4
     left = box["x"] * 4
@@ -353,6 +360,7 @@ def _frame_capture_scale(frame: dict[str, Any]) -> float:
     return sum(scales) / len(scales)
 
 
+@metrics.timed("acquisition")
 def _grab_shot(
     source: dict[str, Any], rect: dict[str, float], scratch: Path, scale: float
 ) -> None:
@@ -407,6 +415,8 @@ def _validate_after_args(args: argparse.Namespace) -> None:
         raise ValueError("--after cannot combine with --for; it reuses the reference scale")
     if args.if_changed:
         raise ValueError("--after cannot combine with --if-changed")
+    if not all(math.isfinite(value) for value in (args.poll_ms, args.quiet_ms, args.timeout)):
+        raise ValueError("wait timing values must be finite")
     if args.poll_ms <= 0:
         raise ValueError("--poll-ms must be positive")
     if args.quiet_ms < 0:
@@ -429,7 +439,8 @@ def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, A
     expected_size = reference["image_size"]
     watch = _parse_watch(args.watch, expected_size)
     try:
-        width, height, reference_rgba = png.decode(Path(reference["path"]).read_bytes())
+        with metrics.span("reference_decode"):
+            width, height, reference_rgba = png.decode(Path(reference["path"]).read_bytes())
     except (OSError, ValueError, KeyError) as exc:
         raise FrameError(f"cannot read frame {reference['id']}: {exc}") from exc
     decoded_size = {"w": width, "h": height}
@@ -469,7 +480,8 @@ def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, A
             _check_recapture(reference, captured_snap)
             probes += 1
             try:
-                probe_width, probe_height, probe_rgba = png.decode(scratch.read_bytes())
+                with metrics.span("probe_decode"):
+                    probe_width, probe_height, probe_rgba = png.decode(scratch.read_bytes())
             except (OSError, ValueError) as exc:
                 raise FrameError(f"cannot compare probe {probes}: {exc}") from exc
             probe_size = {"w": probe_width, "h": probe_height}
@@ -482,18 +494,20 @@ def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, A
 
             now = time.monotonic()
             current = _watched_pixels(probe_rgba, probe_width, watch)
-            if not changed:
-                if current != baseline:
-                    changed = True
+            with metrics.span("crop_compare"):
+                if not changed:
+                    if current != baseline:
+                        changed = True
+                        quiet_since = now
+                elif current != previous:
                     quiet_since = now
-            elif current != previous:
-                quiet_since = now
-            previous = current
+                previous = current
 
             if changed and now - quiet_since >= quiet_seconds:
                 elapsed = now - started
                 profile_name = reference.get("profile") or capture.default_name(cfg)
                 profile = capture.resolve(profile_name, cfg)
+                capture.require_budget(scratch, profile)
                 digest = capture.digest(scratch)
                 frame = frames.new(
                     source=source,
@@ -505,6 +519,7 @@ def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, A
                     monitor=reference.get("monitor"),
                     profile=profile_name,
                     capture_scale=scale,
+                    estimator=capture.estimator(profile),
                     visual_tokens=capture.visual_tokens(
                         probe_width, probe_height, profile
                     ),
@@ -544,7 +559,8 @@ def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, A
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             continue
-        time.sleep(min(poll_seconds, remaining))
+        with metrics.span("intentional_wait"):
+            time.sleep(min(poll_seconds, remaining))
 
 
 def cmd_shot(args: argparse.Namespace) -> int:
@@ -649,6 +665,7 @@ def cmd_shot(args: argparse.Namespace) -> int:
             _confirm_captured_window(window, monitors)
             capture.require_visible(window, rect, observe.snapshot())
 
+        capture.require_budget(scratch, profile)
         digest = capture.digest(scratch)
 
         if args.if_changed:
@@ -692,6 +709,7 @@ def cmd_shot(args: argparse.Namespace) -> int:
             },
             profile=name,
             capture_scale=scale,
+            estimator=capture.estimator(profile),
             visual_tokens=capture.visual_tokens(
                 image_size["w"], image_size["h"], profile
             ),
@@ -870,6 +888,7 @@ def cmd_magnify(args: argparse.Namespace) -> int:
     enlarged = _magnified_pixels(width, height, pixels, args.scale)
     with frames.capture_scratch() as scratch:
         scratch.write_bytes(png.encode(image_size["w"], image_size["h"], enlarged))
+        capture.require_budget(scratch, profile)
         frame = frames.new(
             source=source_kind,
             logical_rect=logical_rect,
@@ -880,6 +899,7 @@ def cmd_magnify(args: argparse.Namespace) -> int:
             window=source.get("window"),
             monitor=source.get("monitor"),
             profile=profile_name,
+            estimator=capture.estimator(profile),
             visual_tokens=capture.visual_tokens(
                 image_size["w"], image_size["h"], profile
             ),
@@ -1832,6 +1852,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     shot = add("shot", "Capture a frame", cmd_shot)
     shot.add_argument(
+        "--timings", action="store_true",
+        help="Emit bounded timing and frame-cost JSON on stderr, including failure paths",
+    )
+    shot.add_argument(
         "--window",
         metavar="SELECTOR",
         help="'active' (default), a window address, or a class substring",
@@ -2183,9 +2207,14 @@ def main(argv: list[str] | None = None) -> int:
     # Published before the command runs rather than after, because the point is
     # to say what is happening while it happens. Non-publishing commands are
     # readers or user-owned controls, not agents driving the desktop.
-    if args.command not in NON_PUBLISHING_COMMANDS:
-        status.publish(args.command, detail=why, session=session)
-    return _safe_call(lambda: _dispatch(args, why, session))
+    measurement = metrics.Measurement() if getattr(args, "timings", False) else None
+    with metrics.collecting(measurement):
+        if args.command not in NON_PUBLISHING_COMMANDS:
+            status.publish(args.command, detail=why, session=session)
+        code = _safe_call(lambda: _dispatch(args, why, session))
+    if measurement is not None:
+        print("cu metrics: " + json.dumps(measurement.report(code)), file=sys.stderr)
+    return code
 
 
 def _dispatch(args: argparse.Namespace, why: str, session: str | None) -> int:
@@ -2245,6 +2274,10 @@ def _safe_call(call) -> int:
     except CaptureAimError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.DEGENERATE_AIM
+    except capture.CaptureBudgetError as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        print(f"cu: {exits.RESPONSE[exits.CAPTURE_BUDGET_EXCEEDED]}", file=sys.stderr)
+        return exits.CAPTURE_BUDGET_EXCEEDED
     except capture.CaptureVisibilityError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         print(f"cu: {exits.RESPONSE[exits.TARGET_NOT_VISIBLE]}", file=sys.stderr)

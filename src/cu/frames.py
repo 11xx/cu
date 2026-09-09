@@ -23,6 +23,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from . import metrics
+
 #: A frame older than this no longer describes the screen with any confidence.
 DEFAULT_MAX_AGE = 60.0
 
@@ -78,6 +80,7 @@ def path_for(frame_id: str, suffix: str) -> Path:
     return store_dir() / f"{frame_id}{suffix}"
 
 
+@metrics.timed("frame_publication")
 def save(descriptor: dict[str, Any]) -> dict[str, Any]:
     path = path_for(descriptor["id"], ".json")
     fd, temporary = tempfile.mkstemp(prefix=f".{descriptor['id']}-", suffix=".tmp", dir=path.parent)
@@ -139,6 +142,7 @@ def new(
             "logical_rect": logical_rect,
             "image_size": image_size,
             "path": str(final),
+            "encoded_bytes": final.stat().st_size,
             "captured_at": time.time(),
             **extra,
         }

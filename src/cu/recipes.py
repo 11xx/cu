@@ -527,6 +527,7 @@ def _capture_window(
                 f"window {window['class']} moved or resized during capture"
             )
         capture.require_visible(window, rect, observe.snapshot())
+        capture.require_budget(scratch, profile)
         image_size = capture.size_of(scratch)
         return frames.new(
             source={"type": "window", "name": window["class"]},
@@ -544,6 +545,7 @@ def _capture_window(
                 "logical_rect": dict(monitor["logical_rect"]),
             },
             profile=profile_name,
+            estimator=capture.estimator(profile),
             visual_tokens=capture.visual_tokens(
                 image_size["w"], image_size["h"], profile
             ),

@@ -265,6 +265,28 @@ Frames are written to disk and the path is printed with the descriptor. Both
 Claude Code and Codex read image files natively, which makes the filesystem the
 provider-agnostic image channel — `cu` never talks to a model API.
 
+### Observation timing and resource accounting
+
+`shot --timings` emits a bounded `cu-metrics/1` JSON report on stderr after
+normal output, including dispatch timeout/refusal paths. Monotonic total time
+starts after argument parsing and includes status publication and stdout flush.
+Component timings separate acquisition, baseline/probe decode, crop/compare,
+intentional waits, descriptor publication and output publication; remaining work
+is `other_seconds`. Process startup, metrics emission, harness transport and
+model inference are explicitly excluded. `wait.elapsed_seconds` continues to
+start after baseline decoding, so it is not total command latency.
+
+Frame summaries expose dimensions, encoded bytes, estimated visual tokens and
+`cu-patches-v1` parameters. No pixels, window titles, document IDs or typed text
+enter performance telemetry, and reports are not persisted. The configured
+profile's `max_bytes` is enforced before publishing captures or magnifications;
+excess refuses with 29 rather than emitting an oversized image. Reference decode
+is cached only within one wait invocation. `tests/benchmark_observation.py`
+replays synthetic capture writes with the actual CLI wait path and unchanged
+quiet interval; its timings do not measure native screenshot acquisition.
+Capture subprocesses time out after 10 seconds and report an environment
+refusal. Pixel-wait timing arguments and capture rectangles must be finite.
+
 ### Aimed capture, and its failure mode
 
 `grim -g` takes logical coordinates — the same space as `logical_rect` — so a

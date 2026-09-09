@@ -636,6 +636,32 @@ def _watch_argv(reference, *extra):
     ]
 
 
+@pytest.mark.parametrize("changed", [False, True])
+def test_after_timing_accounts_for_baseline_and_failure(monkeypatch, capsys, changed):
+    original = _watch_png(1)
+    cli, reference = _watch_world(monkeypatch, [original, _watch_png(2) if changed else original])
+    decode = png.decode
+    def slow_decode(data):
+        cli.time.sleep(0.004)
+        return decode(data)
+    monkeypatch.setattr(png, "decode", slow_decode)
+    code = cli.main(_watch_argv(
+        reference, "--timings", "--quiet-ms", "0", "--timeout", "0.003",
+    ))
+    assert code == (exits.OK if changed else exits.TIMED_OUT)
+    output = capsys.readouterr()
+    report = json.loads(output.err.split("cu metrics: ", 1)[1])
+    assert report["seconds"]["reference_decode"] == pytest.approx(0.004)
+    assert report["seconds"]["probe_decode"] == pytest.approx(0.004)
+    assert report["total_seconds"] == pytest.approx(0.008)
+    assert report["code"] == code
+    if changed:
+        frame = json.loads(output.out)
+        assert frame["wait"]["elapsed_seconds"] == pytest.approx(0.004)
+    else:
+        assert report["frames"] == []
+
+
 def test_after_returns_on_the_first_different_probe(monkeypatch, capsys):
     original = _watch_png(1)
     changed = _watch_png(2)

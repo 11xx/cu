@@ -158,6 +158,12 @@ def visual_tokens(width: int, height: int, profile: dict[str, Any]) -> int:
     return round(patches * profile["token_multiplier"])
 
 
+def estimator(profile: dict[str, Any]) -> dict[str, Any]:
+    return {"algorithm": "cu-patches-v1", **{key: profile[key] for key in (
+        "patch_px", "token_budget", "token_multiplier",
+    )}}
+
+
 class CaptureError(RuntimeError):
     pass
 
@@ -172,6 +178,18 @@ class CaptureToolError(CaptureError):
 
 class CaptureVisibilityError(CaptureError):
     pass
+
+
+class CaptureBudgetError(CaptureError):
+    pass
+
+
+def require_budget(path: Path, profile: dict[str, Any]) -> None:
+    size = path.stat().st_size
+    if size > profile["max_bytes"]:
+        raise CaptureBudgetError(
+            f"encoded image is {size} bytes; profile permits {profile['max_bytes']}"
+        )
 
 
 def require_visible(window: dict[str, Any], rect: dict[str, float], snap: dict[str, Any]) -> None:
@@ -198,7 +216,10 @@ def require_visible(window: dict[str, Any], rect: dict[str, float], snap: dict[s
 def _run(args: list[str]) -> None:
     if not shutil.which(args[0]):
         raise CaptureToolError(f"{args[0]} is not installed")
-    proc = subprocess.run(args, capture_output=True, text=True, check=False)
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CaptureToolError(f"{args[0]} could not complete capture: {exc}") from exc
     if proc.returncode != 0:
         raise CaptureToolError(f"{' '.join(args[:2])}: {proc.stderr.strip()}")
 

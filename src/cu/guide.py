@@ -37,6 +37,7 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   cu shot --region '100,100 400x200'
   cu shot --output OUTPUT-A --region '0,0 900x26'
   cu shot --if-changed           Reuse the last frame when the pixels match.
+  cu shot --timings --json       Cost/timing report on stderr; descriptor on stdout.
   cu shot --after f3 --watch '0,0 200x26'
                                  Recapture after those pixels change and settle.
 
@@ -83,7 +84,20 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   Image size is one of the two things you control that changes cost and
   latency, and consumers do not price it alike — they bill in patches, and the
   patch is not the same size everywhere. --for names the consumer, and a new
-  one is a stanza under [capture.profiles] rather than a change to cu.
+  one is a stanza under [capture.profiles] rather than a change to cu. Encoded
+  images beyond that profile's max_bytes refuse with 29, including magnification.
+
+  --timings emits one `cu metrics:` JSON report on stderr after dispatch,
+  including timeout/refusal. Total time includes baseline decoding, acquisition,
+  probe decoding, crop/compare, intentional waits, frame-store and stdout
+  publication. Other work is reported separately. Interpreter startup, the
+  metrics line itself, harness transport and model time are excluded.
+  wait.elapsed_seconds retains its narrower meaning: time after baseline decode.
+  Summaries contain frame IDs, dimensions, encoded bytes and the cu-patches-v1
+  estimator parameters, not pixels, titles, URLs or typed text. They are not billing.
+  No telemetry is persisted. The reference is decoded once per wait invocation.
+  Capture-tool calls have a 10-second timeout; a hung tool refuses with 10.
+  Pixel-wait timing arguments must be finite; the quiet interval is not shortened.
 
 ACT THROUGH THE FRAME YOU READ
   cu focus zen
@@ -136,6 +150,7 @@ EXIT CODES ARE THE CONTRACT
   26  Same window, different content    Re-observe; the plan was about something else
   27  Hidden or obstructed capture      Arrange target explicitly, or capture an output
   28  Batch read-back unavailable       Inspect before continuing; never replay the prefix
+  29  Encoded image exceeds budget      Capture a smaller region or lower-resolution profile
   30  Denylist, lock, unreviewed recipe Do not retry; tell the user
   40  The user aborted                  Stop. Do not retry. Do not clear it.
   41  The user is moving the mouse      Yield; wait before retrying
