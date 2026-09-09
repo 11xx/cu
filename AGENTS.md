@@ -2,7 +2,8 @@
 
 `cu`: a deterministic CLI that lets a multimodal agent see the screen and drive
 the pointer, keyboard, windows, and browsers of a real Linux/Wayland desktop,
-targeting Hyprland. Non-goals: no daemon, no overlay, no prompt layer.
+targeting Hyprland. Non-goals: no daemon, no compositor overlay, no prompt layer.
+An explicitly granted Firefox page may own a non-interactive browser-local indicator.
 
 ## Invariants
 
@@ -50,9 +51,9 @@ targeting Hyprland. Non-goals: no daemon, no overlay, no prompt layer.
   home directory, or a specific keybinding is a reading and belongs elsewhere:
   what cu can measure is `cu doctor`'s answer, and what a run learned about a
   particular machine and cannot probe for is `cu know host`.
-- **The gates.** `make check` runs all three — `uv run pytest`,
-  `uv run ruff check .`, and `uv build`. Both tools and the rules they enforce
-  are pinned in `pyproject.toml` so they report the same thing on any host.
+- **The gates.** `make check` runs Python and Node tests, `uv run ruff check .`,
+  and `uv build`. Tool dependencies are pinned in `pyproject.toml` and
+  `package-lock.json`; supported Node versions are declared in `package.json`.
 - **`make install` is editable**, so the `cu` on PATH follows the checkout and
   never needs refreshing after a change. It does pin to the checkout's path:
   install from the repository, not from a worktree that is about to be removed.

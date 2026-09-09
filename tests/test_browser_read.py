@@ -12,6 +12,7 @@ import pytest
 from cu.browser_read import (
     MAX_ELEMENTS,
     MAX_MESSAGE_BYTES,
+    BrowserActionUncertain,
     BrowserReadClient,
     BrowserReadTimeout,
     FrameDecoder,
@@ -24,10 +25,11 @@ from cu.browser_read import (
     make_request,
     protocol_limits,
     read_frame,
+    validate_payload,
     write_frame,
 )
 
-PROTOCOL = {"protocol": "cu-browser-read", "version": 1}
+PROTOCOL = {"protocol": "cu-browser-read", "version": 2}
 
 
 def response(request: dict[str, object], *, response_id: str | None = None) -> dict[str, object]:
@@ -221,3 +223,49 @@ def test_socket_collision_does_not_unlink_another_helper(monkeypatch):
         with pytest.raises(module.HelperUnavailable):
             HelperSocket.create()
         assert first.path.exists()
+
+
+def test_action_protocol_requires_generation_and_bounds_structured_reads():
+    with pytest.raises(ProtocolError, match="passive read"):
+        make_request(
+            "click", session="session-1", tab_id=7, document_id="document-1", payload={"ref": "e1"}
+        )
+    request = make_request(
+        "click",
+        session="session-1",
+        tab_id=7,
+        document_id="document-1",
+        generation=3,
+        payload={"ref": "e1"},
+    )
+    assert request["operation"] == "click"
+    assert (
+        validate_payload(
+            "observe", {"selector": ".result-card", "include_details": True, "limit": 2}
+        )["selector"]
+        == ".result-card"
+    )
+    with pytest.raises(ProtocolError, match="selector"):
+        validate_payload("query", {"selector": "x" * 257})
+
+
+def test_action_timeout_reports_uncertain_effect():
+    helper = HelperSocket.create()
+    thread, errors = serve_once(helper, respond=False)
+    try:
+        client = BrowserReadClient.connect(helper.path, timeout=0.5)
+        with pytest.raises(BrowserActionUncertain, match="partially applied"):
+            client.action(
+                "click",
+                session="session-1",
+                tab_id=7,
+                document_id="document-1",
+                generation=0,
+                payload={"ref": "e1"},
+                timeout=0.05,
+            )
+        assert client._closed is True
+    finally:
+        thread.join(timeout=1)
+        helper.close()
+    assert errors == []

@@ -19,6 +19,11 @@ p {
 }
 
 .controls {
-  display: flex;
+  display: grid;
   gap: 0.5rem;
+}
+
+#capabilities {
+  min-height: 1rem;
+  font-size: 0.85rem;
 }

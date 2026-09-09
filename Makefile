@@ -42,7 +42,10 @@ lint:
 build:
 	uv build
 
-test-adapters:
+node_modules/.package-lock.json: package.json package-lock.json
+	npm ci --ignore-scripts
+
+test-adapters: node_modules/.package-lock.json
 	node --test adapters/observation.test.mjs browser-extension/*.test.mjs
 
 check: test test-adapters lint build

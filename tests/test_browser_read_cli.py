@@ -58,7 +58,12 @@ def test_native_roundtrip(tmp_path, monkeypatch):
         }
         wire.write_frame(
             process.stdin,
-            {"protocol": wire.PROTOCOL, "version": 1, "type": "hello", "grants": [grant]},
+            {
+                "protocol": wire.PROTOCOL,
+                "version": wire.VERSION,
+                "type": "hello",
+                "grants": [grant],
+            },
         )
         errors = []
 
@@ -69,7 +74,7 @@ def test_native_roundtrip(tmp_path, monkeypatch):
                     process.stdin,
                     {
                         "protocol": wire.PROTOCOL,
-                        "version": 1,
+                        "version": wire.VERSION,
                         "type": "response",
                         **{k: request[k] for k in ("id", "session", "tab_id", "document_id")},
                         "ok": True,
@@ -94,4 +99,65 @@ def test_native_roundtrip(tmp_path, monkeypatch):
     finally:
         if process.poll() is None:
             process.kill()
+        process.communicate(timeout=2)
+
+
+def test_native_host_cancels_a_disconnected_waiter(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    process = subprocess.Popen(
+        [sys.executable, "-m", "cu.browser_read", "host"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            assert selector.select(2)
+        ready = wire.read_frame(process.stdout)
+        grant = {
+            "session": "s",
+            "tab_id": 1,
+            "window_id": 1,
+            "document_id": "d",
+            "generation": 0,
+            "active": True,
+            "hidden": False,
+            "capabilities": ["read"],
+        }
+        wire.write_frame(
+            process.stdin,
+            {
+                "protocol": wire.PROTOCOL,
+                "version": wire.VERSION,
+                "type": "hello",
+                "grants": [grant],
+            },
+        )
+        with (
+            wire.BrowserReadClient.connect(ready["socket"]) as client,
+            pytest.raises(wire.BrowserReadTimeout),
+        ):
+            client.wait(
+                session="s",
+                tab_id=1,
+                document_id="d",
+                timeout=0.05,
+                payload={"selector": "video", "state": "present", "timeout_ms": 1000},
+            )
+        request = wire.read_frame(process.stdout)
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            assert selector.select(2), "client disconnect did not cancel its native request"
+        cancelled = wire.read_frame(process.stdout)
+        assert cancelled == {
+            "protocol": wire.PROTOCOL,
+            "version": wire.VERSION,
+            "type": "cancel",
+            "id": request["id"],
+            "session": "s",
+        }
+    finally:
+        if process.poll() is None:
+            process.terminate()
         process.communicate(timeout=2)

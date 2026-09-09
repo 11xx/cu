@@ -17,9 +17,19 @@ function request(operation, overrides = {}) {
     tab_id: overrides.tab_id || 7,
     document_id: overrides.document_id || "document-1",
     generation: overrides.generation === undefined ? null : overrides.generation,
-    payload: overrides.payload || (operation === "observe" ? { include_values: false, limit: 128 } : {
-      search: "", role: null, visible: null, page: 0, page_size: 100, include_values: false,
-    }),
+    ...(overrides.capabilities ? { capabilities: overrides.capabilities } : {}),
+    payload:
+      overrides.payload ||
+      (operation === "observe"
+        ? { include_values: false, limit: 128 }
+        : {
+            search: "",
+            role: null,
+            visible: null,
+            page: 0,
+            page_size: 100,
+            include_values: false,
+          }),
   };
 }
 
@@ -28,8 +38,12 @@ class FakePort {
     this.messages = [];
     this.messageListeners = [];
     this.disconnectListeners = [];
-    this.onMessage = { addListener: (listener) => this.messageListeners.push(listener) };
-    this.onDisconnect = { addListener: (listener) => this.disconnectListeners.push(listener) };
+    this.onMessage = {
+      addListener: (listener) => this.messageListeners.push(listener),
+    };
+    this.onDisconnect = {
+      addListener: (listener) => this.disconnectListeners.push(listener),
+    };
     this.disconnected = false;
   }
 
@@ -60,26 +74,52 @@ function fakeApi() {
       id: "cu-browser-read@local",
       connectNative: () => port,
     },
+    windows: { getCurrent: async () => ({ id: 3, focused: true }) },
     scripting: {
       executeScript: async (value) => calls.execute.push(value),
     },
     tabs: {
-      query: async (value) => { calls.query.push(value); return [currentTab]; },
+      query: async (value) => {
+        calls.query.push(value);
+        return [currentTab];
+      },
       get: async () => ({ ...currentTab }),
       sendMessage: async (tabId, message) => {
         calls.messages.push({ tabId, message });
-        if (message.type === "start") return {
-          protocol: PROTOCOL, version: VERSION, type: "started", ok: true,
-          session: message.session, document_id: "document-1", generation: 0,
-        };
+        if (message.type === "start")
+          return {
+            protocol: PROTOCOL,
+            version: VERSION,
+            type: "started",
+            ok: true,
+            session: message.session,
+            capabilities: message.capabilities,
+            document_id: "document-1",
+            generation: 0,
+          };
         if (message.type === "read-request") {
           return {
-            protocol: PROTOCOL, version: VERSION, type: "response", id: message.request.id,
-            session: message.request.session, tab_id: tabId, document_id: "document-1", ok: true,
-            result: { kind: "observation", generation: 0, document_id: "document-1" },
+            protocol: PROTOCOL,
+            version: VERSION,
+            type: "response",
+            id: message.request.id,
+            session: message.request.session,
+            tab_id: tabId,
+            document_id: "document-1",
+            ok: true,
+            result: {
+              kind: "observation",
+              generation: 0,
+              document_id: "document-1",
+            },
           };
         }
-        return { protocol: PROTOCOL, version: VERSION, type: "stopped", ok: true };
+        return {
+          protocol: PROTOCOL,
+          version: VERSION,
+          type: "stopped",
+          ok: true,
+        };
       },
       onUpdated: { addListener: (listener) => updated.push(listener) },
       onRemoved: { addListener: (listener) => removed.push(listener) },
@@ -126,8 +166,54 @@ test("native requests reject arbitrary tabs and action-like operations", async (
   assert.throws(() => validateRequest({ ...request("click") }), /passive read/);
 });
 
+test("attribute mutations invalidate an observed action generation", () => {
+  const oldObserver = globalThis.MutationObserver;
+  let callback;
+  globalThis.MutationObserver = class {
+    constructor(fn) {
+      callback = fn;
+    }
+    observe() {}
+    disconnect() {}
+    takeRecords() {
+      return [];
+    }
+  };
+  try {
+    const button = new Element("button", { text: "Act" });
+    const collector = createCollector(new Document([button]), { idFactory: () => "document-1" });
+    collector.handle({ type: "start", session: "session-1", capabilities: ["read", "interact"] });
+    const read = collector.handle({ type: "read-request", request: request("observe") });
+    callback([{ type: "attributes", target: button, addedNodes: [], removedNodes: [] }]);
+    assert.ok(collector.generation > read.result.generation);
+  } finally {
+    globalThis.MutationObserver = oldObserver;
+  }
+});
+
+test("background reads report current tab activity, not activation-time metadata", async () => {
+  const { api, currentTab, port } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent();
+  currentTab.active = false;
+  await controller.handleNativeMessage(
+    request("observe", { session: started.grant.session }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).result.context.tab_active, false);
+});
+
 class Element {
-  constructor(tag, { text = "", attrs = {}, value, rect = { x: 1, y: 2, width: 10, height: 10 }, children = [] } = {}) {
+  constructor(
+    tag,
+    {
+      text = "",
+      attrs = {},
+      value,
+      rect = { x: 1, y: 2, width: 10, height: 10 },
+      children = [],
+    } = {},
+  ) {
     this.localName = tag;
     this.tagName = tag.toUpperCase();
     this.attrs = new Map(Object.entries(attrs));
@@ -141,7 +227,7 @@ class Element {
   }
 
   get childNodes() {
-    return [...(this._text ? [{nodeType: 3, data: this._text}] : []), ...this.children];
+    return [...(this._text ? [{ nodeType: 3, data: this._text }] : []), ...this.children];
   }
 
   get textContent() {
@@ -209,7 +295,9 @@ class Document {
   }
 
   getElementById(id) {
-    return this.body.querySelectorAll("*").find((element) => element.getAttribute("id") === id) || null;
+    return (
+      this.body.querySelectorAll("*").find((element) => element.getAttribute("id") === id) || null
+    );
   }
 
   dispatch(event) {
@@ -219,17 +307,26 @@ class Document {
 }
 
 test("collector bounds queries, redacts fields, and labels freshness", () => {
-  const email = new Element("input", { attrs: { type: "email", name: "email" }, value: "person@example.test" });
-  const password = new Element("input", { attrs: { type: "password", name: "password" }, value: "secret" });
+  const email = new Element("input", {
+    attrs: { type: "email", name: "email" },
+    value: "person@example.test",
+  });
+  const password = new Element("input", {
+    attrs: { type: "password", name: "password" },
+    value: "secret",
+  });
   const launch = new Element("button", { text: "Launch" });
   const doc = new Document([password, email, launch]);
   const collector = createCollector(doc, { idFactory: () => "document-1" });
   const started = collector.handle({ type: "start", session: "session-1" });
   assert.equal(started.document_id, "document-1");
 
-  const observed = collector.handle({ type: "read-request", request: request("observe", {
-    payload: { include_values: true, limit: 2 },
-  }) });
+  const observed = collector.handle({
+    type: "read-request",
+    request: request("observe", {
+      payload: { include_values: true, limit: 2 },
+    }),
+  });
   assert.equal(observed.ok, true);
   assert.equal(observed.result.elements.truncated, true);
   const fields = observed.result.elements.items.filter((item) => item.tag === "input");
@@ -237,36 +334,75 @@ test("collector bounds queries, redacts fields, and labels freshness", () => {
   assert.equal(observed.result.values.state, "available");
   assert.equal(observed.result.limitations.css_projection.state, "unsupported");
 
-  const page = collector.handle({ type: "read-request", request: request("query", {
-    payload: { search: "launch", role: "button", visible: true, page: 0, page_size: 1, include_values: false },
-  }) });
+  const page = collector.handle({
+    type: "read-request",
+    request: request("query", {
+      payload: {
+        search: "launch",
+        role: "button",
+        visible: true,
+        page: 0,
+        page_size: 1,
+        include_values: false,
+      },
+    }),
+  });
   assert.equal(page.result.elements.items[0].accessible_name.value, "Launch");
   assert.equal(page.result.pagination.state, "available");
-  const emptyPage = collector.handle({ type: "read-request", request: request("query", {
-    payload: { search: "launch", role: "button", visible: true, page: 1, page_size: 1, include_values: false },
-  }) });
+  const emptyPage = collector.handle({
+    type: "read-request",
+    request: request("query", {
+      payload: {
+        search: "launch",
+        role: "button",
+        visible: true,
+        page: 1,
+        page_size: 1,
+        include_values: false,
+      },
+    }),
+  });
   assert.equal(emptyPage.result.elements.state, "empty");
-  const overbound = collector.handle({ type: "read-request", request: request("query", {
-    payload: { search: "x".repeat(257), role: null, visible: null, page: 0, page_size: 1, include_values: false },
-  }) });
+  const overbound = collector.handle({
+    type: "read-request",
+    request: request("query", {
+      payload: {
+        search: "x".repeat(257),
+        role: null,
+        visible: null,
+        page: 0,
+        page_size: 1,
+        include_values: false,
+      },
+    }),
+  });
   assert.equal(overbound.ok, false);
   assert.equal(overbound.error.code, "invalid-request");
 
   const oldGeneration = collector.generation;
   doc.dispatch("input");
   assert.equal(collector.generation, oldGeneration + 1);
-  const stale = collector.handle({ type: "read-request", request: request("observe", { generation: oldGeneration }) });
+  const stale = collector.handle({
+    type: "read-request",
+    request: request("observe", { generation: oldGeneration }),
+  });
   assert.equal(stale.ok, false);
   assert.equal(stale.error.code, "stale-generation");
-  const current = collector.handle({ type: "read-request", request: request("observe", { generation: collector.generation }) });
+  const current = collector.handle({
+    type: "read-request",
+    request: request("observe", { generation: collector.generation }),
+  });
   assert.equal(current.ok, true);
   collector.dispose();
 });
 
-
 test("document identities are distinct and unknown collector operations are refused", () => {
-  const first = createCollector(new Document([]), { idFactory: () => "document-a" });
-  const second = createCollector(new Document([]), { idFactory: () => "document-b" });
+  const first = createCollector(new Document([]), {
+    idFactory: () => "document-a",
+  });
+  const second = createCollector(new Document([]), {
+    idFactory: () => "document-b",
+  });
   assert.notEqual(first.documentId, second.documentId);
   assert.equal(first.handle({ type: "start", session: "session-1" }).document_id, "document-a");
   const refused = first.handle({ type: "click" });
@@ -279,7 +415,10 @@ test("document identities are distinct and unknown collector operations are refu
 test("stop during asynchronous activation cannot grant a tab afterwards", async () => {
   const { api } = fakeApi();
   let release;
-  api.scripting.executeScript = () => new Promise(resolve => { release = resolve; });
+  api.scripting.executeScript = () =>
+    new Promise((resolve) => {
+      release = resolve;
+    });
   const controller = createController(api);
   const starting = controller.start({ id: 7, windowId: 3, active: true });
   await controller.stop();
@@ -290,35 +429,62 @@ test("stop during asynchronous activation cannot grant a tab afterwards", async 
 
 test("queries can find matches beyond the initial observation page", () => {
   const doc = new Document([
-    ...Array.from({length: 150}, () => new Element("button", {text: "Other"})),
-    new Element("button", {text: "Needle"}),
+    ...Array.from({ length: 150 }, () => new Element("button", { text: "Other" })),
+    new Element("button", { text: "Needle" }),
   ]);
   const collector = createCollector(doc);
-  const result = collector.query({search: "needle", role: "button", visible: true,
-    page: 0, page_size: 10, include_values: false});
+  const result = collector.query({
+    search: "needle",
+    role: "button",
+    visible: true,
+    page: 0,
+    page_size: 10,
+    include_values: false,
+  });
   assert.equal(result.elements.items.length, 1);
 });
 
 test("default text cannot leak textarea values through ancestor text", () => {
-  const secret = new Element("textarea", {text: "SENSITIVE_FIXTURE", attrs: {name: "secret"}});
-  const collector = createCollector(new Document([new Element("div", {children: [secret]})]));
-  const result = collector.observe({include_values: false, limit: 128});
+  const secret = new Element("textarea", {
+    text: "SENSITIVE_FIXTURE",
+    attrs: { name: "secret" },
+  });
+  const collector = createCollector(new Document([new Element("div", { children: [secret] })]));
+  const result = collector.observe({ include_values: false, limit: 128 });
   assert.equal(JSON.stringify(result).includes("SENSITIVE_FIXTURE"), false);
 });
 
 test("Firefox message listener returns a Promise, not an ignored plain object", async () => {
   let listener;
-  collectorModule.install({runtime: {onMessage: {addListener(fn) { listener = fn; }}}}, new Document([]));
-  const reply = listener({type: "start", session: "fixture-session"});
+  collectorModule.install(
+    {
+      runtime: {
+        onMessage: {
+          addListener(fn) {
+            listener = fn;
+          },
+        },
+      },
+    },
+    new Document([]),
+  );
+  const reply = listener({ type: "start", session: "fixture-session" });
   assert.equal(typeof reply.then, "function");
   assert.equal((await reply).ok, true);
 });
 
 test("repeated scope detects programmatic values and preserves whitespace", () => {
-  const input = new Element("input", {value: "  old\\nvalue  "});
-  const collector = createCollector(new Document([input]), {idFactory: () => "document-1"});
-  collector.handle({type: "start", session: "session-1"});
-  const message = {type: "read-request", request: request("observe", {payload: {include_values: true, limit: 128}})};
+  const input = new Element("input", { value: "  old\\nvalue  " });
+  const collector = createCollector(new Document([input]), {
+    idFactory: () => "document-1",
+  });
+  collector.handle({ type: "start", session: "session-1" });
+  const message = {
+    type: "read-request",
+    request: request("observe", {
+      payload: { include_values: true, limit: 128 },
+    }),
+  };
   const before = collector.handle(message);
   assert.equal(before.result.elements.items[0].value.value, "  old\\nvalue  ");
   input.value = "new value";
@@ -327,3 +493,266 @@ test("repeated scope detects programmatic values and preserves whitespace", () =
 });
 
 assert.equal(LIMITS.max_message_bytes, 1024 * 1024);
+
+test("read-only grants refuse action requests and refs remain stable", () => {
+  const button = new Element("button", { text: "Run" });
+  const doc = new Document([button]);
+  const collector = createCollector(doc, { idFactory: () => "document-1" });
+  collector.handle({ type: "start", session: "session-1" });
+  const observed = collector.handle({
+    type: "read-request",
+    request: request("observe", {
+      payload: { include_values: false, limit: 10 },
+    }),
+  });
+  const ref = observed.result.elements.items[0].ref;
+  assert.equal(
+    collector.query({
+      search: "run",
+      role: "button",
+      visible: true,
+      page: 0,
+      page_size: 10,
+      include_values: false,
+    }).elements.items[0].ref,
+    ref,
+  );
+  const refused = collector.handle({
+    type: "read-request",
+    request: request("click", {
+      generation: observed.result.generation,
+      payload: { ref },
+    }),
+  });
+  assert.equal(refused.error.code, "interaction-not-granted");
+  collector.dispose();
+});
+
+test("interaction actions reject a detached ref and preserve capability boundaries", () => {
+  const button = new Element("button", { text: "Run" });
+  const doc = new Document([button]);
+  const collector = createCollector(doc, { idFactory: () => "document-1" });
+  collector.handle({
+    type: "start",
+    session: "session-1",
+    capabilities: ["read", "interact"],
+  });
+  const observed = collector.handle({
+    type: "read-request",
+    request: request("observe", {
+      payload: { include_values: false, limit: 10 },
+    }),
+  });
+  button.parentElement = null;
+  const refused = collector.handle({
+    type: "read-request",
+    request: request("click", {
+      generation: observed.result.generation,
+      capabilities: ["read", "interact"],
+      payload: { ref: observed.result.elements.items[0].ref },
+    }),
+  });
+  assert.equal(refused.error.code, "stale-element");
+  collector.dispose();
+});
+
+test("media reads and bounded card details label text metadata honestly", () => {
+  const link = new Element("a", {
+    text: "Story",
+    attrs: { href: "https://example.test/story" },
+  });
+  const card = new Element("div", {
+    text: "Story 1:23",
+    attrs: { class: "card" },
+    children: [link],
+  });
+  const video = new Element("video", {
+    rect: { x: 1, y: 2, width: 10, height: 10 },
+  });
+  video.duration = 120;
+  video.currentTime = 12;
+  video.paused = false;
+  video.ended = false;
+  video.readyState = 4;
+  const doc = new Document([card, video]);
+  const collector = createCollector(doc, { idFactory: () => "document-1" });
+  const result = collector.observe({
+    include_values: false,
+    include_details: true,
+    limit: 10,
+  });
+  assert.equal(result.items, undefined);
+  const cardItem = result.elements.items.find((item) => item.tag === "div");
+  assert.equal(cardItem.links.items[0].href, "https://example.test/story");
+  assert.equal(cardItem.time_candidates.items[0].proven, false);
+  assert.equal(result.elements.items.find((item) => item.tag === "video").media.duration, 120);
+  collector.dispose();
+});
+
+test("wait resolves a delayed selector without replaying an action", async () => {
+  const card = new Element("div", { attrs: { class: "card" } });
+  const base = new Document([card]);
+  base.querySelectorAll = (selector) =>
+    selector === ".card" ? [card] : base.body.querySelectorAll(selector);
+  const collector = createCollector(base, { idFactory: () => "document-1" });
+  collector.handle({ type: "start", session: "session-1" });
+  const pending = collector.handle({
+    type: "read-request",
+    request: request("wait", {
+      payload: {
+        selector: ".card",
+        state: "text",
+        text: "Ready",
+        timeout_ms: 200,
+        poll_ms: 10,
+      },
+    }),
+  });
+  setTimeout(() => {
+    card._text = "Ready";
+  }, 20);
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(result.result.verification, "verified");
+  collector.dispose();
+});
+
+test("capture brackets collector identity and rejects an unprepared document", async () => {
+  const { api, port } = fakeApi();
+  const original = api.tabs.sendMessage;
+  let captures = 0;
+  let preparationAllowed = true;
+  let activation;
+  api.tabs.onActivated = {
+    addListener: (fn) => {
+      activation = fn;
+    },
+  };
+  let switchDuringCapture = false;
+  api.tabs.captureVisibleTab = async () => {
+    captures++;
+    if (switchDuringCapture) {
+      activation();
+      activation();
+    }
+    return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8DwH4QBEfcD/ePF9e8AAAAASUVORK5CYII=";
+  };
+  api.tabs.sendMessage = async (tab, message) => {
+    if (message.type.startsWith("capture-")) {
+      if (!preparationAllowed) return { ok: false, error: { code: "stale-generation" } };
+      assert.equal(message.document_id, "document-1");
+      assert.equal(message.generation, 0);
+      return {
+        ok: true,
+        generation: 0,
+        viewport: { width: 800, height: 600, space: "css-viewport" },
+      };
+    }
+    return original(tab, message);
+  };
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  const capture = request("capture", {
+    session: started.grant.session,
+    generation: 0,
+    payload: {},
+  });
+  await controller.handleNativeMessage(capture, port);
+  assert.equal(port.messages.at(-1).ok, true, JSON.stringify(port.messages.at(-1)));
+  assert.deepEqual(port.messages.at(-1).result.pixels, {
+    width: 2,
+    height: 1,
+    space: "image-pixels",
+  });
+  assert.equal(port.messages.at(-1).result.verification, "identity-bracketed");
+  preparationAllowed = false;
+  await controller.handleNativeMessage(capture, port);
+  assert.equal(port.messages.at(-1).error.code, "stale-generation");
+  assert.equal(captures, 1);
+  preparationAllowed = true;
+  switchDuringCapture = true;
+  await controller.handleNativeMessage(capture, port);
+  assert.equal(port.messages.at(-1).ok, false);
+  assert.equal(captures, 2);
+});
+
+test("late collector cleanup cannot disconnect a subsequent grant", async () => {
+  const { api, port } = fakeApi();
+  const original = api.tabs.sendMessage;
+  let release;
+  const cleanup = new Promise((resolve) => {
+    release = resolve;
+  });
+  api.tabs.sendMessage = (tab, message) =>
+    message.type === "stop" ? cleanup : original(tab, message);
+  const controller = createController(api);
+  await controller.startCurrent();
+  const stopping = controller.stop();
+  const nextPort = new FakePort();
+  api.runtime.connectNative = () => nextPort;
+  const next = await controller.startCurrent();
+  release({ ok: true });
+  await stopping;
+  assert.equal(next.ok, true);
+  assert.equal(port.disconnected, true);
+  assert.notEqual(controller.status().native, "unavailable");
+  await controller.handleNativeMessage(
+    request("observe", { session: next.grant.session }),
+    nextPort,
+  );
+  assert.equal(nextPort.messages.at(-1).ok, true);
+});
+
+test("a tab moved to another browser window cannot retain action authority", async () => {
+  const { api, currentTab, port, calls } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  currentTab.windowId = 4;
+  api.windows.getCurrent = async () => ({ id: 4, focused: true });
+  await controller.handleNativeMessage(
+    request("click", {
+      session: started.grant.session,
+      generation: 0,
+      payload: { ref: "e1" },
+    }),
+    port,
+  );
+  assert.equal(calls.messages.filter((call) => call.message.type === "read-request").length, 0);
+});
+
+test("cancellation prevents an action waiting on focus checks from being dispatched", async () => {
+  const { api, currentTab, port, calls } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  let release;
+  const blocked = new Promise((resolve) => {
+    release = resolve;
+  });
+  let focusChecks = 0;
+  api.tabs.query = async () => {
+    focusChecks++;
+    await blocked;
+    return [currentTab];
+  };
+  const action = request("click", {
+    session: started.grant.session,
+    generation: 0,
+    payload: { ref: "e1" },
+  });
+  const pending = controller.handleNativeMessage(action, port);
+  await Promise.resolve();
+  assert.equal(focusChecks, 1);
+  await controller.handleNativeMessage(
+    {
+      protocol: PROTOCOL,
+      version: VERSION,
+      type: "cancel",
+      id: action.id,
+      session: action.session,
+    },
+    port,
+  );
+  release();
+  await pending;
+  assert.equal(calls.messages.filter((call) => call.message.type === "read-request").length, 0);
+});
