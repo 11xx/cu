@@ -1,0 +1,26 @@
+{
+  "manifest_version": 2,
+  "name": "CU Browser Read",
+  "version": "0.1.0",
+  "description": "Explicit, passive top-level page observations for CU.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "cu-browser-read@local",
+      "strict_min_version": "102.0"
+    }
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "nativeMessaging"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+  "browser_action": {
+    "default_title": "CU Browser Read",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": []
+}
