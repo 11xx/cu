@@ -52,7 +52,10 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   required so an unrelated animation or ticking clock cannot satisfy the wait.
   The returned frame is the settled probe itself, with the elapsed time and
   probe count in its descriptor. A wait costs captures; a tighter watch box is
-  cheaper to compare.
+  cheaper to compare. PNG decoding reconstructs pixels in native code; the
+  entire image is decoded even when the watched box is small. Supported inputs
+  are 8-bit non-interlaced grayscale, RGB, grayscale-alpha and RGBA PNGs, up to
+  64 megapixels, with validated chunk CRCs and scanlines.
 
   Before paying for another capture, ask the frame already on disk:
 
