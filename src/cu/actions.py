@@ -719,6 +719,8 @@ def key(
     if expected_window is not None:
         safety.confirm_focus(expected_window, focus)
     safety.preflight_keyboard(cfg, window, focus)
+    if window is None:
+        raise Refused(exits.TARGET_NOT_FOUND, "no window holds focus; nothing would receive keys")
 
     resolved = chord
     if action is not None:
@@ -778,17 +780,21 @@ def _live_pointer_target(
     cursor = observe.cursor()
     if expected is not None:
         safety.confirm_pointer(cfg, (expected["x"], expected["y"]), cursor)
+    if frame is not None and frame.get("window") is None:
+        monitors = observe.monitors()
     windows = observe.windows(monitors)
     under = observe.window_at(cursor["x"], cursor["y"], windows)
     safety.preflight_pointer(cfg, under, frame)
     if frame is not None:
-        safety.check_content(cfg, frame, windows)
+        safety.check_frame(cfg, frame, windows, monitors)
     return under, cursor
 
 
 def _recheck_keyboard(cfg: dict[str, Any], window: dict[str, Any] | None) -> None:
     """Reassert focus after device settlement, immediately before a chord."""
-    safety.preflight_keyboard(cfg, window, observe.focused())
+    live = observe.focused()
+    safety.preflight_keyboard(cfg, live, live)
+    safety.check_focus(cfg, window, live)
 
 
 def _describe(window: dict[str, Any] | None) -> dict[str, Any] | None:

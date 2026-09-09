@@ -636,7 +636,14 @@ def cmd_shot(args: argparse.Namespace) -> int:
 
         if args.if_changed:
             previous = _last_frame_like(source, rect)
-            if previous and previous.get("digest_native") == digest:
+            if (
+                previous
+                and previous.get("digest_native") == digest
+                and (previous.get("window") or {}).get("address")
+                == (window or {}).get("address")
+                and previous.get("profile") == name
+                and previous.get("capture_scale") == scale
+            ):
                 # The pixels were just re-read and match, which is the evidence
                 # staleness is a proxy for. Keeping the original timestamp would
                 # let a frame proven current a moment ago be refused as too old.
@@ -854,6 +861,7 @@ def cmd_magnify(args: argparse.Namespace) -> int:
             captured_at=captured_at,
             derived_from=source["id"],
             window=source.get("window"),
+            monitor=source.get("monitor"),
             profile=profile_name,
             visual_tokens=capture.visual_tokens(
                 image_size["w"], image_size["h"], profile

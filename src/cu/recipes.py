@@ -99,6 +99,8 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
     action = entry.get("action")
     if action not in REPLAYABLE or entry.get("dry_run"):
         return None
+    if (entry.get("verified") or {}).get("status") == "mismatch":
+        return None
     if entry.get("typed") is False:
         # A click logged because the typing it belonged to refused. It was
         # part of a failure, not of a working run, and replaying it alone
@@ -156,6 +158,7 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
     elif action == "key":
         step["chord"] = entry.get("chord")
         step["semantic"] = entry.get("semantic")
+        step["repeat"] = entry.get("repeat", 1)
     elif action == "browser":
         # The action, deliberately not the chord it resolved to this time. A
         # keymap the user changes between recording and replay should move the
@@ -398,7 +401,7 @@ def replay(
             performed.append(
                 actions.key(
                     cfg, action=step.get("semantic"), chord=step.get("chord"),
-                    dry_run=dry_run,
+                    repeat=step.get("repeat", 1), dry_run=dry_run,
                 )
             )
         elif action == "browser":

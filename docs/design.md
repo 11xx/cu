@@ -67,7 +67,7 @@ schematic:
 
 A derived frame records `derived_from` and gets its own id, path, image size,
 and visual-token estimate. Magnification preserves the source's `captured_at`,
-`logical_rect`, and window metadata: resizing pixels does not make them newer
+`logical_rect`, monitor geometry, and window metadata: resizing pixels does not make them newer
 or change what part of the desktop they depict.
 
 A frame states only which logical rectangle it depicts and how many pixels it
@@ -328,7 +328,9 @@ different facts and asserting the wrong one forbids ordinary work.
 - **Keyboard commands assert focus.** `type` and `key` go wherever focus
   happens to be, so the window holding it must be the one the agent expected.
   The dangerous race is the user alt-tabbing mid-action and receiving a
-  password into the wrong application.
+  password into the wrong application. A literal chord also requires a focused
+  window. The live title and class are checked against the denylist before
+  each chord, not only against the snapshot taken at command entry.
 - **Pointer commands assert the target.** A click is aimed by coordinates, and
   demanding its target already hold focus would forbid clicking a window *to*
   focus it — which is most of what clicking is for. What a frame guarantees
@@ -336,7 +338,11 @@ different facts and asserting the wrong one forbids ordinary work.
   a window that opened over the target since capture refuses the click rather
   than swallowing it.
 
-Both refusals report `FOCUS_CHANGED`, because the caller's response is the
+Frame geometry is checked again after device settlement, immediately before
+pointer injection. A resize or output move refuses as `STALE_FRAME` even if
+the same window still covers the point.
+
+Focus and target refusals report `FOCUS_CHANGED`, because the caller's response is the
 same: re-observe, then decide again.
 
 **Denylist.** Refuse to inject into window classes matching a configurable
@@ -782,6 +788,9 @@ in code so a host with no file still behaves correctly, user tables merged over
 them. Tables are merged recursively but lists are replaced wholesale — a user
 who shortens the denylist means it, and a merge that silently re-added entries
 would be impossible to reason about.
+
+Safety timing and drift limits are finite, nonnegative numbers; policy switches
+are booleans and denylist entries are strings. Invalid values refuse before input.
 
 The keymap lives there too, keyed by window class with `*` as the fallback
 entry. Only bindings that are genuinely near-universal belong under `*`: paste
