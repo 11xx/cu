@@ -1,0 +1,127 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>CU Browser control fixture</title>
+<style>
+  body {
+    font: 18px sans-serif;
+    padding: 24px;
+    background: #f6f8fb;
+    color: #15253c;
+  }
+  main {
+    max-width: 1000px;
+  }
+  button,
+  input,
+  textarea {
+    font: inherit;
+    margin: 8px;
+    padding: 10px;
+  }
+  article {
+    border: 1px solid #9ab;
+    padding: 12px;
+    margin: 12px 0;
+  }
+  #pane {
+    height: 130px;
+    overflow: auto;
+    border: 2px solid #456;
+  }
+  #pane > div {
+    height: 1800px;
+  }
+  .covered {
+    position: relative;
+    display: inline-block;
+  }
+  .cover {
+    position: absolute;
+    inset: 0;
+    background: #3458;
+    z-index: 10;
+  }
+  video {
+    display: block;
+    width: 320px;
+    height: 180px;
+  }
+</style>
+<main>
+  <h1>CU Browser control fixture</h1>
+  <p>All values and actions on this page are disposable test data.</p>
+  <label>Ordinary value <input id="entry" value="8080" /></label>
+  <label>Notes <textarea id="notes">Original notes</textarea></label>
+  <label>Security code <input id="sensitive" value="fixture-only-code" /></label>
+  <button id="apply">Apply once</button>
+  <button id="mutate">Change value without input events</button>
+  <button id="delay">Schedule readiness</button>
+  <button id="replace">Replace target object</button>
+  <button id="victim">Original target</button>
+  <button id="disabled" disabled>Disabled control</button>
+  <button id="hidden" style="display: none">Hidden control</button>
+  <span class="covered"
+    ><button id="blocked">Covered control</button><span class="cover"></span
+  ></span>
+  <output id="state">applications=0; input=0; change=0; hover=0</output>
+  <section id="delayed"></section>
+  <!-- Result templates may contain comment nodes. -->
+  <article class="result-card"><a href="/short">Short performance</a> <span>5:44</span></article>
+  <article class="result-card"><a href="/long">Long performance</a> <span>13:44</span></article>
+  <div id="pane">
+    <div>Scrollable fixture area</div>
+    <button id="bottom">Bottom target</button>
+  </div>
+  <output id="scroll-state">scroll=0</output>
+  <button id="play">Play muted fixture media</button>
+  <button id="pause">Pause fixture media</button>
+  <video id="media" src="media.webm" controls muted loop preload="auto"></video>
+</main>
+<script>
+  const entry = document.querySelector("#entry");
+  const state = { applications: 0, input: 0, change: 0, hover: 0 };
+  function showState() {
+    document.querySelector("#state").textContent = Object.entries(state)
+      .map(([key, value]) => `${key}=${value}`)
+      .join("; ");
+  }
+  entry.addEventListener("input", () => {
+    state.input++;
+    showState();
+  });
+  entry.addEventListener("change", () => {
+    state.change++;
+    showState();
+  });
+  document.querySelector("#apply").onclick = () => {
+    state.applications++;
+    showState();
+  };
+  document.querySelector("#apply").addEventListener("mouseenter", () => {
+    state.hover++;
+    showState();
+  });
+  document.querySelector("#mutate").onclick = () => {
+    entry.value = "script-change";
+  };
+  document.querySelector("#delay").onclick = () => {
+    document.querySelector("#delayed").replaceChildren();
+    setTimeout(() => {
+      const ready = document.createElement("p");
+      ready.id = "ready";
+      ready.textContent = "Ready";
+      document.querySelector("#delayed").append(ready);
+    }, 350);
+  };
+  document.querySelector("#replace").onclick = () => {
+    const old = document.querySelector("#victim");
+    const replacement = old.cloneNode();
+    replacement.textContent = "Replacement target";
+    old.replaceWith(replacement);
+  };
+  document.querySelector("#pane").onscroll = (event) => {
+    document.querySelector("#scroll-state").textContent = `scroll=${event.target.scrollTop}`;
+  };
+  document.querySelector("#play").onclick = () => document.querySelector("#media").play();
+  document.querySelector("#pause").onclick = () => document.querySelector("#media").pause();
+</script>
