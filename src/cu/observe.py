@@ -30,6 +30,7 @@ def monitors() -> list[dict[str, Any]]:
         out.append(
             {
                 "name": m["name"],
+                "id": m.get("id", len(out)),
                 "scale": scale,
                 "physical": {"w": m["width"], "h": m["height"]},
                 "logical_rect": _rect(
@@ -43,6 +44,7 @@ def monitors() -> list[dict[str, Any]]:
                 },
                 "focused": m["focused"],
                 "active_workspace": m["activeWorkspace"]["name"],
+                "special_workspace": m.get("specialWorkspace", {}).get("name", ""),
                 "disabled": m.get("disabled", False),
             }
         )
@@ -72,17 +74,23 @@ def layer_surfaces() -> list[dict[str, Any]]:
 def windows(mons: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Mapped windows, with the monitor named rather than indexed.
 
-    Hyprland reports `monitor` as a position in its own output list, which is
-    not stable across hotplug and means nothing to a caller holding an output
-    name. Resolving it here keeps every rectangle in this module addressable by
-    the same names `shot --output` accepts.
+    Monitor IDs are resolved to names; IDs need not be contiguous after hotplug.
+    Client visibility also requires a displayed workspace: the client's visible
+    flag alone can remain true while another workspace occupies the output.
     """
-    by_index = {i: m["name"] for i, m in enumerate(mons or monitors())}
+    by_id = {m.get("id", i): m for i, m in enumerate(mons if mons is not None else monitors())}
     out = []
     for c in hypr.query("clients"):
         if not c.get("mapped", True):
             continue
         at, size = c["at"], c["size"]
+        monitor = by_id.get(c["monitor"])
+        workspace = c["workspace"]["name"]
+        displayed = bool(monitor) and not monitor.get("disabled", False) and (
+            c.get("pinned", False)
+            or workspace == (monitor.get("special_workspace") or monitor.get("active_workspace"))
+            or "active_workspace" not in monitor
+        )
         out.append(
             {
                 "address": c["address"],
@@ -92,12 +100,12 @@ def windows(mons: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
                 "xwayland": c["xwayland"],
                 "floating": c["floating"],
                 "hidden": c.get("hidden", False),
-                "visible": c.get("visible", True),
+                "visible": c.get("visible", True) and displayed,
                 # Lower means more recently focused, which is the closest thing
                 # Hyprland exposes to a stacking order.
                 "focus_order": c.get("focusHistoryID", 1 << 30),
                 "workspace": c["workspace"]["name"],
-                "monitor": by_index.get(c["monitor"], str(c["monitor"])),
+                "monitor": monitor["name"] if monitor else str(c["monitor"]),
                 "logical_rect": _rect(at[0], at[1], size[0], size[1]),
             }
         )

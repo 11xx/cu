@@ -19,6 +19,7 @@ DEGENERATE_AIM = 23
 TIMED_OUT = 24
 VERIFY_FAILED = 25
 CONTENT_CHANGED = 26
+TARGET_NOT_VISIBLE = 27
 DENIED_BY_POLICY = 30
 ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
@@ -59,6 +60,10 @@ RESPONSE = {
     CONTENT_CHANGED: (
         "The window still holds the frame's place, but shows different content. "
         "Re-observe and decide again: the plan was made about something else."
+    ),
+    TARGET_NOT_VISIBLE: (
+        "The requested window is hidden or its capture is obstructed. "
+        "Observe, explicitly focus or rearrange it, or capture an output without window identity."
     ),
     DENIED_BY_POLICY: "Refused by the denylist or a locked session. Do not retry; tell the user.",
     ABORTED_BY_USER: (

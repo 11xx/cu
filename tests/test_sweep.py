@@ -33,6 +33,50 @@ def world(monkeypatch, tmp_path):
     return snap
 
 
+@pytest.mark.parametrize("obstruction", ["hidden", "overlap", "layer"])
+def test_window_capture_refuses_obstructed_identity(world, obstruction, capsys):
+    if obstruction == "hidden":
+        world["windows"][0]["visible"] = False
+    elif obstruction == "overlap":
+        world["windows"].append({**world["windows"][0], "address": "0x2", "focused": False})
+    else:
+        world["layer_surfaces"] = [{"level": 3, "logical_rect": world["windows"][0]["logical_rect"]}]
+    assert cli.main(["shot", "--json"]) == 27
+    assert capsys.readouterr().out == ""
+    assert not list(frames.store_dir().glob("f*.json"))
+
+
+def test_window_hidden_during_capture_publishes_no_frame(world, monkeypatch, capsys):
+    def grab(rect, dest, scale):
+        dest.write_bytes(png.encode(1, 1, b"\0\0\0\xff"))
+        world["windows"][0]["visible"] = False
+    monkeypatch.setattr(capture, "grab_region", grab)
+    assert cli.main(["shot", "--json"]) == exits.TARGET_NOT_VISIBLE
+    assert capsys.readouterr().out == ""
+    assert not list(frames.store_dir().glob("f*.json"))
+
+
+def test_after_refuses_moved_window_instead_of_relabelling_pixels(world, capsys):
+    assert cli.main(["shot", "--json"]) == 0
+    reference = json.loads(capsys.readouterr().out)
+    world["windows"][0]["logical_rect"]["x"] = 5
+    assert cli.main([
+        "shot", "--after", reference["id"], "--watch", "full", "--timeout", "0.001",
+    ]) == exits.STALE_FRAME
+
+
+def test_off_workspace_client_is_not_visible(monkeypatch):
+    from cu import hypr
+    monitors = [{"id": 7, "name": "OUT", "active_workspace": "1"}]
+    client = {"address": "0x1", "class": "fixture", "title": "fixture", "pid": 1,
+              "monitor": 7, "workspace": {"name": "2"}, "at": [0, 0], "size": [10, 10],
+              "visible": True, "floating": False, "xwayland": False}
+    monkeypatch.setattr(hypr, "query", lambda name: [client])
+    window = observe.windows(monitors)[0]
+    assert window["visible"] is False
+    assert window["monitor"] == "OUT"
+
+
 def test_key_rechecks_live_denylisted_title(world, monkeypatch):
     sent = []
     def send(cfg, chords, backend, *, before_send):
