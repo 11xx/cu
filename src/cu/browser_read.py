@@ -1,7 +1,7 @@
-"""Bounded local transport for the Firefox passive-read extension.
+"""Bounded local transport for Firefox page evidence and explicit interaction.
 
-The browser owns the helper and its private Unix socket. Only explicit read
-requests cross it; responses are relayed without a persistent page archive.
+The browser owns the helper and its private Unix socket. Requests are gated by
+per-document capabilities; responses have no persistent page archive.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Self
 
 PROTOCOL = "cu-browser-read"
-VERSION = 1
+VERSION = 2
 MAX_MESSAGE_BYTES = 1 << 20
 MAX_RECV_CHUNK_BYTES = 64 << 10
 MAX_PENDING_REQUESTS = 64
@@ -41,19 +41,39 @@ MAX_DOCUMENT_ID_CHARS = 128
 MAX_HELPER_ID_CHARS = 128
 MAX_SOCKET_PATH_CHARS = 4096
 MAX_QUERY_CHARS = 256
+MAX_SELECTOR_CHARS = 256
 MAX_ROLE_CHARS = 64
 MAX_PAGE = 1_000
 MAX_PAGE_SIZE = 100
 MAX_ELEMENTS = 128
 MAX_GRANTS = 16
+MAX_CAPTURE_BYTES = 512 * 1024
+MAX_CAPTURE_PIXELS = 16 * 1024 * 1024
+MAX_ACTION_VALUE_CHARS = 1024
+MAX_WAIT_MS = 10_000
+MAX_WAIT_POLL_MS = 1_000
 MAX_ERROR_CODE_CHARS = 64
 MAX_ERROR_MESSAGE_CHARS = 256
 SOCKET_PREFIX = "helper-"
 SOCKET_SUFFIX = ".sock"
 
-READ_OPERATIONS = frozenset({"observe", "query"})
-_OBSERVE_FIELDS = frozenset({"include_values", "limit"})
-_QUERY_FIELDS = frozenset({"search", "role", "visible", "page", "page_size", "include_values"})
+READ_OPERATIONS = frozenset({"observe", "query", "wait"})
+ACTION_OPERATIONS = frozenset({"click", "focus", "fill", "scroll", "hover", "capture"})
+OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
+CAPABILITIES = frozenset({"read", "interact"})
+_OBSERVE_FIELDS = frozenset({"include_values", "limit", "selector", "include_details"})
+_QUERY_FIELDS = frozenset(
+    {
+        "search",
+        "role",
+        "visible",
+        "page",
+        "page_size",
+        "include_values",
+        "selector",
+        "include_details",
+    }
+)
 _FRAME_HEADER = struct.Struct("=I")
 _SOCKET_NAME = f"{SOCKET_PREFIX}[0-9a-f]{{8,32}}{SOCKET_SUFFIX}"
 
@@ -78,6 +98,10 @@ class BrowserReadTimeout(BrowserReadError):
     """A bounded client operation did not finish before its deadline."""
 
 
+class BrowserActionUncertain(BrowserReadTimeout):
+    """An action may have reached Firefox before its response was lost."""
+
+
 class MismatchedResponse(ProtocolError):
     """A response did not match the request waiting on the socket."""
 
@@ -92,9 +116,15 @@ def protocol_limits() -> dict[str, int | float]:
         "max_message_bytes": MAX_MESSAGE_BYTES,
         "max_pending_requests": MAX_PENDING_REQUESTS,
         "max_query_chars": MAX_QUERY_CHARS,
+        "max_selector_chars": MAX_SELECTOR_CHARS,
         "max_page": MAX_PAGE,
         "max_page_size": MAX_PAGE_SIZE,
         "max_elements": MAX_ELEMENTS,
+        "max_capture_bytes": MAX_CAPTURE_BYTES,
+        "max_capture_pixels": MAX_CAPTURE_PIXELS,
+        "max_action_value_chars": MAX_ACTION_VALUE_CHARS,
+        "max_wait_ms": MAX_WAIT_MS,
+        "max_wait_poll_ms": MAX_WAIT_POLL_MS,
         "default_timeout_seconds": DEFAULT_TIMEOUT,
         "max_timeout_seconds": MAX_TIMEOUT,
     }
@@ -283,22 +313,125 @@ def _validate_envelope(message: Mapping[str, Any], message_type: str) -> None:
         raise ProtocolError(f"expected {message_type} message")
 
 
+def _capabilities(value: Any, default: tuple[str, ...] = ("read",)) -> list[str]:
+    if value is None:
+        return list(default)
+    if (
+        not isinstance(value, list)
+        or not value
+        or len(value) > len(CAPABILITIES)
+        or any(not isinstance(item, str) or item not in CAPABILITIES for item in value)
+        or len(set(value)) != len(value)
+        or "read" not in value
+    ):
+        raise ProtocolError("capabilities must include read and contain only read and interact")
+    return list(value)
+
+
+def _bounded_signed_int(value: Any, name: str, maximum: int) -> int:
+    return _bounded_int(value, name, maximum, minimum=-maximum)
+
+
+def _selector(value: Any) -> str | None:
+    if value is None:
+        return None
+    return _bounded_string(value, "selector", MAX_SELECTOR_CHARS)
+
+
+def _ref(value: Any) -> str:
+    return _bounded_string(value, "ref", 64)
+
+
 def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
-    if not isinstance(operation, str) or operation not in READ_OPERATIONS:
-        raise ProtocolError("operation is not a supported passive read")
+    if not isinstance(operation, str) or operation not in OPERATIONS:
+        raise ProtocolError("operation is not a supported passive read or browser action")
     payload_object = _object({} if payload is None else payload, "payload")
+    if operation == "capture":
+        _exact_fields(payload_object, set(), set())
+        return {}
+    if operation in {"click", "focus", "hover"}:
+        _exact_fields(payload_object, {"ref"}, {"ref"})
+        return {"ref": _ref(payload_object["ref"])}
+    if operation == "fill":
+        _exact_fields(payload_object, {"ref", "value"}, {"ref", "value"})
+        return {
+            "ref": _ref(payload_object["ref"]),
+            "value": _bounded_string(
+                payload_object["value"], "value", MAX_ACTION_VALUE_CHARS, empty=True
+            ),
+        }
+    if operation == "scroll":
+        _exact_fields(payload_object, {"target", "dx", "dy"}, {"target", "ref", "dx", "dy"})
+        target = _bounded_string(payload_object["target"], "target", 8)
+        if target not in {"document", "element"}:
+            raise ProtocolError("target must be document or element")
+        if target == "element" and "ref" not in payload_object:
+            raise ProtocolError("element scroll requires ref")
+        if target == "document" and "ref" in payload_object:
+            raise ProtocolError("document scroll does not accept ref")
+        return {
+            "target": target,
+            **({"ref": _ref(payload_object["ref"])} if target == "element" else {}),
+            "dx": _bounded_signed_int(payload_object.get("dx", 0), "dx", 10000),
+            "dy": _bounded_signed_int(payload_object.get("dy", 0), "dy", 10000),
+        }
+    if operation == "wait":
+        allowed = {"ref", "selector", "state", "text", "value", "timeout_ms", "poll_ms"}
+        _exact_fields(payload_object, {"state"}, allowed)
+        has_ref = "ref" in payload_object
+        selector = _selector(payload_object.get("selector"))
+        if has_ref == bool(selector):
+            raise ProtocolError("wait requires exactly one of ref or selector")
+        state = _bounded_string(payload_object["state"], "state", 16)
+        if state not in {
+            "present",
+            "visible",
+            "enabled",
+            "text",
+            "value",
+            "playing",
+            "paused",
+            "ended",
+        }:
+            raise ProtocolError("wait state is unsupported")
+        if state in {"text", "value"} and state not in payload_object:
+            raise ProtocolError(f"{state} wait requires {state}")
+        if state in {"playing", "paused", "ended"} and not has_ref:
+            raise ProtocolError("media waits require ref")
+        result: dict[str, Any] = (
+            {"ref": _ref(payload_object["ref"])} if has_ref else {"selector": selector}
+        )
+        result["state"] = state
+        if "text" in payload_object:
+            result["text"] = _bounded_string(payload_object["text"], "text", 512, empty=True)
+        if "value" in payload_object:
+            result["value"] = _bounded_string(payload_object["value"], "value", 512, empty=True)
+        result["timeout_ms"] = _bounded_int(
+            payload_object.get("timeout_ms", MAX_WAIT_MS), "timeout_ms", MAX_WAIT_MS, minimum=1
+        )
+        result["poll_ms"] = _bounded_int(
+            payload_object.get("poll_ms", 50), "poll_ms", MAX_WAIT_POLL_MS, minimum=10
+        )
+        return result
+
     allowed = _OBSERVE_FIELDS if operation == "observe" else _QUERY_FIELDS
     unknown = set(payload_object) - allowed
     if unknown:
         raise ProtocolError(f"unsupported {operation} field {sorted(unknown)[0]}")
-
     include_values = payload_object.get("include_values", False)
     _bounded_bool(include_values, "include_values")
+    include_details = payload_object.get("include_details", False)
+    _bounded_bool(include_details, "include_details")
+    selector = _selector(payload_object.get("selector"))
     if operation == "observe":
-        limit = payload_object.get("limit", MAX_ELEMENTS)
-        _bounded_int(limit, "limit", MAX_ELEMENTS, minimum=1)
-        return {"include_values": include_values, "limit": limit}
-
+        return {
+            "include_values": include_values,
+            "include_details": include_details,
+            "selector": selector,
+            "limit": _bounded_int(
+                payload_object.get("limit", MAX_ELEMENTS), "limit", MAX_ELEMENTS, minimum=1
+            ),
+        }
     search = payload_object.get("search", "")
     _bounded_string(search, "search", MAX_QUERY_CHARS, empty=True)
     role = payload_object.get("role")
@@ -307,22 +440,22 @@ def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
     visible = payload_object.get("visible")
     if visible is not None:
         _bounded_bool(visible, "visible")
-    page = payload_object.get("page", 0)
-    page_size = payload_object.get("page_size", MAX_PAGE_SIZE)
-    _bounded_int(page, "page", MAX_PAGE)
-    _bounded_int(page_size, "page_size", MAX_PAGE_SIZE, minimum=1)
     return {
         "search": search,
         "role": role,
         "visible": visible,
-        "page": page,
-        "page_size": page_size,
+        "page": _bounded_int(payload_object.get("page", 0), "page", MAX_PAGE),
+        "page_size": _bounded_int(
+            payload_object.get("page_size", MAX_PAGE_SIZE), "page_size", MAX_PAGE_SIZE, minimum=1
+        ),
         "include_values": include_values,
+        "include_details": include_details,
+        "selector": selector,
     }
 
 
 def validate_request(message: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate and normalize the only request shape the broker forwards."""
+    """Validate and normalize a versioned browser read or action request."""
     request = _object(message, "request")
     allowed = {
         "protocol",
@@ -334,32 +467,50 @@ def validate_request(message: Mapping[str, Any]) -> dict[str, Any]:
         "tab_id",
         "document_id",
         "generation",
+        "capabilities",
         "payload",
     }
-    _exact_fields(request, allowed, allowed)
+    _exact_fields(
+        request,
+        {
+            "protocol",
+            "version",
+            "type",
+            "id",
+            "operation",
+            "session",
+            "tab_id",
+            "document_id",
+            "generation",
+            "payload",
+        },
+        allowed,
+    )
     _validate_envelope(request, "request")
-    request_id = _bounded_string(request["id"], "id", MAX_REQUEST_ID_CHARS)
     operation = request["operation"]
-    if not isinstance(operation, str) or operation not in READ_OPERATIONS:
-        raise ProtocolError("operation is not a supported passive read")
-    session = _bounded_string(request["session"], "session", MAX_SESSION_CHARS)
-    tab_id = _bounded_int(request["tab_id"], "tab_id", 2**31 - 1, minimum=1)
-    document_id = _bounded_string(request["document_id"], "document_id", MAX_DOCUMENT_ID_CHARS)
+    if not isinstance(operation, str) or operation not in OPERATIONS:
+        raise ProtocolError("operation is not a supported passive read or browser action")
     generation = request["generation"]
     if generation is not None:
         _bounded_int(generation, "generation", 2**53 - 1)
-    payload = validate_payload(operation, request["payload"])
+    if operation in ACTION_OPERATIONS and generation is None:
+        raise ProtocolError(
+            "browser actions are not passive read operations without an observed generation"
+        )
     return {
         "protocol": PROTOCOL,
         "version": VERSION,
         "type": "request",
-        "id": request_id,
+        "id": _bounded_string(request["id"], "id", MAX_REQUEST_ID_CHARS),
         "operation": operation,
-        "session": session,
-        "tab_id": tab_id,
-        "document_id": document_id,
+        "session": _bounded_string(request["session"], "session", MAX_SESSION_CHARS),
+        "tab_id": _bounded_int(request["tab_id"], "tab_id", 2**31 - 1, minimum=1),
+        "document_id": _bounded_string(
+            request["document_id"], "document_id", MAX_DOCUMENT_ID_CHARS
+        ),
         "generation": generation,
-        "payload": payload,
+        "capabilities": _capabilities(request.get("capabilities")),
+        "payload": validate_payload(operation, request["payload"]),
     }
 
 
@@ -374,30 +525,45 @@ def make_request(
     request_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a request after applying the same allowlist used by the host."""
-    message = {
-        "protocol": PROTOCOL,
-        "version": VERSION,
-        "type": "request",
-        "id": request_id or uuid.uuid4().hex,
-        "operation": operation,
-        "session": session,
-        "tab_id": tab_id,
-        "document_id": document_id,
-        "generation": generation,
-        "payload": dict(payload or {}),
-    }
-    return validate_request(message)
+    return validate_request(
+        {
+            "protocol": PROTOCOL,
+            "version": VERSION,
+            "type": "request",
+            "id": request_id or uuid.uuid4().hex,
+            "operation": operation,
+            "session": session,
+            "tab_id": tab_id,
+            "document_id": document_id,
+            "generation": generation,
+            "payload": dict(payload or {}),
+        }
+    )
 
 
 def _validate_grant(grant: Mapping[str, Any]) -> dict[str, Any]:
     value = _object(grant, "grant")
-    allowed = {"session", "tab_id", "window_id", "document_id", "generation", "active", "hidden"}
-    _exact_fields(value, allowed, allowed)
+    allowed = {
+        "session",
+        "tab_id",
+        "window_id",
+        "document_id",
+        "generation",
+        "capabilities",
+        "active",
+        "hidden",
+    }
+    _exact_fields(
+        value,
+        {"session", "tab_id", "window_id", "document_id", "generation", "active", "hidden"},
+        allowed,
+    )
     session = _bounded_string(value["session"], "grant session", MAX_SESSION_CHARS)
     tab_id = _bounded_int(value["tab_id"], "grant tab_id", 2**31 - 1, minimum=1)
     window_id = _bounded_int(value["window_id"], "grant window_id", 2**31 - 1, minimum=1)
     document_id = _bounded_string(value["document_id"], "grant document_id", MAX_DOCUMENT_ID_CHARS)
     generation = _bounded_int(value["generation"], "grant generation", 2**53 - 1)
+    capabilities = _capabilities(value.get("capabilities"))
     active = _bounded_bool(value["active"], "grant active")
     hidden = _bounded_bool(value["hidden"], "grant hidden")
     return {
@@ -406,6 +572,7 @@ def _validate_grant(grant: Mapping[str, Any]) -> dict[str, Any]:
         "window_id": window_id,
         "document_id": document_id,
         "generation": generation,
+        "capabilities": capabilities,
         "active": active,
         "hidden": hidden,
     }
@@ -693,8 +860,10 @@ class BrowserReadClient:
         try:
             if self._closed:
                 raise HelperUnavailable("browser read client is closed")
+            action_sent = False
             try:
                 self._connection.settimeout(max(0.001, deadline - time.monotonic()))
+                action_sent = request["operation"] in ACTION_OPERATIONS - {"capture"}
                 write_frame(self._connection, request)
                 while True:
                     remaining = deadline - time.monotonic()
@@ -719,15 +888,45 @@ class BrowserReadClient:
                         raise MismatchedResponse(
                             "helper response identity did not match the request"
                         )
+                    if action_sent and validated["ok"]:
+                        body = validated["result"]
+                        result_generation = _bounded_int(
+                            body.get("generation"), "generation", 2**53 - 1
+                        )
+                        if (
+                            body.get("kind") != "action"
+                            or body.get("action") != operation
+                            or body.get("backend") != "dom"
+                            or body.get("document_id") != document_id
+                            or body.get("verification") not in {"verified", "unverified"}
+                            or result_generation < generation
+                            or (
+                                "ref" in request["payload"]
+                                and body.get("ref") != request["payload"]["ref"]
+                            )
+                        ):
+                            raise ProtocolError("browser action receipt did not match its request")
                     return validated
             except TimeoutError as exc:
                 self.close()
+                if action_sent:
+                    raise BrowserActionUncertain(
+                        "browser action may have been partially applied; response timed out"
+                    ) from exc
                 raise BrowserReadTimeout("browser read request exceeded its deadline") from exc
             except (BrokenPipeError, ConnectionError, OSError) as exc:
                 self.close()
+                if action_sent:
+                    raise BrowserActionUncertain(
+                        "browser action may have been partially applied; helper disconnected"
+                    ) from exc
                 raise HelperUnavailable("browser read helper is unavailable") from exc
-            except (BrowserReadTimeout, MismatchedResponse, ProtocolError, StaleHelper):
+            except (BrowserReadTimeout, MismatchedResponse, ProtocolError, StaleHelper) as exc:
                 self.close()
+                if action_sent:
+                    raise BrowserActionUncertain(
+                        "browser action may have been partially applied; response was unusable"
+                    ) from exc
                 raise
         finally:
             self._lock.release()
@@ -741,6 +940,8 @@ class BrowserReadClient:
         generation: int | None = None,
         include_values: bool = False,
         limit: int = MAX_ELEMENTS,
+        selector: str | None = None,
+        include_details: bool = False,
         timeout: float | None = None,
     ) -> dict[str, Any]:
         return self.request(
@@ -749,7 +950,12 @@ class BrowserReadClient:
             tab_id=tab_id,
             document_id=document_id,
             generation=generation,
-            payload={"include_values": include_values, "limit": limit},
+            payload={
+                "include_values": include_values,
+                "limit": limit,
+                "selector": selector,
+                "include_details": include_details,
+            },
             timeout=timeout,
         )
 
@@ -766,6 +972,8 @@ class BrowserReadClient:
         page_size: int = MAX_PAGE_SIZE,
         generation: int | None = None,
         include_values: bool = False,
+        selector: str | None = None,
+        include_details: bool = False,
         timeout: float | None = None,
     ) -> dict[str, Any]:
         return self.request(
@@ -781,7 +989,71 @@ class BrowserReadClient:
                 "page": page,
                 "page_size": page_size,
                 "include_values": include_values,
+                "selector": selector,
+                "include_details": include_details,
             },
+            timeout=timeout,
+        )
+
+    def action(
+        self,
+        operation: str,
+        *,
+        session: str,
+        tab_id: int,
+        document_id: str,
+        generation: int,
+        payload: Mapping[str, Any],
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        if operation not in ACTION_OPERATIONS - {"capture"}:
+            raise ValueError("operation is not a DOM browser action")
+        return self.request(
+            operation,
+            session=session,
+            tab_id=tab_id,
+            document_id=document_id,
+            generation=generation,
+            payload=payload,
+            timeout=timeout,
+        )
+
+    def wait(
+        self,
+        *,
+        session: str,
+        tab_id: int,
+        document_id: str,
+        payload: Mapping[str, Any],
+        generation: int | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        return self.request(
+            "wait",
+            session=session,
+            tab_id=tab_id,
+            document_id=document_id,
+            generation=generation,
+            payload=payload,
+            timeout=timeout,
+        )
+
+    def capture(
+        self,
+        *,
+        session: str,
+        tab_id: int,
+        document_id: str,
+        generation: int,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        return self.request(
+            "capture",
+            session=session,
+            tab_id=tab_id,
+            document_id=document_id,
+            generation=generation,
+            payload={},
             timeout=timeout,
         )
 
@@ -926,9 +1198,19 @@ class NativeMessagingHost:
         if self._selector is not None:
             with suppress(KeyError, ValueError):
                 self._selector.unregister(peer.connection)
-        for request_id, (owner, _) in list(self.pending.items()):
+        for request_id, (owner, request) in list(self.pending.items()):
             if owner is peer:
                 del self.pending[request_id]
+                if self._running:
+                    self._send_native(
+                        {
+                            "protocol": PROTOCOL,
+                            "version": VERSION,
+                            "type": "cancel",
+                            "id": request_id,
+                            "session": request["session"],
+                        }
+                    )
         peer.connection.close()
 
     def _broadcast(self, message: Mapping[str, Any]) -> None:
@@ -978,6 +1260,10 @@ class NativeMessagingHost:
             )
         elif grant["document_id"] != request["document_id"]:
             response = _error_response(request_id, "stale-document", "the document grant is stale")
+        elif request["operation"] in ACTION_OPERATIONS and "interact" not in grant["capabilities"]:
+            response = _error_response(
+                request_id, "interaction-not-granted", "the current browser grant is read-only"
+            )
         elif request_id in self.pending:
             response = _error_response(
                 request_id, "duplicate-request-id", "request id is already pending"

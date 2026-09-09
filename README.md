@@ -145,19 +145,21 @@ on the wrong window at exit 0.
 [`adapters/`](adapters/README.md) provides a portable action/status/frame/image
 composition and a Pi tool wrapper. It calls the existing CLI and uses the
 harness's native image return, with no daemon or extra transport. The CLI guide
-contains its safety and capture-selection rules. Adapter tests require Node.js
-22+ and run as part of `make check`; the Python CLI does not require Node.
+contains its safety and capture-selection rules. JavaScript tests use pinned npm
+dependencies and the Node versions declared in `package.json`. `make check`
+installs these dependencies; the Python CLI does not require Node.
 
-## Optional Firefox page evidence
+## Optional Firefox CU Browser
 
-[`browser-extension/`](browser-extension/README.md) supplies a passive read tier
-with explicit per-tab grants. `cu web setup` registers its browser-owned native
-host; `cu web hosts` and `cu web read` discover and query granted documents.
-No DOM input, all-sites permission, TCP listener, or persistent page archive is
-required. Browser evidence is optional and untrusted; pixel capture works without
-it. CSS rectangles are not mapped to desktop frames, and iframe/shadow-tree
-contents are unsupported. Run bare `cu` for the consent, freshness and refusal
-contracts before enabling a tab.
+[`browser-extension/`](browser-extension/README.md) supplies structured page
+reads, condition waits, explicitly granted DOM actions, and browser viewport
+capture. `cu web setup` registers its browser-owned native host; the extension
+popup grants either reads or page interaction for one tab. Read grants never
+silently acquire action authority. No all-sites permission, TCP listener, or
+persistent page archive is required. Pixel control works without the extension.
+Browser evidence is untrusted, CSS rectangles are not mapped to desktop frames,
+and iframe/shadow-tree contents are unsupported. Run bare `cu` for the consent,
+freshness, action-uncertainty, and refusal contracts before enabling a tab.
 
 ## The eww indicator
 

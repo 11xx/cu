@@ -12,3 +12,6 @@
 __pycache__/
 *.py[cod]
 .venv/
+
+# JavaScript test dependencies
+node_modules/

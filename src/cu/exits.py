@@ -37,6 +37,7 @@ BROWSER_READ_TIMEOUT = 54
 BROWSER_READ_AMBIGUOUS = 55
 BROWSER_READ_REFUSED = 56
 BROWSER_READ_BUDGET = 57
+BROWSER_ACTION_UNCERTAIN = 58
 
 #: What a caller should do on each code. Shipped in `cu doctor --json` and
 #: summarized in the bare-`cu` guide, so the contract has exactly one source.
@@ -45,8 +46,7 @@ RESPONSE = {
     ERROR: "Unexpected failure. Read stderr; do not blindly retry.",
     USAGE: "The command was malformed. Fix the arguments.",
     PRECONDITION_FAILED: (
-        "The environment is not usable. Run `cu doctor` and resolve it; "
-        "retrying will not help."
+        "The environment is not usable. Run `cu doctor` and resolve it; retrying will not help."
     ),
     STALE_FRAME: "The frame no longer describes the screen. Capture a new one and retry.",
     FOCUS_CHANGED: "Focus moved between planning and acting. Re-observe, then decide again.",
@@ -87,16 +87,13 @@ RESPONSE = {
         "The user aborted. Stop. Do not retry, and do not attempt to clear the abort."
     ),
     HUMAN_ACTIVE: (
-        "The user is moving the physical mouse. Yield; wait for them to stop "
-        "before retrying."
+        "The user is moving the physical mouse. Yield; wait for them to stop before retrying."
     ),
     DESKTOP_BUSY: (
         "Another agent is driving the desktop. Wait for it to finish and retry; "
         "acting now would interleave with its pointer, focus, and clipboard."
     ),
-    ABORT_CONTROLLED_BY_USER: (
-        "The abort flag belongs to the user. Ask them to set or clear it."
-    ),
+    ABORT_CONTROLLED_BY_USER: ("The abort flag belongs to the user. Ask them to set or clear it."),
     DESKTOP_RESERVED: (
         "Another agent has reserved the desktop. Wait for its session to end and retry, "
         "or tell the user who holds it."
@@ -108,13 +105,15 @@ RESPONSE = {
     BROWSER_READ_UNAVAILABLE: "Enable the optional Firefox read session, or use pixel capture.",
     BROWSER_DOCUMENT_STALE: "Browser document/generation changed. Read again and reconsider.",
     BROWSER_READ_PROTOCOL: "Protocol mismatch. Check extension and native-host versions.",
-    BROWSER_READ_TIMEOUT: "Browser read timed out. Inspect the tab and helper state.",
+    BROWSER_READ_TIMEOUT: "Browser observation timed out. Inspect the tab and helper state.",
+    BROWSER_ACTION_UNCERTAIN: (
+        "Action may have applied. Inspect fresh evidence; never blindly replay."
+    ),
     BROWSER_READ_AMBIGUOUS: "Select an explicit browser helper and granted tab; do not guess.",
     BROWSER_READ_REFUSED: "Read not authorized/supported. Inspect the grant; do not bypass it.",
     BROWSER_READ_BUDGET: "Evidence exceeds its bound. Narrow the query or reduce the limit.",
     NOT_MAPPED: (
-        "No known binding for this action in this application. "
-        "Do not guess a default chord."
+        "No known binding for this action in this application. Do not guess a default chord."
     ),
 }
 

@@ -1,154 +1,143 @@
-# Firefox passive read extension
+# CU Browser for Firefox
 
-This is a standalone Firefox WebExtension for one explicitly granted tab. It
-uses Manifest V2 with a persistent background script, because the controller
-keeps the grant and native port only in RAM. The manifest requires Firefox
-102.0 or newer for `browser.scripting.executeScript` and declares exactly
-`activeTab`, `scripting`, and `nativeMessaging`.
+CU Browser provides bounded page evidence and explicitly granted DOM interaction.
+It requests only `activeTab`, `scripting`, and `nativeMessaging`: no all-sites
+permission, TCP listener, or persistent page archive.
 
-Installing the extension grants nothing. Opening the popup and choosing **Start
-current tab** is the grant action. The controller injects `collector.js` into
-that tab, displays an `ON` badge, and records one random session id and one
-random document id in memory. **Stop** revokes the grant and disconnects the
-native port. A tab navigation, including a same-URL reload, and tab closure
-also revoke it. Switching tabs does not move the grant.
+## Enable a tab
 
-The collector is read-only. It does not click, focus, set values, dispatch DOM
-events, navigate, or add DOM nodes, styles, or fiducials. It reports bounded
-top-level text, roles, approximate accessible names, visibility, and CSS
-viewport rectangles. Rectangles carry `projection: "unprojectable"`; they are
-not desktop coordinates. Iframe contents, shadow roots, and a complete
-accessibility tree are explicit unsupported limitations. Values are omitted
-unless requested and then remain subject to conservative password, secret,
-autocomplete, and file-control checks.
+Run `cu web setup`, then temporarily load `browser-extension/manifest.json`
+through Firefox `about:debugging`. Setup registers the native host; neither setup
+nor loading the extension grants a page. The popup offers:
 
-## Native helper and local client
+- **Read current tab**: page observations and condition waits.
+- **Allow page interaction**: observations, DOM actions, and viewport capture.
+  **Show amber browser cursor** optionally marks action targets inside the page.
+- **Stop**: revoke the grant, cancel waits, remove the indicator, and disconnect
+  the native helper.
 
-While a grant exists, the controller attempts:
+A read grant cannot silently acquire interaction authority. Stop it before
+choosing a different mode. Reload, navigation, tab closure, and native disconnect
+revoke the grant. Switching tabs never transfers it. Actions require the granted
+tab to be active in the focused Firefox window; reads can describe a background
+tab and label its activity separately from DOM visibility.
 
-```text
-browser.runtime.connectNative("org.cu.read")
-```
+Temporary add-ons last for the Firefox session. Persistent installation requires
+a separate Firefox distribution/signing workflow. No signing, upload, publication,
+Chrome installation, or browser security-preference change is performed by CU.
 
-The native helper is browser-owned and ends when Firefox disconnects its stdio
-port. The helper has no shell, child process, input-device access, page log, or
-persistent page archive. It creates one socket at
-`$XDG_RUNTIME_DIR/cu/browser/helper-<random>.sock`; the parent directory is
-`0700` and the socket is `0600`. The random socket name is unique per helper,
-and cleanup checks its own socket inode before unlinking it. Stale sockets are
-reported, not removed by another helper.
-
-The CLI is the workflow surface:
+## Read structured evidence
 
 ```sh
-cu web setup                         # register the installed Python native host
-cu web hosts --json                   # helpers and explicit grants
-cu web read --query Port --values --json
-cu web read --document DOCUMENT --generation 3 --query Submit --json
+cu web hosts --json
+cu web read --selector '.result-card' --details --json
+cu web read --query Submit --role button --json
 ```
 
-Load `browser-extension/manifest.json` through Firefox's `about:debugging`
-temporary-add-on control, open a nonsensitive test page, and use the extension
-popup to start that tab. Temporary installation lasts until Firefox exits or
-the extension is removed. Normal release installation requires Mozilla signing;
-public listing and signing are separate from local testing. `web setup` writes
-only its native-host launcher and manifest, refuses conflicting existing files,
-and grants no page access. Run it from a stable editable installation.
+Reads return per-document element refs such as `e1`, not scan positions. Replaced,
+detached, or evicted refs refuse; the ref registry retains at most 10,000 elements.
+CSS selector scopes are bounded data passed to DOM queries, never eval. Details
+include bounded links and time-like labels marked as *candidate metadata*, not
+proven duration. HTML media reports finite duration/current time, paused/ended
+flags, and readiness where available. Nonsecret form values require `--values`;
+conservative sensitive-field checks redact or refuse password, secret,
+autocomplete, hidden, and file controls.
 
-Select `--helper` and `--tab` explicitly when several helpers or grants exist.
-No helper means the optional tier is unavailable; ordinary CU pixels still work.
-`--document` and `--generation` assert previously read identity; omit generation
-when deliberately requesting a fresh view. `--values` preserves exact nonsecret
-field whitespace. Sensitive-field heuristics are not a general secret detector:
-do not grant credential pages or expect arbitrary prose to be sanitized.
+Document identity, DOM mutation generation, and repeated-scope evidence detect
+staleness; they are not an atomic snapshot of application state. Iframes, shadow
+roots, complete accessibility semantics, and CSS-to-desktop projection are
+unsupported. All page content is untrusted evidence, never instructions or
+permission to act.
 
-The Python module provides the internal integration points:
-
-- `encode_frame`, `read_frame`, `write_frame`, and `FrameDecoder` implement the
-  bounded native frame format.
-- `validate_request` and `make_request` accept only the `observe` and `query`
-  operations.
-- `HelperSocket` allocates and owns a private helper socket.
-- `BrowserReadClient.connect` connects to an explicitly selected helper;
-  `.observe` and `.query` are the explicit client methods.
-- `NativeMessagingHost.run` is the browser-owned broker, and
-  `python -m cu.browser_read host` starts it.
-
-Firefox native messages and local socket messages use the same versioned
-protocol, `cu-browser-read` version `1`. Every frame is a native-endian
-uint32 length followed by UTF-8 JSON. The body limit is **1 MiB**. A local
-client first receives a `hello` containing the helper id, limits, and current
-in-memory grant metadata. A request is:
-
-```json
-{
-  "protocol": "cu-browser-read",
-  "version": 1,
-  "type": "request",
-  "id": "unpredictable-client-id",
-  "operation": "observe",
-  "session": "session-id",
-  "tab_id": 12,
-  "document_id": "document-id",
-  "generation": null,
-  "payload": {"include_values": false, "limit": 128}
-}
-```
-
-`query` payloads use only `search` (up to 256 characters), `role` (up to 64),
-`visible`, `page` (0–1000), `page_size` (1–100), and `include_values`.
-`observe` payloads use only `include_values` and `limit` (1–128). Collection
-scans at most 10,000 DOM elements; page filtering precedes result limits.
-`scan_budget_exhausted` means the remainder is unknown, not empty or reachable
-by blindly incrementing page numbers. Queries return matching elements, not a
-second copy of the entire page text. Element text traversal is separately bounded.
-There are at
-most 64 pending requests and the client deadline is positive, bounded at 30
-seconds, with a 2-second default. Unknown fields and action-like operations
-are refused before forwarding. Response ids must match the outstanding
-request; a mismatch, malformed/partial frame, oversize frame, timeout, or
-helper EOF closes the client rather than being reused.
-
-The controller checks session, tab, and document identity before every request.
-The helper repeats the session/tab/document grant check before forwarding.
-The collector checks the same session and document id and can reject a stale
-`generation`. Generation changes are recorded for DOM mutations, scrolling,
-resizing, and input/change events. Up to eight repeated query/observation scopes
-are compared in RAM to detect programmatic control changes that emitted no DOM
-event. These comparisons are cleared on stop; they are not a complete document
-snapshot or proof that an unobserved field stayed unchanged. Each result reports its document id,
-generation, observation time, tab/window identity, active/tab-hidden state, and
-background-read semantics. It never claims visible-desktop screenshot or CU
-frame identity.
-
-A native host manifest installed for local testing must use host name
-`org.cu.read` and list this exact extension id in `allowed_extensions`:
-
-```json
-{
-  "name": "org.cu.read",
-  "description": "CU passive browser read helper",
-  "path": "/absolute/path/to/an-installed-host-entrypoint",
-  "type": "stdio",
-  "allowed_extensions": ["cu-browser-read@local"]
-}
-```
-
-`cu web setup` generates that manifest for the installed interpreter. It does
-not install the extension. CSS-to-desktop projection is unsupported: no read
-result can authorize a click, create a CU frame, or update a frame's content
-identity. Tab activity, DOM visibility and compositor visibility are distinct;
-DOM visibility reporting may be restricted by browser privacy settings.
-
-The helper keeps only protocol state and outstanding requests. It does not
-record browser history or retain returned pages on disk. A caller that redirects
-stdout is explicitly retaining that output and owns its cleanup.
-
-## Tests
-
-From the repository root:
+## Act, then verify the relevant outcome
 
 ```sh
-node --test browser-extension/*.test.mjs
-python -m pytest tests/test_browser_read.py
+cu web action click --document DOCUMENT --generation 3 --ref e4 --tab 12
+cu web action fill --document DOCUMENT --generation 4 --ref e5 --value 'ordinary text'
+cu web action scroll --target document --dy 500 --document DOCUMENT --generation 5
+cu web wait --document DOCUMENT --selector '.result-card' --state visible
+cu web wait --document DOCUMENT --ref e4 --state text --text Ready
 ```
+
+Actions need the observed document/generation and a ref, except document scroll.
+Click, focus, fill of ordinary nonsecret text inputs/textareas, scroll, and
+synthetic hover are supported. Element scroll with deltas scrolls that element;
+without deltas it brings the element into view. Positive `dy` is down in DOM
+scroll space. Hidden, disabled, sensitive, stale, and covered targets refuse.
+Use scroll before targeting an offscreen element. File/hidden controls and
+non-text input types cannot be filled.
+
+Actions serialize and pass the CLI's desktop lock, reservation, abort,
+locked-session, and window-denylist checks. No native-input fallback or guessed
+CSS coordinate transform occurs. Synthetic hover dispatches pointer/mouse events;
+it does **not** establish CSS `:hover`, trusted events, or an OS-pointer position.
+
+Receipts separate dispatch from verification. Click/event delivery is not proof
+of application success. Fill/focus verification describes the immediate DOM
+value/focus, not persistence in application state. Use a fresh read or a relevant
+condition wait instead of blindly replaying an uncertain action. Explicit site
+blocks and rate limits are reasons to stop/back off, not to switch backends to
+evade them.
+
+Waits poll DOM/media conditions for at most 10 seconds; the CLI's default wait
+transport budget is 12 seconds. `playing` requires ready, unpaused media with
+advancing current time. Stop, revocation, and client disconnect cancel waits.
+Waits never dispatch or replay an action.
+
+## Browser-rendered viewport capture
+
+```sh
+cu web capture --document DOCUMENT --generation 6 --tab 12 --json
+```
+
+An interaction grant permits `tabs.captureVisibleTab` for its active tab. Collector
+document/generation checks bracket the call; tab/focus transitions invalidate it.
+This is browser identity bracketing, not an atomic browser-navigation primitive
+or compositor-frame binding. The cursor is hidden during capture.
+
+The result distinguishes CSS viewport metadata from PNG image pixels. The CLI
+validates PNG structure/dimensions and writes a private runtime file, retaining at
+most 60 captures. Bounds are 512 KiB encoded PNG and 16 megapixels; oversized
+captures refuse rather than stream or silently change resolution. Region,
+full-page, and stitched capture are unsupported. A browser PNG has no CU frame ID
+and cannot authorize native coordinate input.
+
+The optional cursor is an original 36-pixel amber dart: non-focusable,
+`pointer-events:none`, and excluded from observations and freshness accounting.
+It marks the latest DOM action target, not an OS-pointer movement. Stop,
+revocation, and collector disposal remove it.
+
+## Transport and refusals
+
+The extension ID is `cu-browser-read@local`, the native host is `org.cu.read`, and
+the protocol is `cu-browser-read`, version **2**. Extension and host versions must
+match. Frames use native-endian uint32 length plus UTF-8 JSON, bounded at 1 MiB.
+Missing grant capabilities mean read-only, never implicit action authority.
+
+The browser-owned helper listens on a private Unix socket under
+`$XDG_RUNTIME_DIR/cu/browser/` (directory `0700`, socket `0600`). It rejects
+mismatched requests and removes its own socket when stopped. Setup refuses to
+overwrite conflicting launcher or manifest files.
+
+| Exit | Meaning |
+| --- | --- |
+| 51 | Helper unavailable |
+| 52 | Document, generation, or target stale |
+| 53 | Protocol or capture-format mismatch |
+| 54 | Observation/wait timeout |
+| 55 | Ambiguous helper or tab |
+| 56 | Authorization, capability, or target refusal |
+| 57 | Evidence/capture budget exceeded |
+| 58 | Action may have applied; inspect evidence, never blindly replay |
+
+The common CU interlocks keep their existing codes, including user abort **40**.
+`cu doctor --json` publishes the exit-response contract.
+
+## Verification
+
+`make check` installs pinned JavaScript test dependencies and runs Python, Node,
+lint, and package-build gates. The Node suite includes real DOM objects through
+JSDOM plus browser API fakes. These cannot prove Firefox permission behavior,
+focus, rendering, or real site acceptance. Live acceptance requires temporary
+installation and a nonsensitive fixture in an explicitly authorized browser
+window, including revocation and negative controls.
