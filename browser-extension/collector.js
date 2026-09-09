@@ -382,6 +382,7 @@
         length += text.length;
         return;
       }
+      if (node.nodeType !== undefined && node.nodeType !== 1) return;
       if (
         ["input", "textarea", "select", "script", "style", "noscript", "iframe"].includes(
           tagName(node),
@@ -1059,10 +1060,13 @@
         }),
       );
     }
-    function actionable(element) {
+    function actionable(element, operation) {
       if (!element) throw new ValidationError("element ref is stale or disconnected");
       const description = describeElement(element, doc, false, false, refFor(element));
-      if (description.visibility.state !== "visible")
+      if (
+        description.visibility.state !== "visible" &&
+        !(operation === "scroll" && description.visibility.state === "offscreen")
+      )
         throw new ValidationError("element is not visible");
       if (element.disabled || attribute(element, "aria-disabled") === "true")
         throw new ValidationError("element is disabled");
@@ -1130,7 +1134,7 @@
         bumpGeneration();
         return refusal(request, "stale-generation", "the field changed since observation");
       }
-      const description = actionable(element);
+      const description = actionable(element, request.operation);
       if (
         ["input", "textarea"].includes(tagName(element)) &&
         ["redacted", "unsupported"].includes(currentField(element)?.state)

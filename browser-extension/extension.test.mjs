@@ -676,6 +676,50 @@ test("capture brackets collector identity and rejects an unprepared document", a
   assert.equal(captures, 2);
 });
 
+test("late collector cleanup cannot disconnect a subsequent grant", async () => {
+  const { api, port } = fakeApi();
+  const original = api.tabs.sendMessage;
+  let release;
+  const cleanup = new Promise((resolve) => {
+    release = resolve;
+  });
+  api.tabs.sendMessage = (tab, message) =>
+    message.type === "stop" ? cleanup : original(tab, message);
+  const controller = createController(api);
+  await controller.startCurrent();
+  const stopping = controller.stop();
+  const nextPort = new FakePort();
+  api.runtime.connectNative = () => nextPort;
+  const next = await controller.startCurrent();
+  release({ ok: true });
+  await stopping;
+  assert.equal(next.ok, true);
+  assert.equal(port.disconnected, true);
+  assert.notEqual(controller.status().native, "unavailable");
+  await controller.handleNativeMessage(
+    request("observe", { session: next.grant.session }),
+    nextPort,
+  );
+  assert.equal(nextPort.messages.at(-1).ok, true);
+});
+
+test("a tab moved to another browser window cannot retain action authority", async () => {
+  const { api, currentTab, port, calls } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  currentTab.windowId = 4;
+  api.windows.getCurrent = async () => ({ id: 4, focused: true });
+  await controller.handleNativeMessage(
+    request("click", {
+      session: started.grant.session,
+      generation: 0,
+      payload: { ref: "e1" },
+    }),
+    port,
+  );
+  assert.equal(calls.messages.filter((call) => call.message.type === "read-request").length, 0);
+});
+
 test("cancellation prevents an action waiting on focus checks from being dispatched", async () => {
   const { api, currentTab, port, calls } = fakeApi();
   const controller = createController(api);

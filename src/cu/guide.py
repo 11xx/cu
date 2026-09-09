@@ -122,8 +122,8 @@ ACT THROUGH THE FRAME YOU READ
   pointer without pressing a button. `scroll` may aim through a frame first, or
   omit --frame and --at to send wheel events where the pointer already sits.
 
-  Every injecting command takes --dry-run, which runs each interlock and writes
-  the same log entry without emitting an event.
+  Native pointer, keyboard, and focus commands take --dry-run: each interlock
+  runs and the log is written without emitting an event.
 
   A frame is bound to what it depicted, not only to where. A window that keeps
   its place while its content changes — a tab that navigated, a view that was

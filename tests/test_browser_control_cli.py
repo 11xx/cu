@@ -78,6 +78,11 @@ def test_action_holds_desktop_and_does_not_invent_verified_effect(bridge, capsys
     assert bridge.calls == 1
 
 
+def test_web_subcommands_accept_session_and_intent_flags(bridge):
+    assert cli.main([*action_args(), "--session", "fixture-driver", "--why", "check delivery"]) == 0
+    assert bridge.calls == 1
+
+
 def test_uncertain_action_has_a_distinct_exit_and_is_not_replayed(bridge):
     bridge.failure = wire.BrowserActionUncertain("response lost after dispatch")
     assert cli.main(action_args()) == exits.BROWSER_ACTION_UNCERTAIN

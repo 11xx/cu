@@ -564,11 +564,20 @@
       state.pendingStart = null;
       state.grant = null;
       state.session = null;
-      if (!grant) {
-        await updateBadge();
-        return { ok: true, active: false };
+      state.actionQueue = Promise.resolve();
+      for (const job of state.jobs.values()) job.cancelled = true;
+      state.jobs.clear();
+      state.nativePort = null;
+      state.nativeReady = false;
+      state.nativeSocket = null;
+      state.nativeError = null;
+      if (port) {
+        if (grant) postNative(revokeMessage(grant, reason), port);
+        try {
+          port.disconnect();
+        } catch (_) {}
       }
-      if (stopCollector && api.tabs?.sendMessage) {
+      if (grant && stopCollector && api.tabs?.sendMessage) {
         try {
           await api.tabs.sendMessage(grant.tab_id, {
             type: "stop",
@@ -576,18 +585,8 @@
           });
         } catch (_) {}
       }
-      if (port) postNative(revokeMessage(grant, reason), port);
-      state.nativePort = null;
-      state.nativeReady = false;
-      state.nativeSocket = null;
-      state.nativeError = null;
-      if (port) {
-        try {
-          port.disconnect();
-        } catch (_) {}
-      }
       await updateBadge();
-      return { ok: true, active: false, reason };
+      return { ...status(), reason };
     }
     async function start(tab, requestedCapabilities = ["read"], cursor = false) {
       if (!tab || !Number.isSafeInteger(tab.id) || tab.id < 1 || tab.active !== true)
@@ -726,6 +725,7 @@
       } finally {
         after = await snapshot("capture-finish");
       }
+      await assertCurrent();
       if (JSON.stringify(before.viewport) !== JSON.stringify(after.viewport))
         throw Object.assign(new ValidationError("viewport changed during capture"), {
           code: "stale-generation",
@@ -795,7 +795,9 @@
           return;
         }
         try {
-          await currentTab(request.tab_id);
+          const tab = await currentTab(request.tab_id);
+          if (tab.windowId !== grant.window_id)
+            throw new ValidationError("the granted tab changed browser windows");
         } catch (_) {
           postNative(
             errorResponse(
@@ -880,6 +882,10 @@
       }
       const liveTab = await api.tabs.get(request.tab_id);
       if (state.grant !== grant || state.nativePort !== port) return;
+      if (liveTab.windowId !== grant.window_id) {
+        await revokeGrant("window-changed", true);
+        return;
+      }
       grant.active = liveTab.active === true;
       grant.hidden = liveTab.hidden === true;
       const result =
@@ -955,7 +961,7 @@
           await pending;
         } else await invoke();
       } finally {
-        state.jobs.delete(request.id);
+        if (state.jobs.get(request.id) === job) state.jobs.delete(request.id);
       }
     }
     async function handleNativeMessage(message, port = state.nativePort) {
@@ -1013,9 +1019,9 @@
       }
       return false;
     }
-    async function handleTabRemoved(tabId) {
+    async function handleTabRemoved(tabId, reason = "tab-closed") {
       if (state.grant?.tab_id !== tabId && state.pendingStart?.tabId !== tabId) return false;
-      await revokeGrant("tab-closed", true);
+      await revokeGrant(reason, true);
       return true;
     }
     function status() {
@@ -1062,6 +1068,9 @@
     });
     api.tabs.onUpdated.addListener((tabId, changeInfo) => {
       void controller.handleTabUpdated(tabId, changeInfo);
+    });
+    api.tabs.onDetached?.addListener((tabId) => {
+      void controller.handleTabRemoved(tabId, "window-changed");
     });
     api.tabs.onRemoved.addListener((tabId) => {
       void controller.handleTabRemoved(tabId);

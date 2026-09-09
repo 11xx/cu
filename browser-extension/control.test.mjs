@@ -226,3 +226,35 @@ test("cursor ownership excludes only the indicator; hiding it does not invalidat
   collector.handle({ type: "stop", session: "session-1" });
   assert.equal(overlay.isConnected, false);
 });
+
+test("an offscreen ref can be scrolled into view but cannot be clicked", (t) => {
+  const { document, act } = fixture(t, '<button id="far">Distant target</button>');
+  const button = document.querySelector("button");
+  button.getBoundingClientRect = () => ({
+    x: 10,
+    y: 2000,
+    left: 10,
+    right: 110,
+    top: 2000,
+    bottom: 2030,
+    width: 100,
+    height: 30,
+  });
+  let scrolled = 0;
+  button.scrollIntoView = () => {
+    scrolled++;
+  };
+  assert.equal(act("#far", "click").ok, false);
+  assert.equal(act("#far", "scroll", { target: "element", dx: 0, dy: 0 }).ok, true);
+  assert.equal(scrolled, 1);
+});
+
+test("DOM comments do not break structured result reads", (t) => {
+  const { read } = fixture(
+    t,
+    '<article id="card"><!-- template marker --><a href="/video">Performance</a><span>13:44</span></article>',
+  );
+  const result = read("#card");
+  assert.equal(result.ok, true);
+  assert.equal(result.result.elements.items[0].time_candidates.items[0].value, "13:44");
+});

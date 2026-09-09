@@ -17,8 +17,8 @@ nor loading the extension grants a page. The popup offers:
   the native helper.
 
 A read grant cannot silently acquire interaction authority. Stop it before
-choosing a different mode. Reload, navigation, tab closure, and native disconnect
-revoke the grant. Switching tabs never transfers it. Actions require the granted
+choosing a different mode. Reload, navigation, moving a tab to another window,
+tab closure, and native disconnect revoke the grant. Switching tabs never transfers it. Actions require the granted
 tab to be active in the focused Firefox window; reads can describe a background
 tab and label its activity separately from DOM visibility.
 
@@ -65,7 +65,8 @@ synthetic hover are supported. Element scroll with deltas scrolls that element;
 without deltas it brings the element into view. Positive `dy` is down in DOM
 scroll space. Hidden, disabled, sensitive, stale, and covered targets refuse.
 Use scroll before targeting an offscreen element. File/hidden controls and
-non-text input types cannot be filled.
+non-text input types cannot be filled. Fill values and existing field values
+must fit the 1,024-character freshness bound.
 
 Actions serialize and pass the CLI's desktop lock, reservation, abort,
 locked-session, and window-denylist checks. No native-input fallback or guessed
@@ -136,8 +137,7 @@ The common CU interlocks keep their existing codes, including user abort **40**.
 ## Verification
 
 `make check` installs pinned JavaScript test dependencies and runs Python, Node,
-lint, and package-build gates. The Node suite includes real DOM objects through
-JSDOM plus browser API fakes. These cannot prove Firefox permission behavior,
+lint, and package-build gates. The Node suite exercises JSDOM's DOM implementation and mocked browser APIs. These cannot prove Firefox permission behavior,
 focus, rendering, or real site acceptance. Live acceptance requires temporary
 installation and a nonsensitive fixture in an explicitly authorized browser
 window, including revocation and negative controls.

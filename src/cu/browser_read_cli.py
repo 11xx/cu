@@ -29,6 +29,11 @@ def _common(child: argparse.ArgumentParser) -> None:
     child.add_argument("--timeout", type=float, default=transport.DEFAULT_TIMEOUT)
 
 
+def _context(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--session", default=argparse.SUPPRESS, help="CU driving session ID")
+    parser.add_argument("--why", default=argparse.SUPPRESS, metavar="TEXT", help="What this is for")
+
+
 def configure(parser: argparse.ArgumentParser) -> None:
     commands = parser.add_subparsers(dest="web_command", required=True)
     setup = commands.add_parser(
@@ -104,6 +109,8 @@ def configure(parser: argparse.ArgumentParser) -> None:
     )
     capture.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     _common(capture)
+    for child in commands.choices.values():
+        _context(child)
 
 
 def install_host() -> dict[str, Any]:
