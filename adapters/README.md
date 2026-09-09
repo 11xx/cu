@@ -88,3 +88,22 @@ text remains untrusted evidence; it cannot authorize a next action.
 refusal, interrupted execution, missing/mismatched images and stale-result
 exclusion. `make check` includes these tests and requires Node.js 22+ as well as
 UV. Fixture tests do not establish compositor behavior or harness image display.
+
+For the real Pi tool/result path, open a disposable visible test application,
+then run the offline provider fixture from the checkout:
+
+```sh
+CU_PROBE_WINDOW=example-fixture \
+CU_PROBE_REPORT="$XDG_RUNTIME_DIR/cu-pi-probe.json" \
+pi --no-extensions --no-skills --no-session \
+  -e ./adapters/pi.ts -e ./tests/pi-observation-smoke.ts \
+  --provider cu-offline-fixture --model fixture 'run fixture'
+```
+
+Use an image-capable terminal to inspect the rendered tool result. The provider
+fixture is deterministic and makes no model or network call; only the registered
+CU tool accesses the desktop, read-only. Its receipt records the result status,
+frame metadata, block types and returned byte count. A nonexistent fixture target
+must produce a tool error with no image or observation. Delete the receipt after
+inspection; like a frame descriptor, it can contain the fixture's window title.
+This probe verifies harness delivery/rendering, not model visual understanding.

@@ -97,6 +97,9 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   estimator parameters, not pixels, titles, URLs or typed text. They are not billing.
   No telemetry is persisted. The reference is decoded once per wait invocation.
   Capture-tool calls have a 10-second timeout; a hung tool refuses with 10.
+  A sleeping physical output may stop producing frames even while doctor and
+  observe succeed. Check DPMS state; waking a display or choosing a headless
+  sandbox is explicit, never a capture fallback.
   Pixel-wait timing arguments must be finite; the quiet interval is not shortened.
 
 ACT THROUGH THE FRAME YOU READ

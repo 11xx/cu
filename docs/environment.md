@@ -210,10 +210,14 @@ is also why they reset the session idle timer and turn every panel back on. The
 compositor's own dispatchers never enter that path, so they leave a sleeping
 desktop asleep.
 
-Capture is the other half. A physical output that is powered down is not
-rendering, and `grim -o` on it fails outright rather than returning a black
-image — a loud failure, which is the good kind. A headless output has no panel
-to power down and keeps rendering regardless, so it captures normally.
+Capture is the other half. A powered-down physical output may not produce the
+frames a screenshot client awaits. Depending on the capture path, `grim` can
+fail immediately or remain blocked until CU's 10-second subprocess timeout.
+Successful compositor queries and `cu doctor` do not prove that an output is
+rendering. Check the compositor's `dpmsStatus` when capture stalls. Waking a
+physical output is an explicit desktop state change, not an automatic capture
+fallback. A headless output has no physical panel and can provide a rendering
+target while physical displays sleep; create one deliberately with `cu sandbox`.
 
 So a **keyboard-driven agent can run entirely against sleeping displays**:
 observe, warp, capture from a headless output, and inject keys through
