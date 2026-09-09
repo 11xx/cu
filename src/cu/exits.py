@@ -20,6 +20,7 @@ TIMED_OUT = 24
 VERIFY_FAILED = 25
 CONTENT_CHANGED = 26
 TARGET_NOT_VISIBLE = 27
+VERIFY_UNAVAILABLE = 28
 DENIED_BY_POLICY = 30
 ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
@@ -64,6 +65,10 @@ RESPONSE = {
     TARGET_NOT_VISIBLE: (
         "The requested window is hidden or its capture is obstructed. "
         "Observe, explicitly focus or rearrange it, or capture an output without window identity."
+    ),
+    VERIFY_UNAVAILABLE: (
+        "The requested read-back could not establish the result. "
+        "Inspect the field before continuing; do not replay the completed prefix."
     ),
     DENIED_BY_POLICY: "Refused by the denylist or a locked session. Do not retry; tell the user.",
     ABORTED_BY_USER: (

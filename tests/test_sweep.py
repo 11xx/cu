@@ -40,7 +40,9 @@ def test_window_capture_refuses_obstructed_identity(world, obstruction, capsys):
     elif obstruction == "overlap":
         world["windows"].append({**world["windows"][0], "address": "0x2", "focused": False})
     else:
-        world["layer_surfaces"] = [{"level": 3, "logical_rect": world["windows"][0]["logical_rect"]}]
+        world["layer_surfaces"] = [
+            {"level": 3, "logical_rect": world["windows"][0]["logical_rect"]}
+        ]
     assert cli.main(["shot", "--json"]) == 27
     assert capsys.readouterr().out == ""
     assert not list(frames.store_dir().glob("f*.json"))
@@ -215,6 +217,71 @@ def test_failed_verification_is_not_promoted():
 
 def test_gecko_unknown_modifier_never_shortens_a_chord():
     assert browser._gecko_chord({"modifiers": "accel,unknown", "key": "a"}) is None
+
+
+def test_batch_stops_before_type_when_focus_fails(world, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "batch.json"
+    path.write_text(json.dumps([["focus", "missing"], ["type", "secret marker"]]))
+    typed = []
+    monkeypatch.setattr(actions, "type_text", lambda *a, **k: typed.append(True))
+    assert cli.main(["batch", str(path), "--json"]) == exits.TARGET_NOT_FOUND
+    result = json.loads(capsys.readouterr().out)
+    assert result["completed"] == []
+    assert result["failed"]["step"] == 1
+    assert result["rollback"] is False
+    assert typed == []
+    assert "secret marker" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("drift,code", [("abort", 40), ("geometry", 20), ("content", 26)])
+def test_batch_stops_after_completed_prefix(world, tmp_path, monkeypatch, capsys, drift, code):
+    path = tmp_path / "batch.json"
+    path.write_text(json.dumps([["key", "--chord", "a"], ["type", "never sent"]]))
+    def send(*args, **kwargs):
+        if drift == "abort":
+            config.set_abort()
+        elif drift == "geometry":
+            world["windows"][0]["logical_rect"]["w"] = 190
+        else:
+            world["windows"][0]["title"] = "different document"
+    monkeypatch.setattr(actions, "send_chords", send)
+    assert cli.main(["batch", str(path), "--json"]) == code
+    result = json.loads(capsys.readouterr().out)
+    assert len(result["completed"]) == 1
+    assert result["failed"]["step"] == 2
+
+
+def test_batch_reports_interruption_without_rollback(world, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "batch.json"
+    path.write_text(json.dumps([["key", "--chord", "a"], ["type", "never sent"]]))
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(actions, "send_chords", interrupted)
+    assert cli.main(["batch", str(path), "--json"]) == exits.ERROR
+    result = json.loads(capsys.readouterr().out)
+    assert result["failed"]["step"] == 1
+    assert result["failed"]["may_have_acted"] is True
+    assert result["rollback"] is False
+
+
+def test_batch_unverified_readback_stops_following_key(world, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "batch.json"
+    path.write_text(json.dumps([["type", "value", "--verify"], ["key", "--chord", "enter"]]))
+    monkeypatch.setattr(actions, "type_text", lambda *a, **k: {
+        "action": "type", "dry_run": False, "verified": {"status": "unverified"},
+    })
+    assert cli.main(["batch", str(path), "--json"]) == exits.VERIFY_UNAVAILABLE
+    result = json.loads(capsys.readouterr().out)
+    assert result["failed"]["step"] == 1
+
+
+def test_batch_validates_all_steps_before_any_input(world, tmp_path, monkeypatch):
+    path = tmp_path / "batch.json"
+    path.write_text(json.dumps([["key", "--chord", "a"], ["abort", "--clear"]]))
+    sent = []
+    monkeypatch.setattr(actions, "send_chords", lambda *a, **k: sent.append(True))
+    assert cli.main(["batch", str(path)]) == exits.USAGE
+    assert sent == []
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-1", '"no"'])

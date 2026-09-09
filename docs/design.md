@@ -484,6 +484,23 @@ injects, and verifies — one transaction under one hold. The pointer target and
 the typing result are both recorded, and a recipe replays the combined action
 as one step rather than decomposing it back into an unsafe gap.
 
+## Bounded action batches
+
+`cu batch FILE` accepts up to 32 CLI argv arrays within 64 KiB. Its allowlist is
+focus, move, click, scroll, type, key and browser; shell syntax, nested execution,
+stdin typing, per-step session changes and user controls are not accepted.
+Argument syntax is parsed for all steps before input. One desktop hold spans
+the sequence, and each action retains its own preflight checks. Inter-step
+focus, content and geometry checks retain the established target; explicit
+successful focus/click/type actions may establish another target.
+
+The response carries completed steps and the failing step, without typed
+arguments. It preserves refusal codes and reports possible partial action rather
+than rollback. Unavailable requested read-back stops a batch with exit 28.
+No prefix is retried automatically. A batch groups decisions already made;
+new visual judgment, including navigation, belongs after returning control.
+Dry-run validates the current desktop, not a simulated sequence of state changes.
+
 ## Recipes: turning a successful run into a repeatable one
 
 Driving a site well once is worth keeping. The natural requests are "you did
@@ -729,6 +746,7 @@ also take `--dry-run`.
 | `cu type` | Text entry, clipboard by default | yes |
 | `cu key` | A semantic action, or a literal chord | yes |
 | `cu browser` | Semantic browser actions, resolved per browser | yes |
+| `cu batch` | Bounded action sequence, fail-fast with partial results | via actions |
 | `cu recipe` | Save, list, review, and replay a stored procedure | via replay |
 | `cu know` | What past runs learned about an application; aims captures only | no |
 | `cu sandbox` | Create and remove headless outputs, explicitly | no |

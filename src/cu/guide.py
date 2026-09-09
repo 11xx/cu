@@ -135,6 +135,7 @@ EXIT CODES ARE THE CONTRACT
   25  Verification did not match state  Read actual state; do NOT blindly retry
   26  Same window, different content    Re-observe; the plan was about something else
   27  Hidden or obstructed capture      Arrange target explicitly, or capture an output
+  28  Batch read-back unavailable       Inspect before continuing; never replay the prefix
   30  Denylist, lock, unreviewed recipe Do not retry; tell the user
   40  The user aborted                  Stop. Do not retry. Do not clear it.
   41  The user is moving the mouse      Yield; wait before retrying
@@ -256,6 +257,28 @@ TYPING AND KEYS
   thing elsewhere may mean something else here. Prefer --action. Exit 50 means
   the binding is genuinely unknown — say so rather than guessing a default,
   which would silently perform some other command.
+
+SHORT, ALREADY-DECIDED ACTION BATCHES
+  cu batch steps.json --json --why 'fill the inspected field'
+
+  A batch file is a JSON array of argv arrays, without the leading cu:
+  [["focus", "example-app"], ["type", "new value", "--replace", "--verify"]]
+
+  At most 32 actions and 64 KiB; commands are focus, move, click, scroll, type,
+  key and browser. No shell expansion, nested batch, recipe approval, abort
+  mutation or stdin typing. Session, intent and dry-run belong to the outer
+  command. All argument syntax is checked before the first action.
+
+  One desktop hold covers the batch. Every action keeps its own interlocks;
+  between steps, focus, geometry and content are checked against the established
+  context. Only an explicit successful focus/click/type updates the target.
+  Stop the batch where new visual judgment is needed; navigation is such a boundary.
+  Dry-run checks current state, not a simulated future desktop.
+
+  The result names completed steps and the failing step, and preserves its exit
+  code. An unverified read-back stops with 28. A failed step may have partly
+  acted; no rollback or automatic retry occurs. Never replay the successful prefix.
+  Capture separately after the batch to decide what happens next.
 
 BROWSERS
   cu browser list                What is installed, and what each resolves.
