@@ -2,6 +2,7 @@
 
 import copy
 import json
+import subprocess
 import time
 
 import pytest
@@ -31,6 +32,56 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(capture, "grab_region", lambda rect, dest, scale: dest.write_bytes(
         png.encode(2, 1, bytes([10, 20, 30, 255]) * 2)))
     return snap
+
+
+@pytest.mark.parametrize("option", ["--timeout", "--quiet-ms", "--poll-ms"])
+def test_pixel_wait_rejects_nonfinite_budgets(option, world):
+    assert cli.main(["shot", "--after", "f999", "--watch", "full", option, "nan"]) == exits.USAGE
+
+
+def test_hung_capture_tool_returns_an_environment_refusal(world, monkeypatch, capsys):
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired("grim", 10)
+    monkeypatch.setattr(capture.shutil, "which", lambda name: name)
+    monkeypatch.setattr(capture.subprocess, "run", timeout)
+    monkeypatch.setattr(capture, "grab_region", lambda r, p, s: capture._run(["grim", str(p)]))
+    assert cli.main(["shot", "--timings", "--json"]) == exits.PRECONDITION_FAILED
+    report = json.loads(capsys.readouterr().err.split("cu metrics: ", 1)[1])
+    assert report["code"] == exits.PRECONDITION_FAILED
+    assert report["frames"] == []
+
+
+def test_shot_reports_bounded_nonprivate_timing(world, capsys):
+    assert cli.main(["shot", "--timings", "--json"]) == 0
+    output = capsys.readouterr()
+    frame = json.loads(output.out)
+    report = json.loads(output.err.split("cu metrics: ", 1)[1])
+    assert report["code"] == 0
+    assert report["total_seconds"] >= report["seconds"]["acquisition"]
+    assert report["operations"]["acquisition"] == 1
+    assert report["frames"][0]["id"] == frame["id"]
+    assert report["frames"][0]["encoded_bytes"] == frame["encoded_bytes"]
+    assert "fixture" not in output.err
+    assert "0x1" not in output.err
+
+
+def test_shot_refuses_encoded_bytes_beyond_profile_budget(world, monkeypatch, capsys):
+    cfg = copy.deepcopy(config.DEFAULTS)
+    cfg["capture"]["profiles"]["generic"]["max_bytes"] = 1
+    monkeypatch.setattr(config, "load", lambda: cfg)
+    assert cli.main(["shot", "--for", "generic", "--json"]) == 29
+    assert capsys.readouterr().out == ""
+    assert not list(frames.store_dir().glob("f*.json"))
+
+
+def test_refused_shot_still_reports_total_time(world, capsys):
+    world["windows"][0]["visible"] = False
+    assert cli.main(["shot", "--timings", "--json"]) == exits.TARGET_NOT_VISIBLE
+    output = capsys.readouterr()
+    report = json.loads(output.err.split("cu metrics: ", 1)[1])
+    assert report["code"] == exits.TARGET_NOT_VISIBLE
+    assert report["frames"] == []
+    assert report["total_seconds"] >= 0
 
 
 @pytest.mark.parametrize("obstruction", ["hidden", "overlap", "layer"])

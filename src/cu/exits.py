@@ -21,6 +21,7 @@ VERIFY_FAILED = 25
 CONTENT_CHANGED = 26
 TARGET_NOT_VISIBLE = 27
 VERIFY_UNAVAILABLE = 28
+CAPTURE_BUDGET_EXCEEDED = 29
 DENIED_BY_POLICY = 30
 ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
@@ -69,6 +70,10 @@ RESPONSE = {
     VERIFY_UNAVAILABLE: (
         "The requested read-back could not establish the result. "
         "Inspect the field before continuing; do not replay the completed prefix."
+    ),
+    CAPTURE_BUDGET_EXCEEDED: (
+        "The encoded image exceeds the capture profile's byte limit. "
+        "Request a smaller region or a lower-resolution profile."
     ),
     DENIED_BY_POLICY: "Refused by the denylist or a locked session. Do not retry; tell the user.",
     ABORTED_BY_USER: (
