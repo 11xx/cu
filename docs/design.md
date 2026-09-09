@@ -381,7 +381,13 @@ Three outcomes, and the third is why this is worth having. The comparison is
 containment rather than equality, since select-all returns whatever else the
 field held. A field that cannot be read back reports **unverified** rather than
 ok — claiming a verification that did not happen would be worse than not
-offering one. A genuine disagreement is `VERIFY_FAILED`, which is deliberately
+offering one. With `--replace`, selection follows the optional aimed click and
+precedes text under the same hold. The text must be nonempty and select-all
+must resolve; `--replace --verify` requires exact equality rather than
+containment. Replacement does not submit. Recipes retain both the replacement
+mode and requested read-back.
+
+A genuine disagreement is `VERIFY_FAILED`, which is deliberately
 *not* retryable: retyping blindly duplicates whatever did land.
 
 Verifying is not free of consequence: it leaves the field's contents selected,
