@@ -3,6 +3,8 @@ name = "cu"
 version = "0.1.0"
 description = "Computer use for Hyprland: see and drive a Wayland desktop from a CLI."
 requires-python = ">=3.11"
+license = "Unlicense"
+license-files = ["UNLICENSE"]
 dependencies = [
     "pillow==12.3.0",
 ]
