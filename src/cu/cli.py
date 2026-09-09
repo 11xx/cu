@@ -8,6 +8,8 @@ stderr.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import signal
@@ -1638,6 +1640,83 @@ def cmd_session(args: argparse.Namespace) -> int:
     return exits.OK
 
 
+MAX_BATCH_STEPS = 32
+MAX_BATCH_BYTES = 65536
+BATCH_COMMANDS = frozenset({"focus", "move", "click", "scroll", "type", "key", "browser"})
+
+
+def cmd_batch(args: argparse.Namespace) -> int:
+    """Execute a bounded, pre-parsed sequence under the caller's desktop hold."""
+    try:
+        with contextlib.nullcontext(sys.stdin) if args.file == "-" else open(args.file) as handle:
+            raw = handle.read(MAX_BATCH_BYTES + 1)
+    except OSError as exc:
+        raise ValueError(f"cannot read batch: {exc}") from exc
+    if len(raw.encode()) > MAX_BATCH_BYTES:
+        raise ValueError(f"batch exceeds {MAX_BATCH_BYTES} bytes")
+    steps = json.loads(raw)
+    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_BATCH_STEPS:
+        raise ValueError(f"batch must contain 1..{MAX_BATCH_STEPS} argv arrays")
+    parsed = []
+    for index, argv in enumerate(steps, 1):
+        if (
+            not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv)
+            or argv[0] not in BATCH_COMMANDS
+            or any(a.split("=", 1)[0] in {"--session", "--why", "--dry-run", "--help", "-h"}
+                   for a in argv)
+            or (argv[0] == "type" and len(argv) > 1 and argv[1] == "-")
+        ):
+            raise ValueError(f"batch step {index} is not an allowed action argv array")
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                step = build_parser().parse_args(argv)
+        except SystemExit as exc:
+            raise ValueError(
+                f"batch step {index} has invalid arguments; see command --help"
+            ) from exc
+        step.json = True
+        step.dry_run = args.dry_run
+        parsed.append(step)
+
+    cfg = config.load()
+    snap = observe.snapshot()
+    expected = next((w for w in snap["windows"] if snap["focused"]
+                     and w["address"] == snap["focused"]["address"]), None)
+    completed = []
+    failure = None
+    for index, step in enumerate(parsed, 1):
+        output, errors = io.StringIO(), io.StringIO()
+        def invoke(step=step, expected=expected):
+            safety.check_abort()
+            status.check_exclusive(getattr(args, "session", None))
+            if expected is not None:
+                current = observe.snapshot()
+                safety.confirm_focus(expected, current["focused"])
+                safety.check_frame(cfg, {
+                    "id": "batch-context", "captured_at": time.time(), "window": expected,
+                }, current["windows"], current["monitors"])
+            return step.run(step)
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = _safe_call(invoke)
+        result = json.loads(output.getvalue()) if output.getvalue().strip() else None
+        if (code == exits.OK and isinstance(result, dict)
+                and result.get("verified", {}).get("status") == "unverified"):
+            code = exits.VERIFY_UNAVAILABLE
+        item = {"step": index, "command": step.command, "code": code, "result": result}
+        if code != exits.OK:
+            failure = {**item, "detail": errors.getvalue().strip() or exits.RESPONSE[code],
+                       "may_have_acted": not args.dry_run}
+            break
+        completed.append(item)
+        if (not args.dry_run and step.command in {"focus", "click", "type"}
+                and result.get("window")):
+            expected = result["window"]
+    payload = {"completed": completed, "failed": failure, "dry_run": args.dry_run,
+               "rollback": False, "code": failure["code"] if failure else exits.OK}
+    _emit(payload, args.json, lambda p: print(json.dumps(p, indent=2)))
+    return payload["code"]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog="cu",
@@ -1941,6 +2020,11 @@ def build_parser() -> argparse.ArgumentParser:
         )
         p.add_argument("--at", metavar="X,Y", required=required, help="Coordinate in image pixels")
 
+    batch = add_injecting(
+        "batch", "Run bounded action argv arrays; stop on the first refusal", cmd_batch
+    )
+    batch.add_argument("file", help="JSON file or '-' for stdin; at most 32 actions / 64 KiB")
+
     focus = add_injecting("focus", "Give a window keyboard focus", cmd_focus)
     focus.add_argument(
         "selector",
@@ -2101,28 +2185,30 @@ def main(argv: list[str] | None = None) -> int:
     # readers or user-owned controls, not agents driving the desktop.
     if args.command not in NON_PUBLISHING_COMMANDS:
         status.publish(args.command, detail=why, session=session)
+    return _safe_call(lambda: _dispatch(args, why, session))
+
+
+def _dispatch(args: argparse.Namespace, why: str, session: str | None) -> int:
+    # One hold spans every step that touches pointer, focus or clipboard.
+    injecting = getattr(args, "injects", False)
+    exclusive_begin = (
+        args.command == "session" and args.subcommand == "begin" and args.exclusive
+    )
+    if injecting or exclusive_begin:
+        busy_wait = config.load()["safety"]["busy_wait_ms"] / 1000
+        lock_detail = why
+        if exclusive_begin:
+            lock_detail = args.purpose if args.purpose is not None else args.detail or ""
+        with desktop.held(args.command, lock_detail, wait=busy_wait):
+            if injecting:
+                status.check_exclusive(session)
+            return args.run(args)
+    return args.run(args)
+
+
+def _safe_call(call) -> int:
     try:
-        # The desktop's pointer, focus, and clipboard are one shared resource,
-        # and nothing an injecting command checks can see a second agent using
-        # them. Holding it here rather than inside each action keeps the whole
-        # command — warp, settle, and event — indivisible, which is the unit
-        # that has to be, and keeps the read-only loop free of the lock.
-        injecting = getattr(args, "injects", False)
-        exclusive_begin = (
-            args.command == "session"
-            and args.subcommand == "begin"
-            and args.exclusive
-        )
-        if injecting or exclusive_begin:
-            busy_wait = config.load()["safety"]["busy_wait_ms"] / 1000
-            lock_detail = why
-            if exclusive_begin:
-                lock_detail = args.purpose if args.purpose is not None else args.detail or ""
-            with desktop.held(args.command, lock_detail, wait=busy_wait):
-                if injecting:
-                    status.check_exclusive(session)
-                return args.run(args)
-        return args.run(args)
+        return call()
     except Refused as exc:
         # An interlock, not a fault. The code is what the caller acts on, so
         # the response the taxonomy prescribes is printed alongside it.
@@ -2185,7 +2271,7 @@ def main(argv: list[str] | None = None) -> int:
         return exits.OK
     except KeyboardInterrupt:
         return exits.ERROR
-    except RuntimeError as exc:
+    except (RuntimeError, OSError) as exc:
         # Anything this taxonomy has not been taught. A traceback would leave
         # the caller with no code to branch on, which for a CLI whose contract
         # *is* its exit codes is worse than an unhelpful one.

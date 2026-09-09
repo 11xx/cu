@@ -58,6 +58,7 @@ cu scroll --dy -3                # wheel where the pointer already is
 cu type 'hello'                  # clipboard by default, --method keys to synthesize
 cu type 'hello' --verify         # read the field back and confirm it arrived
 cu type 'new value' --replace --verify # whole-field replacement, exact read-back
+cu batch steps.json --json       # bounded argv arrays, fail-fast with partial results
 cu key --action paste            # a semantic action, resolved per application
 cu browser list                  # installed browsers and what each resolves
 cu browser focus-urlbar          # a semantic browser action, never a chord
