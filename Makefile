@@ -7,13 +7,14 @@
 # should not have a stale copy of itself as its own first failure mode.
 
 .DEFAULT_GOAL := help
-.PHONY: help install uninstall test lint build check
+.PHONY: help install uninstall test test-adapters lint build check
 
 help:
 	@echo 'make install    put cu on PATH (editable: tracks this checkout)'
 	@echo 'make uninstall  take it off PATH'
-	@echo 'make check      every gate: test, lint, build'
+	@echo 'make check      every gate: test, test-adapters, lint, build'
 	@echo 'make test       uv run pytest'
+	@echo 'make test-adapters  Node.js adapter contract tests'
 	@echo 'make lint       uv run ruff check .'
 	@echo 'make build      uv build'
 
@@ -41,4 +42,7 @@ lint:
 build:
 	uv build
 
-check: test lint build
+test-adapters:
+	node --test adapters/observation.test.mjs
+
+check: test test-adapters lint build

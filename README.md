@@ -140,6 +140,14 @@ second one waits briefly and then gets exit 42 naming the holder; reading —
 serialized. Without this, two agents warping the same pointer produce a click
 on the wrong window at exit 0.
 
+## Combined harness results
+
+[`adapters/`](adapters/README.md) provides a portable action/status/frame/image
+composition and a Pi tool wrapper. It calls the existing CLI and uses the
+harness's native image return, with no daemon or extra transport. The CLI guide
+contains its safety and capture-selection rules. Adapter tests require Node.js
+22+ and run as part of `make check`; the Python CLI does not require Node.
+
 ## The eww indicator
 
 `eww/cu.yuck` and `eww/cu.scss` are a ready widget: one mark per driving agent,
