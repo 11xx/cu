@@ -241,8 +241,12 @@ def _gecko_chord(binding: dict[str, Any]) -> str | None:
         return None
     parts = []
     for raw in binding.get("modifiers", "").replace(" ", ",").split(","):
+        if not raw.strip():
+            continue
         name = GECKO_MODIFIERS.get(raw.strip().lower())
-        if name and name not in parts:
+        if name is None:
+            return None
+        if name not in parts:
             parts.append(name)
 
     keycode = binding.get("keycode", "")

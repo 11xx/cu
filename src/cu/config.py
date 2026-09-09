@@ -14,6 +14,7 @@ reporting success.
 from __future__ import annotations
 
 import copy
+import math
 import os
 import tomllib
 from pathlib import Path
@@ -241,6 +242,27 @@ def load(path: Path | None = None) -> dict[str, Any]:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
     cfg = _merge(copy.deepcopy(DEFAULTS), user)
+    for section in DEFAULTS:
+        if not isinstance(cfg[section], dict):
+            raise ConfigError(f"{section} must be a table")
+    for section, fields in {
+        "safety": ("frame_max_age", "cursor_drift_tolerance", "busy_wait_ms"),
+        "input": ("press_ms", "gap_ms", "settle_ms"),
+    }.items():
+        for field in fields:
+            value = cfg[section][field]
+            if (
+                isinstance(value, bool) or not isinstance(value, int | float)
+                or not math.isfinite(value) or value < 0
+            ):
+                raise ConfigError(f"{section}.{field} must be a finite nonnegative number")
+    for field in ("require_focus", "frame_content_identity"):
+        if not isinstance(cfg["safety"][field], bool):
+            raise ConfigError(f"safety.{field} must be a boolean")
+    for field in ("denylist_classes", "denylist_titles", "title_drift_classes"):
+        value = cfg["safety"][field]
+        if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+            raise ConfigError(f"safety.{field} must be a list of strings")
     backend = cfg["input"]["key_backend"]
     valid_backends = ("compositor", "uinput")
     if backend not in valid_backends:

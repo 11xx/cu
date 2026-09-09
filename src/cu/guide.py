@@ -64,7 +64,7 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   `pixel` reads image coordinates without producing an image. Its default is
   one exact pixel; --radius is an explicit hedge against antialiasing.
   `magnify` writes a new frame with more image pixels but the original capture
-  time and logical rectangle. It makes small text readable without pretending
+  time, monitor geometry, and logical rectangle. It makes small text readable without pretending
   the desktop was captured again, and reports the derived image's token cost.
 
   cu profiles                    What a capture costs each configured consumer.
@@ -85,6 +85,10 @@ ACT THROUGH THE FRAME YOU READ
   image pixels, the compositor's logical space, and physical pixels — that
   arithmetic is the largest single source of confidently-wrong clicks, and it
   is already done for you.
+
+  Keyboard commands require a focused window and recheck its live denylist
+  state before sending keys. Pointer events recheck frame geometry after
+  device settlement. Safety timing and drift limits must be finite and nonnegative.
 
   `focus` redirects keyboard actions without moving the pointer. `move` aims the
   pointer without pressing a button. `scroll` may aim through a frame first, or
@@ -312,7 +316,8 @@ THE INTERLOCKS, AND WHAT TO TELL THE USER
   can change. If it refuses, do not work around it.
 
   Recipes do not execute until a human has read and approved them. An unapproved
-  recipe may be replayed only with --dry-run, which injects nothing. Show the
+  recipe may be replayed only with --dry-run, which injects nothing. Key repeats
+  survive promotion; typing with a mismatched read-back is not promoted. Show the
   steps and ask; never approve on the user's behalf. A pointer recipe also
   refuses when its window was materially resized — re-record and review it,
   because a stored fraction cannot reveal how a control followed a resize.
