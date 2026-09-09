@@ -413,8 +413,17 @@ def _validate_after_args(args: argparse.Namespace) -> None:
         raise ValueError("--timeout must be positive")
 
 
+def _check_recapture(reference: dict[str, Any], snap: dict[str, Any]) -> None:
+    why = frames.staleness(reference, snap["windows"], snap["monitors"], max_age=float("inf"))
+    if why:
+        raise FrameError(why)
+    if reference.get("window"):
+        capture.require_visible(reference["window"], reference["logical_rect"], snap)
+
+
 def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, Any]) -> int:
     reference = frames.load(args.after)
+    _check_recapture(reference, snap)
     expected_size = reference["image_size"]
     watch = _parse_watch(args.watch, expected_size)
     try:
@@ -451,8 +460,11 @@ def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, A
             )
             return exits.TIMED_OUT
 
+        _check_recapture(reference, observe.snapshot())
         with frames.capture_scratch() as scratch:
             _grab_shot(source, rect, scratch, scale)
+            captured_snap = observe.snapshot()
+            _check_recapture(reference, captured_snap)
             probes += 1
             try:
                 probe_width, probe_height, probe_rgba = png.decode(scratch.read_bytes())
@@ -496,7 +508,7 @@ def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, A
                     ),
                     cursor_logical=observe.cursor(),
                     window=_current_window(
-                        reference.get("window"), observe.snapshot()["windows"]
+                        reference.get("window"), captured_snap["windows"]
                     ),
                     wait={
                         "after": reference["id"],
@@ -627,10 +639,13 @@ def cmd_shot(args: argparse.Namespace) -> int:
         "h": round(rect["h"] * monitor["scale"]),
     }
 
+    if window is not None:
+        capture.require_visible(window, rect, snap)
     with frames.capture_scratch() as scratch:
         _grab_shot(source, rect, scratch, scale)
         if window is not None:
             _confirm_captured_window(window, monitors)
+            capture.require_visible(window, rect, observe.snapshot())
 
         digest = capture.digest(scratch)
 
@@ -2144,6 +2159,10 @@ def main(argv: list[str] | None = None) -> int:
     except CaptureAimError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.DEGENERATE_AIM
+    except capture.CaptureVisibilityError as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        print(f"cu: {exits.RESPONSE[exits.TARGET_NOT_VISIBLE]}", file=sys.stderr)
+        return exits.TARGET_NOT_VISIBLE
     except CaptureError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.PRECONDITION_FAILED

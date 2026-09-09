@@ -580,7 +580,7 @@ def _watch_world(monkeypatch, sequence):
             scratch=scratch,
             native_size={"w": width, "h": height},
             digest_native=capture.digest(scratch),
-            monitor={"name": "DP-2", "scale": 1.0},
+            monitor={"name": "DP-2", "scale": 1.0, "logical_rect": rect},
             profile="claude",
             capture_scale=1.0,
             visual_tokens=1,
@@ -591,7 +591,7 @@ def _watch_world(monkeypatch, sequence):
         observe,
         "snapshot",
         lambda: {
-            "monitors": [],
+            "monitors": [{"name": "DP-2", "scale": 1.0, "logical_rect": rect}],
             "windows": [],
             "focused": None,
             "cursor_logical": {"x": 7, "y": 8},

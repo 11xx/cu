@@ -93,6 +93,10 @@ teaching `cu` about a new consumer is a stanza under `[capture.profiles]`, and
 a field nobody has measured falls back to a conservative default rather than a
 guess. `cu profiles` shows what each resolves to; `--for` overrides per command.
 
+Window/landmark capture refuses hidden or geometrically obstructed targets
+with exit 27; it never silently focuses or switches workspaces. Explicit output
+or region capture remains available without asserting window identity.
+
 `shot` writes a PNG plus a **frame descriptor** recording the logical rectangle
 the image depicts, its pixel size, and what it costs the consumer it was
 captured for. Later commands take coordinates as

@@ -507,6 +507,7 @@ def _capture_window(
     monitor = capture.sole_monitor(rect, monitors)
     profile = capture.resolve(profile_name, cfg)
     scale = capture.scale_for(rect, monitor["scale"], profile["max_long_edge"])
+    capture.require_visible(window, rect, observe.snapshot())
     with frames.capture_scratch() as scratch:
         capture.grab_region(rect, scratch, scale)
         live = next(
@@ -525,6 +526,7 @@ def _capture_window(
             raise frames.FrameError(
                 f"window {window['class']} moved or resized during capture"
             )
+        capture.require_visible(window, rect, observe.snapshot())
         image_size = capture.size_of(scratch)
         return frames.new(
             source={"type": "window", "name": window["class"]},

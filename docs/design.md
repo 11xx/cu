@@ -294,6 +294,18 @@ that in check:
 - **`cu` refuses degenerate aims** — an arbitrary region must lie on exactly
   one output, because a cross-output capture would silently upscale part of it.
 
+Window identity requires visible, unobstructed reported geometry before and
+after capture. Client visibility includes the monitor's displayed workspace;
+the client's own visible flag alone is insufficient. Monitor IDs resolve to
+names without assuming list position. Overlap with any other visible window
+or a top/overlay layer refuses with `TARGET_NOT_VISIBLE` (27), because focus
+history cannot establish stacking. This is conservative geometry evidence,
+not an atomic compositor attestation of every pixel. Output and region frames
+assert no window identity and remain the fallback for ambiguous overlap.
+Capture never focuses or switches workspaces. Pixel waits recheck geometry
+and visibility around every probe without treating old reference age or an
+expected content change as a reason to suppress the wait.
+
 Aimed capture is an optimization over a working default, not the default
 itself. `--window active` stays the recommended first call.
 

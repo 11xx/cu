@@ -40,6 +40,12 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   cu shot --after f3 --watch '0,0 200x26'
                                  Recapture after those pixels change and settle.
 
+  A window or landmark capture refuses with 27 if the target is off-workspace,
+  hidden, or overlaps another visible window or a top/overlay layer. Focus
+  history cannot prove stacking, so even a possibly-behind window is ambiguous.
+  Capture never focuses or switches workspaces. Explicitly arrange the target,
+  or use --output/--region for pixels that assert no particular window identity.
+
   A region is desktop-absolute by itself. With --output, its x,y are relative
   to that output; the returned logical_rect is always desktop-absolute.
 
@@ -51,7 +57,9 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   guessed sleep. The watch box is in the reference frame's image pixels and is
   required so an unrelated animation or ticking clock cannot satisfy the wait.
   The returned frame is the settled probe itself, with the elapsed time and
-  probe count in its descriptor. A wait costs captures; a tighter watch box is
+  probe count in its descriptor. Geometry and visibility are checked around
+  every probe; moved, closed or hidden targets cannot inherit the old label.
+  A wait costs captures; a tighter watch box is
   cheaper to compare. PNG decoding reconstructs pixels in native code; the
   entire image is decoded even when the watched box is small. Supported inputs
   are 8-bit non-interlaced grayscale, RGB, grayscale-alpha and RGBA PNGs, up to
@@ -126,6 +134,7 @@ EXIT CODES ARE THE CONTRACT
   24  Awaited event never arrived       Re-observe; it may have happened first
   25  Verification did not match state  Read actual state; do NOT blindly retry
   26  Same window, different content    Re-observe; the plan was about something else
+  27  Hidden or obstructed capture      Arrange target explicitly, or capture an output
   30  Denylist, lock, unreviewed recipe Do not retry; tell the user
   40  The user aborted                  Stop. Do not retry. Do not clear it.
   41  The user is moving the mouse      Yield; wait before retrying

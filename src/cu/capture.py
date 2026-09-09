@@ -170,6 +170,31 @@ class CaptureToolError(CaptureError):
     pass
 
 
+class CaptureVisibilityError(CaptureError):
+    pass
+
+
+def require_visible(window: dict[str, Any], rect: dict[str, float], snap: dict[str, Any]) -> None:
+    """Refuse window identity when reported geometry cannot establish clear pixels.
+
+    Focus history is not a stacking order. Any overlapping visible window is
+    ambiguous, even when the requested window was focused most recently.
+    Output/region capture remains available without asserting a window identity.
+    """
+    live = next((w for w in snap["windows"] if w["address"] == window["address"]), None)
+    if live is None or not live.get("visible", True) or live.get("hidden", False):
+        raise CaptureVisibilityError("the requested window is not on a visible workspace")
+    for other in snap["windows"]:
+        if (
+            other["address"] != window["address"] and other.get("visible", True)
+            and not other.get("hidden", False) and intersects(rect, other["logical_rect"])
+        ):
+            raise CaptureVisibilityError("another window overlaps the requested capture")
+    for surface in snap.get("layer_surfaces", []):
+        if surface["level"] >= 2 and intersects(rect, surface["logical_rect"]):
+            raise CaptureVisibilityError("a top or overlay layer overlaps the requested capture")
+
+
 def _run(args: list[str]) -> None:
     if not shutil.which(args[0]):
         raise CaptureToolError(f"{args[0]} is not installed")

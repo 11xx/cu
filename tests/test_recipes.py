@@ -266,7 +266,7 @@ def test_a_genuine_recipe_policy_refusal_stays_denied(capsys):
 
 
 @pytest.mark.parametrize("moved", [False, True])
-def test_recipe_capture_rechecks_window_geometry_without_querying_monitors(
+def test_recipe_capture_rechecks_window_geometry(
     monkeypatch, moved
 ):
     monitor = {
@@ -298,8 +298,8 @@ def test_recipe_capture_rechecks_window_geometry_without_querying_monitors(
     )
     monkeypatch.setattr(
         observe,
-        "monitors",
-        lambda: pytest.fail("recipe capture queried monitors again"),
+        "snapshot",
+        lambda: {"monitors": [monitor], "windows": [live], "layer_surfaces": []},
     )
 
     if moved:
