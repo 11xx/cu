@@ -17,6 +17,8 @@ The complete-task fixture and verifier are documented in
 [docs/benchmark.md](docs/benchmark.md). It is a local synthetic task and does
 not establish controller speed, model cost, or native chooser behavior.
 
+The caller-managed checkpoint prototype is described in [docs/routines.md](docs/routines.md).
+
 An editable install, so the command on PATH is this checkout rather than a copy
 of it — a stale binary is not a failure mode this project should have. It also
 means the checkout has to stay put. Run `make install` when declared dependencies
