@@ -25,12 +25,12 @@ EXPLICIT PRACTICE AND BENCHMARKS
   cu playground --port 8765      Choose a loopback port; Ctrl-C stops serving.
 
   Open the URL in your chosen browser. No extension is required. The native
-  suite has ten independent task definitions with explicit Start, retry,
-  task-reset and run-reset controls, visible PASS/FAIL/ABORTED outcomes,
-  per-attempt receipts and seed-varied synthetic fixtures. The original form
-  and readiness/scroll tasks remain available alongside Dispatch desk, Delayed
-  parcel, Archive elevator, Gallery crew, Queue keeper, Receipt ledger,
-  Recovery room and Changed desk.
+  suite has ten independent task definitions—two baseline tasks and eight
+  named synthetic fixtures—with explicit Start, retry, task-reset and run-reset
+  controls, visible PASS/FAIL/ABORTED outcomes, per-attempt receipts and
+  seed-varied fixtures. The original form and readiness/scroll tasks remain
+  available alongside Dispatch desk, Delayed parcel, Archive elevator, Gallery
+  crew, Queue keeper, Receipt ledger, Recovery room and Changed desk.
   Dispatch desk requires the visible destination, quantity and notes plus one
   dispatch receipt; typing alone remains pending. Delayed parcel requires one
   visible job start, the Ready state and acknowledgement of that job's receipt;
@@ -50,12 +50,13 @@ EXPLICIT PRACTICE AND BENCHMARKS
   decoy fails non-destructively. These are synthetic native fixtures, not a
   real media service, OS chooser, filesystem output or external account.
   Practice only when explicitly requested; nothing launches a browser, grants a
-  page or calls a model automatically. For a cheaper-controller trial,
-  explicitly choose a controller or worker interface with follow-up support.
-  Hand over intent, exact window, fresh context and postconditions.
-  Compare verified outcomes, total tokens/cost, speed and recovery; the page
-  timer is not controller usage or billing. All CU capabilities remain available
-  regardless of the chosen model. See docs/playground.md for the trial contract.
+  page, selects a controller, launches a worker or calls a model automatically.
+  A controller/worker comparison is an experimental, separately orchestrated
+  trial, not a CU product capability. Hand over intent, exact window, fresh
+  context and postconditions. Compare verified outcomes, total tokens/cost,
+  speed and recovery; the page timer is not controller usage, billing or a
+  product benchmark. All CU capabilities remain available regardless of the
+  chosen model. See docs/playground.md for the trial contract.
 
 OBSERVE BEFORE YOU LOOK
   cu observe --json              Monitors, windows, layer surfaces, geometry, focus, cursor.

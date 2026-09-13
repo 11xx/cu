@@ -9,11 +9,11 @@ Ctrl-C. `--port 8765` selects a port; the default asks the OS for a free one.
 lifecycle for a caller that manages the process. The command does not launch a
 browser or create a worker-owned persistent service.
 
-The page has ten independent native tasks: the original Native basics and
-Readiness and scroll tasks, plus Dispatch desk, Delayed parcel, Archive elevator,
-Gallery crew, Queue keeper, Receipt ledger, Recovery room and Changed desk.
-The eight named fixtures use deterministic variants selected by the visible
-suite seed, so a seed replay recreates the same brief and layout.
+The page has ten independent native tasks: the two baseline Native basics and
+Readiness and scroll tasks, plus eight named fixtures—Dispatch desk, Delayed
+parcel, Archive elevator, Gallery crew, Queue keeper, Receipt ledger, Recovery
+room and Changed desk. The named fixtures use deterministic variants selected
+by the visible suite seed, so a seed replay recreates the same brief and layout.
 Select a task and press **Start** before interacting with it. A still-unmet
 objective remains `not-started` or `running`; only a committed wrong answer, a
 forbidden effect or a deadline produces `FAIL`. User abort and runner
@@ -75,20 +75,23 @@ shown separately: the native input capability is available, while extension
 grants and real-file output are unavailable for this synthetic suite. An
 unavailable capability is not a task score.
 
-The native suite contains only ordinary browser interaction. Extension
-diagnostics remain in
+The native suite owns only ordinary browser interaction. Extension diagnostics
+remain in
 [`browser-extension/fixtures/control.html`](../browser-extension/fixtures/control.html)
-and use the extension test contract; they are not required by native tasks.
+and use the separate Firefox extension test contract; they are not required by
+native tasks and do not contribute to native-suite scores.
 Do not treat the native page's synthetic readiness, mock playback, in-page
 dialog, delayed layout or visible outcomes as a real external account, media
 service, OS chooser, downloaded file or controller billing receipt.
 
 Use normal `cu observe`, frame capture, native input and outcome verification.
-Give a worker the permitted task, exact window identity, recent evidence,
-completion condition, tool/time bounds and exceptions when the selected
-interface supports follow-up. Do not have CU select or launch a model
-implicitly. Record whole-task setup, recovery, wall time, model/tool time,
-tokens and money separately; the page's wall-time field is not an API invoice.
+If an external controller or worker is selected, treat the run as an
+experimental, separately orchestrated comparison: give it the permitted task,
+exact window identity, recent evidence, completion condition, tool/time bounds
+and exceptions when the selected interface supports follow-up. CU does not
+select or launch that worker implicitly. Record whole-task setup, recovery, wall
+time, model/tool time, tokens and money separately; the page's wall-time field
+is not an API invoice or a product benchmark.
 
 This is a synthetic usability playground. Real browser/download, OS-dialog,
 media-service and model-cost comparisons require separately recorded trials;
