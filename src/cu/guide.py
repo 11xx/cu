@@ -105,12 +105,14 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   `magnify` writes a new frame with more image pixels but the original capture
   time, monitor geometry, and logical rectangle. It makes small text readable without pretending
   the desktop was captured again, and reports the derived image's token cost.
-  `export` validates a stored frame's dimensions and digest, reports exact
-  coverage and runtime-byte availability, and does not take the desktop lock.
-  `--compare` adds a same-coverage SHA-256 pixel-change result; `--retain PATH`
-  copies bytes once to an explicitly new path. Missing runtime bytes are
-  unavailable, not proof of a collection time. An export is evidence and never
-  grants action authority.
+  `export` validates a stored frame's identity, dimensions, coordinate spaces,
+  digest, and bounded byte size, reports exact coverage and runtime-byte
+  availability, and does not take the desktop lock. `--compare` requires matching
+  source identity and coverage, then scores decoded-pixel equality while naming
+  encoded-byte hash equality separately. `--retain PATH` copies validated bytes
+  once to an explicitly new path, only after compare validation. Missing runtime
+  bytes are unavailable, not proof of a collection time. An export is evidence
+  and never grants action authority.
 
   cu profiles                    What a capture costs each configured consumer.
 

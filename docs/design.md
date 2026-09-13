@@ -265,9 +265,11 @@ than literal:
   small label legible without asking the model to inspect the original scale.
 - `cu export --frame f3` validates a stored PNG and returns a versioned evidence
   envelope with source identity, exact coverage, coordinate spaces, digest,
-  runtime availability, and retention policy. `--retain PATH` makes an explicit
-  non-overwriting byte copy; `--compare FRAME` records a same-coverage SHA-256
-  change observation. Neither path grants action authority or invents a
+  runtime availability, producer configuration, and retention policy. Reads are
+  bounded before PNG decoding. `--retain PATH` makes an explicit non-overwriting
+  byte copy after all compare inputs validate; `--compare FRAME` records a
+  same-coverage decoded-pixel change observation and reports encoded-byte hash
+  equality separately. Neither path grants action authority or invents a
   collection timestamp for a missing runtime file.
 
 A profile describes a consumer by **capability rather than by one number**,

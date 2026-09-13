@@ -34,6 +34,9 @@ GC_MAX_FRAMES = 60
 
 FRAME_ID_PATTERN = re.compile(r"^f[1-9][0-9]*$")
 
+FRAME_IMAGE_SPACE = "cu-frame-image-pixels"
+LOGICAL_SPACE = "hyprland-logical"
+
 
 class FrameError(RuntimeError):
     pass
@@ -146,6 +149,10 @@ def new(
             "captured_at": time.time(),
             **context.metadata(),
             **extra,
+            "coordinate_spaces": {
+                "image": FRAME_IMAGE_SPACE,
+                "logical": LOGICAL_SPACE,
+            },
         }
     )
 
