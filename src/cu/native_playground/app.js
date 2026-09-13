@@ -311,6 +311,191 @@
     }
   }
 
+  function renderQueue(task, taskState, running) {
+    const fixture = task.fixture;
+    document.querySelector("#queue-brief").textContent =
+      `Play “${fixture.target_title}” by ${fixture.target_artist} FROM THE CURRENT QUEUE. Preserve queue order; the broader catalog contains same-title objects for contrast.`;
+    const player = taskState.queue.find((item) => item.id === taskState.current_track_id);
+    document.querySelector("#queue-player-status").textContent = player
+      ? `Mock playback: ${player.title} · ${player.artist} · queue position ${taskState.current_index + 1}/${taskState.queue.length} · advances ${taskState.playback_advances}`
+      : "Mock playback: no current object.";
+
+    const currentList = document.querySelector("#queue-current-list");
+    currentList.replaceChildren();
+    taskState.queue.forEach((item, index) => {
+      const row = document.createElement("li");
+      row.dataset.objectId = item.id;
+      row.textContent = `${item.title} · ${item.artist} · object ${item.id}`;
+      const play = button("Play this queued object", "queue-play", task.task_id, !running, item.id);
+      play.dataset.source = "queue";
+      row.append(" ", play);
+      if (index === taskState.current_index) row.classList.add("current-queue-item");
+      currentList.append(row);
+    });
+
+    const catalogList = document.querySelector("#queue-catalog-list");
+    catalogList.replaceChildren();
+    taskState.catalog.forEach((item) => {
+      const row = document.createElement("p");
+      row.dataset.objectId = item.id;
+      row.textContent = `${item.title} · ${item.artist} · object ${item.id}`;
+      const play = button(
+        "Play catalog object (replaces queue)",
+        "queue-play",
+        task.task_id,
+        !running,
+        item.id,
+      );
+      play.dataset.source = "catalog";
+      row.append(" ", play);
+      catalogList.append(row);
+    });
+
+    const queueIds = taskState.queue.map((item) => item.id).join(" → ");
+    document.querySelector("#queue-order-status").textContent =
+      `Current queue order: ${queueIds}. ${taskState.queue_replaced ? "The queue was replaced by a catalog object." : "Queue replacement has not occurred."}`;
+  }
+
+  function ledgerRows(taskState) {
+    const filtered = taskState.rows.filter(
+      (row) => taskState.view_filter === "all" || row.status === taskState.view_filter,
+    );
+    const direction = taskState.view_sort_direction === "desc" ? -1 : 1;
+    return filtered.sort((left, right) => {
+      const leftValue = left[taskState.view_sort_key];
+      const rightValue = right[taskState.view_sort_key];
+      const leftText = String(leftValue);
+      const rightText = String(rightValue);
+      const comparison =
+        typeof leftValue === "number" && typeof rightValue === "number"
+          ? leftValue - rightValue
+          : leftText.localeCompare(rightText);
+      return comparison === 0 ? left.id.localeCompare(right.id) : comparison * direction;
+    });
+  }
+
+  function renderLedger(task, taskState, running) {
+    const fixture = task.fixture;
+    document.querySelector("#ledger-brief").textContent =
+      `Required view: status “${fixture.filter_value}”, sort ${fixture.sort_key} ${fixture.sort_direction}. Inspect every matching row, then enter IDs ${fixture.matching_ids.join(", ")} and total ${fixture.expected_total}.`;
+    document.querySelector("#ledger-filter").value = taskState.view_filter;
+    document.querySelector("#ledger-sort").value = taskState.view_sort_key;
+    document.querySelector("#ledger-direction").value = taskState.view_sort_direction;
+    document.querySelector("#ledger-filter").disabled = !running;
+    document.querySelector("#ledger-sort").disabled = !running;
+    document.querySelector("#ledger-direction").disabled = !running;
+    document.querySelector("#ledger-apply-view").disabled = !running;
+    document.querySelector("#ledger-view-status").textContent =
+      `Visible view: ${taskState.view_filter} · ${taskState.view_sort_key} ${taskState.view_sort_direction} · view changes ${taskState.view_changes}`;
+
+    const rows = document.querySelector("#ledger-rows");
+    rows.replaceChildren();
+    for (const rowState of ledgerRows(taskState)) {
+      const row = document.createElement("tr");
+      row.dataset.rowId = rowState.id;
+      for (const value of [
+        rowState.id,
+        rowState.status,
+        rowState.amount,
+        rowState.sender,
+        rowState.note,
+      ]) {
+        const cell = document.createElement("td");
+        cell.textContent = String(value);
+        row.append(cell);
+      }
+      const coverage = document.createElement("td");
+      const inspect = button(
+        taskState.inspected_ids.includes(rowState.id) ? "Inspected" : "Inspect row",
+        "ledger-inspect",
+        task.task_id,
+        !running || taskState.inspected_ids.includes(rowState.id),
+        rowState.id,
+      );
+      coverage.append(inspect);
+      row.append(coverage);
+      rows.append(row);
+    }
+    document.querySelector("#ledger-search").value = taskState.search_query || "";
+    document.querySelector("#ledger-search").disabled = !running;
+    document.querySelector("#ledger-search-button").disabled = !running;
+    document.querySelector("#ledger-search-status").textContent = taskState.search_result
+      ? `Target search ${taskState.search_result.found ? "found" : "did not find"} ${taskState.search_result.row_id}; exhaustive coverage unchanged.`
+      : `Known-row search is optional contrast evidence; it does not inspect the matching set.`;
+    document.querySelector("#ledger-ids").value =
+      taskState.submitted_ids_input ?? taskState.submitted_ids.join(", ");
+    document.querySelector("#ledger-total").value =
+      taskState.submitted_total_input ?? taskState.submitted_total;
+    document.querySelector("#ledger-ids").disabled = !running;
+    document.querySelector("#ledger-total").disabled = !running;
+    document.querySelector("#ledger-submit").disabled = !running;
+    document.querySelector("#ledger-answer-status").textContent =
+      `Inspected ${taskState.inspected_ids.length}/${taskState.expected_ids.length} required rows; search results do not count.`;
+  }
+
+  function renderRecovery(task, taskState, running) {
+    const fixture = task.fixture;
+    document.querySelector("#recovery-brief").textContent =
+      `Job: ${fixture.job_label}. Submit name “${fixture.draft_name}” with data “${fixture.payload}”. If the labeled in-page conflict appears, rename to “${fixture.rename_to}” and resume only the unfinished step.`;
+    document.querySelector("#recovery-name").value = taskState.name ?? "";
+    document.querySelector("#recovery-payload").value = taskState.payload ?? "";
+    document.querySelector("#recovery-rename").value = taskState.rename_input ?? "";
+    document.querySelector("#recovery-name").disabled = !running || taskState.job_submissions > 0;
+    document.querySelector("#recovery-payload").disabled =
+      !running || taskState.job_submissions > 0;
+    document.querySelector("#recovery-submit").disabled = !running || taskState.job_submissions > 0;
+    const dialog = document.querySelector("#recovery-conflict-dialog");
+    dialog.hidden = !taskState.conflict_visible;
+    document.querySelector("#recovery-conflict-text").textContent =
+      `In-page conflict: “${fixture.existing_name}” already exists with data “${fixture.existing_payload}”. This dialog is part of the page; no OS chooser is involved. Preserve the submitted data, enter “${fixture.rename_to}”, confirm once, then resume.`;
+    document.querySelector("#recovery-rename").disabled = !running || !taskState.conflict_visible;
+    document.querySelector("#recovery-confirm").disabled = !running || !taskState.conflict_visible;
+    document.querySelector("#recovery-resume").disabled = !running || !taskState.conflict_resolved;
+    document.querySelector("#recovery-status").textContent = taskState.conflict_visible
+      ? `Conflict visible; unfinished step: ${taskState.unfinished_step}. Do not resubmit.`
+      : taskState.conflict_resolved
+        ? `Conflict resolved; unfinished step: ${taskState.unfinished_step}. Resume once.`
+        : taskState.job_submissions
+          ? `Job submitted once; waiting for its in-page conflict.`
+          : "No job submission yet; enter the specified data and submit once.";
+  }
+
+  function renderChanged(task, taskState, running) {
+    const fixture = task.fixture;
+    document.querySelector("#changed-brief").textContent =
+      `Desk: ${fixture.desk_label}. Wait for the visible replacement, record a fresh observation, then confirm the intended control. Adjacent decoy is non-destructive but fails the attempt.`;
+    document.querySelector("#changed-schedule").disabled =
+      !running || taskState.update_requests > 0;
+    document.querySelector("#changed-layout-status").textContent = taskState.layout_changed
+      ? `Replacement visible: layout version ${taskState.layout_version}; current control is “${taskState.target_label}”. Fresh observations ${taskState.fresh_observations}.`
+      : taskState.update_pending
+        ? "Waiting for the delayed replacement; observe the visible desk when it changes."
+        : `Old control visible: “${taskState.old_target_label}”. Request the delayed replacement first.`;
+    const refresh = document.querySelector("#changed-refresh");
+    refresh.disabled = !running || !taskState.layout_changed;
+    refresh.dataset.targetId = taskState.layout_changed
+      ? taskState.target_id
+      : taskState.old_target_id;
+    refresh.dataset.layoutVersion = String(taskState.layout_version);
+    const confirm = document.querySelector("#changed-confirm");
+    confirm.textContent = taskState.layout_changed
+      ? taskState.target_label
+      : taskState.old_target_label;
+    confirm.disabled = !running;
+    confirm.dataset.targetId = taskState.layout_changed
+      ? taskState.target_id
+      : taskState.old_target_id;
+    confirm.dataset.layoutVersion = String(taskState.layout_version);
+    const decoy = document.querySelector("#changed-decoy");
+    decoy.textContent = fixture.decoy_label;
+    decoy.disabled = !running;
+    decoy.dataset.targetId = fixture.decoy_id;
+    decoy.dataset.layoutVersion = String(taskState.layout_version);
+    document.querySelector("#changed-action-status").textContent = taskState.decoy_effect
+      ? `Decoy effect: ${taskState.decoy_effect}. Retry to attempt the intended target.`
+      : `Observed layout version ${taskState.observed_layout_version || "none"}; intended target ${taskState.target_id}. The adjacent decoy produces no commit.`;
+  }
+
   function renderInteraction() {
     const task = selectedTask();
     const running = task?.status === "running";
@@ -322,6 +507,10 @@
       "parcel-controls": "delayed-parcel",
       "elevator-controls": "archive-elevator",
       "gallery-controls": "gallery-crew",
+      "queue-controls": "queue-keeper",
+      "ledger-controls": "receipt-ledger",
+      "recovery-controls": "recovery-room",
+      "changed-desk-controls": "changed-desk",
     };
     for (const [sectionId, taskId] of Object.entries(sections)) {
       document.querySelector(`#${sectionId}`).hidden = task.task_id !== taskId;
@@ -356,6 +545,10 @@
     if (task.task_id === "delayed-parcel") renderParcel(task, taskState, running);
     if (task.task_id === "archive-elevator") renderElevator(task, taskState, running);
     if (task.task_id === "gallery-crew") renderGallery(task, taskState, running);
+    if (task.task_id === "queue-keeper") renderQueue(task, taskState, running);
+    if (task.task_id === "receipt-ledger") renderLedger(task, taskState, running);
+    if (task.task_id === "recovery-room") renderRecovery(task, taskState, running);
+    if (task.task_id === "changed-desk") renderChanged(task, taskState, running);
     document.querySelector("#receipt").textContent = task.last_receipt
       ? JSON.stringify(task.last_receipt, null, 2)
       : "No terminal attempt yet.";
@@ -420,6 +613,21 @@
         }
         timers.delete(taskId);
       }, task.fixture.ready_delay_ms),
+    );
+  }
+
+  function scheduleChangedLayout(taskId, attemptId) {
+    const task = state.tasks[taskId];
+    clearTimer(taskId);
+    timers.set(
+      taskId,
+      root.setTimeout(() => {
+        const current = state.tasks[taskId];
+        if (current.status === "running" && current.current_attempt?.attempt_id === attemptId) {
+          dispatch("CHANGED_LAYOUT", taskId, { attempt_id: attemptId });
+        }
+        timers.delete(taskId);
+      }, task.fixture.update_delay_ms),
     );
   }
 
@@ -584,6 +792,127 @@
     dispatch("GALLERY_GROUP_ACTION", task.task_id, {
       attempt_id: task.current_attempt?.attempt_id,
       selected_ids: [...(task.current_attempt?.state.selected_ids || [])],
+    });
+  });
+
+  document.querySelector("#queue-controls").addEventListener("click", (event) => {
+    const control = event.target.closest('button[data-action="queue-play"]');
+    if (!control) return;
+    const task = selectedTask();
+    dispatch("QUEUE_PLAY", task.task_id, {
+      attempt_id: task.current_attempt?.attempt_id,
+      source: control.dataset.source,
+      item_id: control.dataset.itemId,
+    });
+  });
+
+  document.querySelector("#ledger-apply-view").addEventListener("click", () => {
+    const task = selectedTask();
+    dispatch("LEDGER_VIEW", task.task_id, {
+      attempt_id: task.current_attempt?.attempt_id,
+      filter: document.querySelector("#ledger-filter").value,
+      sort_key: document.querySelector("#ledger-sort").value,
+      sort_direction: document.querySelector("#ledger-direction").value,
+    });
+  });
+  document.querySelector("#ledger-rows").addEventListener("click", (event) => {
+    const control = event.target.closest('button[data-action="ledger-inspect"]');
+    if (!control) return;
+    const task = selectedTask();
+    dispatch("LEDGER_INSPECT", task.task_id, {
+      attempt_id: task.current_attempt?.attempt_id,
+      row_id: control.dataset.itemId,
+    });
+  });
+  document.querySelector("#ledger-search").addEventListener("input", (event) => {
+    dispatch("LEDGER_SEARCH_INPUT", state.selected_task_id, { value: event.target.value });
+  });
+  document.querySelector("#ledger-search-button").addEventListener("click", () => {
+    const task = selectedTask();
+    dispatch("LEDGER_SEARCH", task.task_id, {
+      attempt_id: task.current_attempt?.attempt_id,
+      row_id: document.querySelector("#ledger-search").value,
+    });
+  });
+  document.querySelector("#ledger-ids").addEventListener("input", (event) => {
+    dispatch("LEDGER_IDS_INPUT", state.selected_task_id, { value: event.target.value });
+  });
+  document.querySelector("#ledger-total").addEventListener("input", (event) => {
+    dispatch("LEDGER_TOTAL_INPUT", state.selected_task_id, { value: event.target.value });
+  });
+  document.querySelector("#ledger-submit").addEventListener("click", () => {
+    const task = selectedTask();
+    const ids = document
+      .querySelector("#ledger-ids")
+      .value.split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    dispatch("LEDGER_SUBMIT", task.task_id, {
+      attempt_id: task.current_attempt?.attempt_id,
+      ids,
+      total: document.querySelector("#ledger-total").value,
+    });
+  });
+
+  document.querySelector("#recovery-name").addEventListener("input", (event) => {
+    dispatch("RECOVERY_NAME_INPUT", state.selected_task_id, { value: event.target.value });
+  });
+  document.querySelector("#recovery-payload").addEventListener("input", (event) => {
+    dispatch("RECOVERY_PAYLOAD_INPUT", state.selected_task_id, { value: event.target.value });
+  });
+  document.querySelector("#recovery-rename").addEventListener("input", (event) => {
+    dispatch("RECOVERY_RENAME_INPUT", state.selected_task_id, { value: event.target.value });
+  });
+  document.querySelector("#recovery-submit").addEventListener("click", () => {
+    const task = selectedTask();
+    dispatch("RECOVERY_SUBMIT", task.task_id, {
+      attempt_id: task.current_attempt?.attempt_id,
+    });
+  });
+  document.querySelector("#recovery-confirm").addEventListener("click", () => {
+    const task = selectedTask();
+    dispatch("RECOVERY_CONFIRM", task.task_id, {
+      attempt_id: task.current_attempt?.attempt_id,
+    });
+  });
+  document.querySelector("#recovery-resume").addEventListener("click", () => {
+    const task = selectedTask();
+    dispatch("RECOVERY_RESUME", task.task_id, {
+      attempt_id: task.current_attempt?.attempt_id,
+    });
+  });
+
+  document.querySelector("#changed-schedule").addEventListener("click", () => {
+    const task = selectedTask();
+    const attemptId = task.current_attempt?.attempt_id;
+    dispatch("CHANGED_SCHEDULE", task.task_id, { attempt_id: attemptId });
+    const current = state.tasks[task.task_id];
+    if (current.status === "running" && current.current_attempt?.state.update_pending) {
+      scheduleChangedLayout(task.task_id, attemptId);
+    }
+  });
+  document.querySelector("#changed-refresh").addEventListener("click", (event) => {
+    const task = selectedTask();
+    dispatch("CHANGED_OBSERVE", task.task_id, {
+      attempt_id: task.current_attempt?.attempt_id,
+      target_id: event.currentTarget.dataset.targetId,
+      layout_version: Number(event.currentTarget.dataset.layoutVersion),
+    });
+  });
+  document.querySelector("#changed-confirm").addEventListener("click", (event) => {
+    const task = selectedTask();
+    dispatch("CHANGED_CONFIRM", task.task_id, {
+      attempt_id: task.current_attempt?.attempt_id,
+      target_id: event.currentTarget.dataset.targetId,
+      layout_version: Number(event.currentTarget.dataset.layoutVersion),
+    });
+  });
+  document.querySelector("#changed-decoy").addEventListener("click", (event) => {
+    const task = selectedTask();
+    dispatch("CHANGED_CONFIRM", task.task_id, {
+      attempt_id: task.current_attempt?.attempt_id,
+      target_id: event.currentTarget.dataset.targetId,
+      layout_version: Number(event.currentTarget.dataset.layoutVersion),
     });
   });
 

@@ -9,10 +9,11 @@ Ctrl-C. `--port 8765` selects a port; the default asks the OS for a free one.
 lifecycle for a caller that manages the process. The command does not launch a
 browser or create a worker-owned persistent service.
 
-The page has six independent native tasks: the original Native basics and
-Readiness and scroll tasks, plus Dispatch desk, Delayed parcel, Archive elevator
-and Gallery crew. The latter four use deterministic fixture variants selected
-by the visible suite seed, so a seed replay recreates the same brief and layout.
+The page has ten independent native tasks: the original Native basics and
+Readiness and scroll tasks, plus Dispatch desk, Delayed parcel, Archive elevator,
+Gallery crew, Queue keeper, Receipt ledger, Recovery room and Changed desk.
+The eight named fixtures use deterministic variants selected by the visible
+suite seed, so a seed replay recreates the same brief and layout.
 Select a task and press **Start** before interacting with it. A still-unmet
 objective remains `not-started` or `running`; only a committed wrong answer, a
 forbidden effect or a deadline produces `FAIL`. User abort and runner
@@ -38,6 +39,29 @@ focus within the card). Hover one card, select exactly the named subset, run
 the visible group action once, then use only the simulated failed item's
 recovery control; successful items remain untouched.
 
+Queue keeper is a local mock player with a Current queue and a broader catalog
+that deliberately repeats titles. Play the named object from Current queue,
+not a same-title catalog object. PASS records object identity, one playback
+advance and an unchanged queue sequence; the catalog control demonstrates the
+false-success replacement and fails the attempt.
+
+Receipt ledger requires the displayed filter and sort, an individual inspection
+of every matching row, and the specified IDs and total. The **Contrast: seek
+one known row** control is a separate target-search path: its receipt says that
+it does not count as exhaustive coverage. A missing matching-row inspection,
+extra row, wrong view or wrong answer produces an actionable FAIL.
+
+Recovery room submits one synthetic job and then exposes an explicitly labeled
+**In-page rename conflict**. Preserve the submitted data, confirm the named
+replacement in that page dialog, and resume only the unfinished step. Resuming
+does not submit another job. This fixture does not exercise an OS chooser,
+filesystem output or a real external service.
+
+Changed desk delays and then replaces the designated control. Wait for the
+visible replacement, record a fresh observation and use the current target.
+The adjacent preview decoy has a clear non-destructive effect and fails the
+attempt without committing data; a stale target is also rejected.
+
 Each terminal receipt records `task_id`, `task_version`, `seed`, `run_id`,
 `attempt_id`, outcome, reason, evidence and cost fields. Receipts are frozen
 after termination. Attempt history preserves earlier outcomes, failure reasons
@@ -55,8 +79,9 @@ The native suite contains only ordinary browser interaction. Extension
 diagnostics remain in
 [`browser-extension/fixtures/control.html`](../browser-extension/fixtures/control.html)
 and use the extension test contract; they are not required by native tasks.
-Do not treat the native page's synthetic readiness or visible outcomes as a
-real chooser, downloaded file or controller billing receipt.
+Do not treat the native page's synthetic readiness, mock playback, in-page
+dialog, delayed layout or visible outcomes as a real external account, media
+service, OS chooser, downloaded file or controller billing receipt.
 
 Use normal `cu observe`, frame capture, native input and outcome verification.
 Give a worker the permitted task, exact window identity, recent evidence,
@@ -65,6 +90,6 @@ interface supports follow-up. Do not have CU select or launch a model
 implicitly. Record whole-task setup, recovery, wall time, model/tool time,
 tokens and money separately; the page's wall-time field is not an API invoice.
 
-This is a synthetic usability playground. Real browser/download and model-cost
-comparisons require separately recorded trials and the complete-task fixture
-documents file verification.
+This is a synthetic usability playground. Real browser/download, OS-dialog,
+media-service and model-cost comparisons require separately recorded trials;
+the native suite does not claim those capabilities.

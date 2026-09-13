@@ -6,13 +6,13 @@
 <main>
   <h1>CU native playground</h1>
   <p>
-    A disposable, extension-free practice suite with six independently scored tasks. Start a task
+    A disposable, extension-free practice suite with ten independently scored tasks. Start a task
     explicitly; changing fields or selecting a task never starts its timer.
   </p>
 
   <section class="task-summary" aria-label="Task summary">
     <h2>Task status</h2>
-    <output id="suite-progress">Suite progress: 0/6 PASS</output>
+    <output id="suite-progress">Suite progress: 0/10 PASS</output>
     <output id="run-meta">Run: not started</output>
     <div id="task-list"></div>
     <div>
@@ -95,6 +95,114 @@
       <div id="gallery-items"></div>
       <button id="gallery-group-action" type="button"></button>
       <output id="gallery-action-status" aria-live="polite"></output>
+    </div>
+
+    <div id="queue-controls" hidden>
+      <h3>Queue keeper</h3>
+      <p id="queue-brief"></p>
+      <output id="queue-player-status" aria-live="polite"></output>
+      <div class="queue-columns">
+        <section aria-label="Current queue">
+          <h4>Current queue</h4>
+          <ol id="queue-current-list"></ol>
+        </section>
+        <section aria-label="Broader catalog">
+          <h4>Broader catalog (contrast)</h4>
+          <div id="queue-catalog-list"></div>
+        </section>
+      </div>
+      <output id="queue-order-status" aria-live="polite"></output>
+    </div>
+
+    <div id="ledger-controls" hidden>
+      <h3>Receipt ledger</h3>
+      <p id="ledger-brief"></p>
+      <div class="ledger-view-controls">
+        <label
+          >Filter
+          <select id="ledger-filter">
+            <option value="all">all rows</option>
+            <option value="ready">ready</option>
+            <option value="held">held</option>
+            <option value="paid">paid</option>
+            <option value="approved">approved</option>
+            <option value="pending">pending</option>
+            <option value="review">review</option>
+          </select>
+        </label>
+        <label
+          >Sort
+          <select id="ledger-sort">
+            <option value="id">ID</option>
+            <option value="amount">amount</option>
+          </select>
+        </label>
+        <label
+          >Direction
+          <select id="ledger-direction">
+            <option value="asc">ascending</option>
+            <option value="desc">descending</option>
+          </select>
+        </label>
+        <button id="ledger-apply-view" type="button">Apply filter and sort</button>
+      </div>
+      <output id="ledger-view-status" aria-live="polite"></output>
+      <table id="ledger-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Status</th>
+            <th>Amount</th>
+            <th>Sender</th>
+            <th>Note</th>
+            <th>Coverage</th>
+          </tr>
+        </thead>
+        <tbody id="ledger-rows"></tbody>
+      </table>
+      <section class="ledger-contrast" aria-label="Target search contrast">
+        <h4>Contrast: seek one known row</h4>
+        <p>Target search is separate evidence and does not count as exhaustive inspection.</p>
+        <label>Known row ID <input id="ledger-search" /></label>
+        <button id="ledger-search-button" type="button">Search one row</button>
+        <output id="ledger-search-status" aria-live="polite"></output>
+      </section>
+      <section aria-label="Exhaustive answer">
+        <h4>Exhaustive answer</h4>
+        <label>Matching IDs <input id="ledger-ids" /></label>
+        <label>Total <input id="ledger-total" type="number" /></label>
+        <button id="ledger-submit" type="button">Submit ledger answer once</button>
+        <output id="ledger-answer-status" aria-live="polite"></output>
+      </section>
+    </div>
+
+    <div id="recovery-controls" hidden>
+      <h3>Recovery room</h3>
+      <p id="recovery-brief"></p>
+      <label>Job name <input id="recovery-name" /></label>
+      <label>Job data <input id="recovery-payload" /></label>
+      <button id="recovery-submit" type="button">Submit job once</button>
+      <output id="recovery-status" aria-live="polite"></output>
+      <div id="recovery-conflict-dialog" role="dialog" aria-label="In-page rename conflict" hidden>
+        <h4>In-page rename conflict</h4>
+        <p id="recovery-conflict-text"></p>
+        <label>New name <input id="recovery-rename" /></label>
+        <button id="recovery-confirm" type="button">Confirm rename</button>
+      </div>
+      <button id="recovery-resume" type="button">Resume unfinished step</button>
+    </div>
+
+    <div id="changed-desk-controls" hidden>
+      <h3>Changed desk</h3>
+      <p id="changed-brief"></p>
+      <button id="changed-schedule" type="button">Wait for desk replacement</button>
+      <output id="changed-layout-status" aria-live="polite"></output>
+      <div class="changed-controls" aria-label="Changed desk controls">
+        <button id="changed-refresh" type="button">Record fresh observation</button>
+        <button id="changed-confirm" type="button"></button>
+        <button id="changed-decoy" type="button"></button>
+      </div>
+      <output id="changed-action-status" aria-live="polite"></output>
     </div>
   </section>
 

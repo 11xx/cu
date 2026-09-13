@@ -64,7 +64,7 @@ caller that reaches straight for `cu click` can still find out what it owes.
 ## Playground
 
 Run `cu playground` and open its printed loopback URL in your browser. It is a
-native suite with explicit Start/retry/reset controls, immutable terminal
+ten-task native suite with explicit Start/retry/reset controls, immutable terminal
 attempt receipts and visible PASS/FAIL/ABORTED results; no extension is
 required. Ctrl-C stops the explicitly launched foreground server. See
 [the playground workflow](docs/playground.md) for bounded controller trials and

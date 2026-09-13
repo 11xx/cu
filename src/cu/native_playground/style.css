@@ -110,7 +110,11 @@ textarea {
 #dispatch-controls,
 #parcel-controls,
 #elevator-controls,
-#gallery-controls {
+#gallery-controls,
+#queue-controls,
+#ledger-controls,
+#recovery-controls,
+#changed-desk-controls {
   margin-top: 16px;
   padding: 12px;
   border: 1px solid #9ab;
@@ -127,7 +131,15 @@ textarea {
 #elevator-progress,
 #elevator-target-status,
 #gallery-selection,
-#gallery-action-status {
+#gallery-action-status,
+#queue-player-status,
+#queue-order-status,
+#ledger-view-status,
+#ledger-search-status,
+#ledger-answer-status,
+#recovery-status,
+#changed-layout-status,
+#changed-action-status {
   display: block;
   margin: 8px 0;
 }
@@ -199,6 +211,65 @@ textarea:disabled {
 
 .gallery-item[data-status="recovered"] {
   border-color: #6d3f91;
+}
+
+.queue-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.queue-columns section,
+.ledger-contrast,
+#recovery-conflict-dialog {
+  padding: 10px;
+  border: 1px solid #9ab;
+  background: #fff;
+}
+
+#queue-current-list,
+#queue-catalog-list {
+  margin: 0;
+  padding: 10px 10px 10px 30px;
+  border: 1px solid #c3cedd;
+  background: #f8fbff;
+}
+
+.current-queue-item {
+  outline: 2px solid #287a42;
+  outline-offset: 2px;
+}
+
+#ledger-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+
+#ledger-table th,
+#ledger-table td {
+  padding: 8px;
+  border: 1px solid #9ab;
+  text-align: left;
+}
+
+#ledger-table tr:nth-child(even) {
+  background: #f8fbff;
+}
+
+#recovery-conflict-dialog {
+  margin: 12px 0;
+  border: 3px solid #a43b3b;
+}
+
+.changed-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #9ab;
+  background: #f8fbff;
 }
 
 .gallery-hover-controls {

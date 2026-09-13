@@ -83,7 +83,7 @@ test("native basics retain a failed first attempt before a passing retry", () =>
     assert.strictEqual(task(dom, taskId).attempts[0], failed);
     assert.equal(task(dom, taskId).attempts[1].outcome, "PASS");
     assert.equal(
-      dom.window.document.querySelector("#suite-progress").textContent.includes("1/6 PASS"),
+      dom.window.document.querySelector("#suite-progress").textContent.includes("1/10 PASS"),
       true,
     );
   } finally {
@@ -214,6 +214,10 @@ test("phase-A tasks are seed-varied, replayable and visibly specified", () => {
     "delayed-parcel",
     "archive-elevator",
     "gallery-crew",
+    "queue-keeper",
+    "receipt-ledger",
+    "recovery-room",
+    "changed-desk",
   ]);
   for (const taskId of ["dispatch-desk", "delayed-parcel", "archive-elevator", "gallery-crew"]) {
     assert.equal(first.tasks[taskId].fixture_seed, replay.tasks[taskId].fixture_seed);
@@ -224,11 +228,31 @@ test("phase-A tasks are seed-varied, replayable and visibly specified", () => {
   }
   const dom = fixture();
   try {
-    assert.equal(dom.window.document.querySelectorAll(".task-card").length, 6);
+    assert.equal(dom.window.document.querySelectorAll(".task-card").length, 10);
     assert.match(dom.window.document.querySelector("#task-list").textContent, /Dispatch desk/);
     assert.match(dom.window.document.querySelector("#task-list").textContent, /Forbidden:/);
   } finally {
     dom.window.close();
+  }
+});
+
+test("phase-B fixtures are seed-varied, replayable and visibly specified", () => {
+  const first = stateApi.createRunState({ run_id: "run-phase-b-alpha", suite_seed: "alpha" });
+  const replay = stateApi.createRunState({ run_id: "run-phase-b-replay", suite_seed: "alpha" });
+  const other = stateApi.createRunState({ run_id: "run-phase-b-beta", suite_seed: "beta" });
+  const varied = ["alpha", "beta", "gamma", "native-playground-seed-1"].map((suite_seed) =>
+    stateApi.createRunState({ suite_seed }),
+  );
+  for (const taskId of ["queue-keeper", "receipt-ledger", "recovery-room", "changed-desk"]) {
+    assert.equal(first.tasks[taskId].fixture_seed, replay.tasks[taskId].fixture_seed);
+    assert.notEqual(first.tasks[taskId].fixture_seed, other.tasks[taskId].fixture_seed);
+    assert.ok(
+      new Set(varied.map((state) => state.tasks[taskId].fixture.variant_index)).size > 1,
+      `${taskId} should select more than one deterministic fixture variant`,
+    );
+    assert.match(first.tasks[taskId].objective, /.+/);
+    assert.match(first.tasks[taskId].permitted_actions, /.+/);
+    assert.match(first.tasks[taskId].forbidden_effects, /.+/);
   }
 });
 
@@ -513,4 +537,187 @@ test("phase-A reducer rejects gallery membership and recovery false successes", 
     at: 3,
   });
   assert.equal(state.tasks[taskId].last_receipt.reason.code, "recovery-reapplies-successes");
+});
+
+test("queue keeper requires current-queue object identity and preserves order", () => {
+  const dom = fixture();
+  try {
+    const taskId = "queue-keeper";
+    click(dom, "select", taskId);
+    click(dom, "start", taskId);
+    const current = task(dom, taskId);
+    const duplicate = current.fixture.catalog.find(
+      (item) => item.title === current.fixture.target_title,
+    );
+    dom.window.document
+      .querySelector(
+        `button[data-action="queue-play"][data-source="catalog"][data-item-id="${duplicate.id}"]`,
+      )
+      .click();
+    assert.equal(task(dom, taskId).status, "FAIL");
+    assert.equal(task(dom, taskId).last_receipt.reason.code, "wrong-object-identity");
+    assert.equal(task(dom, taskId).last_receipt.evidence.queue_replaced, true);
+
+    click(dom, "retry", taskId);
+    const target = task(dom, taskId).fixture.target_id;
+    dom.window.document
+      .querySelector(
+        `button[data-action="queue-play"][data-source="queue"][data-item-id="${target}"]`,
+      )
+      .click();
+    const receipt = task(dom, taskId).last_receipt;
+    assert.equal(task(dom, taskId).status, "PASS");
+    assert.equal(receipt.evidence.queue_preserved, true);
+    assert.equal(receipt.evidence.clicked_object_id, target);
+    assert.equal(receipt.evidence.playback_advances, 1);
+    assert.deepEqual(
+      receipt.evidence.queue_after_play.map((item) => item.id),
+      receipt.evidence.expected_queue.map((item) => item.id),
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("receipt ledger separates target search from exhaustive coverage and scores every row", () => {
+  const dom = fixture();
+  try {
+    const taskId = "receipt-ledger";
+    click(dom, "select", taskId);
+    click(dom, "start", taskId);
+    const taskFixture = task(dom, taskId).fixture;
+    set(dom, "ledger-search", taskFixture.search_target_id);
+    dom.window.document.querySelector("#ledger-search-button").click();
+    assert.equal(task(dom, taskId).current_attempt.state.search_result.counts_as_inspection, false);
+    assert.equal(task(dom, taskId).current_attempt.state.inspected_ids.length, 0);
+
+    const filter = dom.window.document.querySelector("#ledger-filter");
+    const sort = dom.window.document.querySelector("#ledger-sort");
+    const direction = dom.window.document.querySelector("#ledger-direction");
+    filter.value = taskFixture.filter_value;
+    sort.value = taskFixture.sort_key;
+    direction.value = taskFixture.sort_direction;
+    dom.window.document.querySelector("#ledger-apply-view").click();
+    const expectedIds = taskFixture.matching_ids;
+    const partialId = expectedIds[0];
+    dom.window.document
+      .querySelector(`button[data-action="ledger-inspect"][data-item-id="${partialId}"]`)
+      .click();
+    set(dom, "ledger-ids", expectedIds.join(", "));
+    set(dom, "ledger-total", String(taskFixture.expected_total));
+    dom.window.document.querySelector("#ledger-submit").click();
+    assert.equal(task(dom, taskId).status, "FAIL");
+    assert.equal(task(dom, taskId).last_receipt.reason.code, "uninspected-row");
+    assert.ok(task(dom, taskId).last_receipt.evidence.missing_ids.length > 0);
+
+    click(dom, "retry", taskId);
+    filter.value = taskFixture.filter_value;
+    sort.value = taskFixture.sort_key;
+    direction.value = taskFixture.sort_direction;
+    dom.window.document.querySelector("#ledger-apply-view").click();
+    for (const rowId of expectedIds) {
+      dom.window.document
+        .querySelector(`button[data-action="ledger-inspect"][data-item-id="${rowId}"]`)
+        .click();
+    }
+    set(dom, "ledger-ids", expectedIds.join(", "));
+    set(dom, "ledger-total", String(taskFixture.expected_total));
+    dom.window.document.querySelector("#ledger-submit").click();
+    assert.equal(task(dom, taskId).status, "PASS");
+    assert.deepEqual(task(dom, taskId).last_receipt.evidence.inspected_ids, expectedIds);
+    assert.equal(task(dom, taskId).last_receipt.evidence.search_counts_as_inspection, false);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("recovery room handles an in-page rename conflict without duplicate submission", () => {
+  const dom = fixture();
+  try {
+    const taskId = "recovery-room";
+    click(dom, "select", taskId);
+    click(dom, "start", taskId);
+    dom.window.document.querySelector("#recovery-submit").click();
+    assert.equal(task(dom, taskId).status, "running");
+    assert.equal(dom.window.document.querySelector("#recovery-conflict-dialog").hidden, false);
+    assert.equal(
+      dom.window.document.querySelector("#recovery-conflict-dialog").getAttribute("aria-label"),
+      "In-page rename conflict",
+    );
+
+    const attemptId = task(dom, taskId).current_attempt.attempt_id;
+    dom.window.CUNativePlayground.dispatch("RECOVERY_SUBMIT", taskId, {
+      attempt_id: attemptId,
+      at: 2,
+    });
+    assert.equal(task(dom, taskId).status, "FAIL");
+    assert.equal(task(dom, taskId).last_receipt.reason.code, "duplicate-submission");
+
+    click(dom, "retry", taskId);
+    const taskFixture = task(dom, taskId).fixture;
+    dom.window.document.querySelector("#recovery-submit").click();
+    set(dom, "recovery-rename", taskFixture.rename_to);
+    dom.window.document.querySelector("#recovery-confirm").click();
+    assert.equal(task(dom, taskId).current_attempt.state.conflict_resolved, true);
+    dom.window.document.querySelector("#recovery-resume").click();
+    assert.equal(task(dom, taskId).status, "PASS");
+    assert.equal(task(dom, taskId).last_receipt.evidence.job_submissions, 1);
+    assert.equal(task(dom, taskId).last_receipt.evidence.resume_count, 1);
+    assert.equal(task(dom, taskId).last_receipt.evidence.data_preserved, true);
+    assert.notEqual(
+      task(dom, taskId).last_receipt.evidence.conflict.existing_data.payload,
+      taskFixture.payload,
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("changed desk rejects stale and adjacent controls, then accepts a fresh target", async () => {
+  const dom = fixture();
+  try {
+    const taskId = "changed-desk";
+    click(dom, "select", taskId);
+    click(dom, "start", taskId);
+    const firstAttempt = task(dom, taskId).current_attempt.attempt_id;
+    dom.window.document.querySelector("#changed-schedule").click();
+    await waitFor(
+      () => task(dom, taskId).current_attempt?.state.layout_changed,
+      "desk did not change",
+    );
+    dom.window.CUNativePlayground.dispatch("CHANGED_CONFIRM", taskId, {
+      attempt_id: firstAttempt,
+      target_id: task(dom, taskId).fixture.old_target_id,
+      layout_version: 2,
+      at: 3,
+    });
+    assert.equal(task(dom, taskId).status, "FAIL");
+    assert.equal(task(dom, taskId).last_receipt.reason.code, "stale-target");
+
+    click(dom, "retry", taskId);
+    dom.window.document.querySelector("#changed-schedule").click();
+    await waitFor(
+      () => task(dom, taskId).current_attempt?.state.layout_changed,
+      "desk retry did not change",
+    );
+    dom.window.document.querySelector("#changed-decoy").click();
+    assert.equal(task(dom, taskId).status, "FAIL");
+    assert.equal(task(dom, taskId).last_receipt.reason.code, "decoy-target");
+    assert.match(task(dom, taskId).last_receipt.evidence.effect, /non-destructive/);
+    assert.equal(task(dom, taskId).last_receipt.evidence.committed_actions, 0);
+
+    click(dom, "retry", taskId);
+    dom.window.document.querySelector("#changed-schedule").click();
+    await waitFor(
+      () => task(dom, taskId).current_attempt?.state.layout_changed,
+      "desk valid attempt did not change",
+    );
+    dom.window.document.querySelector("#changed-refresh").click();
+    dom.window.document.querySelector("#changed-confirm").click();
+    assert.equal(task(dom, taskId).status, "PASS");
+    assert.equal(task(dom, taskId).last_receipt.evidence.fresh_observations, 1);
+    assert.equal(task(dom, taskId).last_receipt.evidence.committed_actions, 1);
+  } finally {
+    dom.window.close();
+  }
 });

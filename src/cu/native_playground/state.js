@@ -74,6 +74,14 @@
     return sorted(left).join("\u0000") === sorted(right).join("\u0000");
   }
 
+  function sameSequence(left, right) {
+    return left.length === right.length && left.every((value, index) => value === right[index]);
+  }
+
+  function sameRecords(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
   function unique(values) {
     return [...new Set(values.map(String))];
   }
@@ -763,6 +771,777 @@
     };
   }
 
+  function queueDefinition() {
+    const variants = [
+      {
+        target_id: "queue-amber-blue-hour",
+        target_title: "Blue Hour",
+        target_artist: "Northline",
+        current_queue: [
+          { id: "queue-amber-morning", title: "Morning Circuit", artist: "Field Notes" },
+          { id: "queue-amber-blue-hour", title: "Blue Hour", artist: "Northline" },
+          { id: "queue-amber-blue-hour-live", title: "Blue Hour", artist: "Northline Live" },
+        ],
+        catalog: [
+          { id: "catalog-amber-blue-hour", title: "Blue Hour", artist: "Global Catalog" },
+          { id: "catalog-amber-river", title: "River Signal", artist: "Northline" },
+          { id: "catalog-amber-morning", title: "Morning Circuit", artist: "Field Notes" },
+          { id: "catalog-amber-dusk", title: "Dusk Index", artist: "Harbor Radio" },
+        ],
+      },
+      {
+        target_id: "queue-cobalt-paper-suns",
+        target_title: "Paper Suns",
+        target_artist: "Cobalt Choir",
+        current_queue: [
+          { id: "queue-cobalt-glass", title: "Glass Orchard", artist: "Mile Marker" },
+          { id: "queue-cobalt-paper-suns", title: "Paper Suns", artist: "Cobalt Choir" },
+          { id: "queue-cobalt-paper-suns-demo", title: "Paper Suns", artist: "Cobalt Choir Demo" },
+          { id: "queue-cobalt-hush", title: "Hush Signal", artist: "Mile Marker" },
+        ],
+        catalog: [
+          { id: "catalog-cobalt-paper-suns", title: "Paper Suns", artist: "Catalog Session" },
+          { id: "catalog-cobalt-glass", title: "Glass Orchard", artist: "Mile Marker" },
+          { id: "catalog-cobalt-hush", title: "Hush Signal", artist: "Mile Marker" },
+          { id: "catalog-cobalt-thread", title: "Thread Count", artist: "Cobalt Choir" },
+        ],
+      },
+      {
+        target_id: "queue-lime-night-index",
+        target_title: "Night Index",
+        target_artist: "Lime Atlas",
+        current_queue: [
+          { id: "queue-lime-salt", title: "Salt Lines", artist: "Low Meridian" },
+          { id: "queue-lime-night-index", title: "Night Index", artist: "Lime Atlas" },
+          { id: "queue-lime-night-index-alt", title: "Night Index", artist: "Lime Atlas (alt)" },
+        ],
+        catalog: [
+          { id: "catalog-lime-night-index", title: "Night Index", artist: "Catalog Cut" },
+          { id: "catalog-lime-salt", title: "Salt Lines", artist: "Low Meridian" },
+          { id: "catalog-lime-horizon", title: "Horizon Receipt", artist: "Lime Atlas" },
+          { id: "catalog-lime-static", title: "Static Garden", artist: "Low Meridian" },
+        ],
+      },
+    ];
+    return {
+      task_id: "queue-keeper",
+      task_version: 1,
+      seed: "queue-keeper-seed-1",
+      title: "Queue keeper",
+      variants,
+      objective: ({ fixture }) =>
+        `Play “${fixture.target_title}” by ${fixture.target_artist} FROM THE CURRENT QUEUE, preserving queue order.`,
+      scope: "A local mock player's current queue, broader catalog and advancing playback receipt.",
+      permitted_actions:
+        "Choose the named object in Current queue and press its Play control once; inspect the catalog only for contrast.",
+      forbidden_effects:
+        "Playing a same-title catalog object, replacing the queue or playing more than once fails the attempt.",
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      initial_state: ({ fixture }) => ({
+        target_id: fixture.target_id,
+        target_title: fixture.target_title,
+        target_artist: fixture.target_artist,
+        target_index: fixture.current_queue.findIndex((item) => item.id === fixture.target_id),
+        queue: copy(fixture.current_queue),
+        queue_snapshot: copy(fixture.current_queue),
+        catalog: copy(fixture.catalog),
+        current_track_id: fixture.current_queue[0].id,
+        current_index: 0,
+        playback_advances: 0,
+        play_submissions: 0,
+        played_source: null,
+        played_object_id: null,
+        queue_replaced: false,
+        queue_after_play: copy(fixture.current_queue),
+      }),
+      evaluate(action, taskState, event) {
+        if (action !== "queue-play") return null;
+        const evidence = {
+          target_id: taskState.target_id,
+          target_title: taskState.target_title,
+          target_artist: taskState.target_artist,
+          clicked_source: event.source ?? null,
+          clicked_object_id: event.item_id ?? null,
+          expected_queue: taskState.queue_snapshot,
+          queue_after_play: taskState.queue,
+          queue_preserved:
+            sameSequence(
+              taskState.queue.map((item) => item.id),
+              taskState.queue_snapshot.map((item) => item.id),
+            ) && sameRecords(taskState.queue, taskState.queue_snapshot),
+          current_track_id: taskState.current_track_id,
+          current_index: taskState.current_index,
+          target_index: taskState.target_index,
+          playback_advances: taskState.playback_advances,
+          play_submissions: taskState.play_submissions,
+          queue_replaced: taskState.queue_replaced,
+        };
+        if (taskState.play_submissions > 1) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "duplicate-play",
+              message: "Play the named current-queue object once, then retry the attempt.",
+            },
+            evidence,
+          };
+        }
+        if (event.source !== "queue" || event.item_id !== taskState.target_id) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "wrong-object-identity",
+              message:
+                "The same title in the broader catalog is a different object; play the named row from Current queue.",
+            },
+            evidence,
+          };
+        }
+        if (!evidence.queue_preserved || taskState.queue_replaced) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "queue-replaced",
+              message: "Playing the item must preserve every current-queue object and its order.",
+            },
+            evidence,
+          };
+        }
+        if (
+          taskState.current_track_id !== taskState.target_id ||
+          taskState.current_index !== taskState.target_index ||
+          taskState.playback_advances !== 1
+        ) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "playback-not-advanced",
+              message: "The mock player must advance once to the exact current-queue object.",
+            },
+            evidence,
+          };
+        }
+        return {
+          outcome: "PASS",
+          reason: {
+            code: "objective-reached",
+            message: "The current-queue object played once without changing queue order.",
+          },
+          evidence,
+        };
+      },
+    };
+  }
+
+  function ledgerDefinition() {
+    const variants = [
+      {
+        filter_value: "ready",
+        sort_key: "amount",
+        sort_direction: "desc",
+        matching_ids: ["receipt-amber-103", "receipt-amber-101"],
+        expected_total: 187,
+        search_target_id: "receipt-amber-104",
+        rows: [
+          { id: "receipt-amber-101", status: "ready", amount: 72, sender: "Aster", note: "dock" },
+          { id: "receipt-amber-102", status: "held", amount: 91, sender: "Birch", note: "review" },
+          { id: "receipt-amber-103", status: "ready", amount: 115, sender: "Cedar", note: "seal" },
+          { id: "receipt-amber-104", status: "paid", amount: 46, sender: "Dahlia", note: "closed" },
+        ],
+      },
+      {
+        filter_value: "approved",
+        sort_key: "id",
+        sort_direction: "asc",
+        matching_ids: ["receipt-cobalt-201", "receipt-cobalt-204", "receipt-cobalt-205"],
+        expected_total: 264,
+        search_target_id: "receipt-cobalt-202",
+        rows: [
+          { id: "receipt-cobalt-205", status: "approved", amount: 88, sender: "Elm", note: "east" },
+          {
+            id: "receipt-cobalt-201",
+            status: "approved",
+            amount: 104,
+            sender: "Fennel",
+            note: "north",
+          },
+          {
+            id: "receipt-cobalt-202",
+            status: "pending",
+            amount: 61,
+            sender: "Grove",
+            note: "hold",
+          },
+          {
+            id: "receipt-cobalt-204",
+            status: "approved",
+            amount: 72,
+            sender: "Hazel",
+            note: "south",
+          },
+        ],
+      },
+      {
+        filter_value: "review",
+        sort_key: "amount",
+        sort_direction: "asc",
+        matching_ids: ["receipt-lime-303", "receipt-lime-301", "receipt-lime-304"],
+        expected_total: 173,
+        search_target_id: "receipt-lime-302",
+        rows: [
+          { id: "receipt-lime-304", status: "review", amount: 69, sender: "Indigo", note: "third" },
+          {
+            id: "receipt-lime-301",
+            status: "review",
+            amount: 58,
+            sender: "Juniper",
+            note: "first",
+          },
+          { id: "receipt-lime-302", status: "ready", amount: 42, sender: "Kite", note: "target" },
+          { id: "receipt-lime-303", status: "review", amount: 46, sender: "Larch", note: "second" },
+        ],
+      },
+    ];
+    return {
+      task_id: "receipt-ledger",
+      task_version: 1,
+      seed: "receipt-ledger-seed-1",
+      title: "Receipt ledger",
+      variants,
+      objective: ({ fixture }) =>
+        `Filter status “${fixture.filter_value}”, sort by ${fixture.sort_key} ${fixture.sort_direction}, inspect every matching row, then enter IDs ${fixture.matching_ids.join(", ")} and total ${fixture.expected_total}.`,
+      scope:
+        "A synthetic receipt table, an exhaustive filtered scan and a separate known-row search.",
+      permitted_actions:
+        "Set the visible filter and sort, inspect each matching row, enter the specified IDs and total, or use the contrast search for one known row.",
+      forbidden_effects:
+        "Submitting with an uninspected matching row, skipped coverage, wrong view, wrong IDs/total or duplicate answer fails the attempt.",
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      initial_state: ({ fixture }) => ({
+        rows: copy(fixture.rows),
+        expected_filter: fixture.filter_value,
+        expected_sort_key: fixture.sort_key,
+        expected_sort_direction: fixture.sort_direction,
+        expected_ids: copy(fixture.matching_ids),
+        expected_total: fixture.expected_total,
+        search_target_id: fixture.search_target_id,
+        view_filter: "all",
+        view_sort_key: "id",
+        view_sort_direction: "asc",
+        view_changes: 0,
+        inspected_ids: [],
+        submitted_ids: [],
+        submitted_total: "",
+        answer_submissions: 0,
+        search_query: "",
+        search_count: 0,
+        search_result: null,
+      }),
+      evaluate(action, taskState, event) {
+        if (action !== "ledger-submit") return null;
+        const missing = taskState.expected_ids.filter(
+          (rowId) => !taskState.inspected_ids.includes(rowId),
+        );
+        const extra = taskState.inspected_ids.filter(
+          (rowId) => !taskState.expected_ids.includes(rowId),
+        );
+        const evidence = {
+          expected_filter: taskState.expected_filter,
+          expected_sort: {
+            key: taskState.expected_sort_key,
+            direction: taskState.expected_sort_direction,
+          },
+          observed_view: {
+            filter: taskState.view_filter,
+            sort_key: taskState.view_sort_key,
+            sort_direction: taskState.view_sort_direction,
+            changes: taskState.view_changes,
+          },
+          expected_ids: taskState.expected_ids,
+          inspected_ids: taskState.inspected_ids,
+          missing_ids: missing,
+          extra_inspected_ids: extra,
+          submitted_ids: taskState.submitted_ids,
+          submitted_total: taskState.submitted_total,
+          expected_total: taskState.expected_total,
+          answer_submissions: taskState.answer_submissions,
+          search_target_id: taskState.search_target_id,
+          search_result: taskState.search_result,
+          search_counts_as_inspection: false,
+        };
+        if (taskState.answer_submissions > 1) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "duplicate-answer",
+              message: "Submit the ledger answer once after completing the scan.",
+            },
+            evidence,
+          };
+        }
+        if (
+          taskState.view_filter !== taskState.expected_filter ||
+          taskState.view_sort_key !== taskState.expected_sort_key ||
+          taskState.view_sort_direction !== taskState.expected_sort_direction
+        ) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "wrong-view",
+              message: "Apply the filter and sort named in the ledger brief before submitting.",
+            },
+            evidence,
+          };
+        }
+        if (missing.length) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "uninspected-row",
+              message: `Inspect every matching row before answering; missing ${missing.join(", ")}.`,
+            },
+            evidence,
+          };
+        }
+        if (extra.length) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "unexpected-row",
+              message: `The exhaustive scan must cover only matching rows; remove ${extra.join(", ")}.`,
+            },
+            evidence,
+          };
+        }
+        if (!sameMembers(taskState.submitted_ids, taskState.expected_ids)) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "wrong-ids",
+              message: "Enter exactly the IDs shown by the inspected matching rows.",
+            },
+            evidence,
+          };
+        }
+        if (String(taskState.submitted_total) !== String(taskState.expected_total)) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "wrong-total",
+              message: `Enter the exact total ${taskState.expected_total} from the matching rows.`,
+            },
+            evidence,
+          };
+        }
+        return {
+          outcome: "PASS",
+          reason: {
+            code: "objective-reached",
+            message: "Every matching row was inspected and the exact IDs and total were submitted.",
+          },
+          evidence,
+        };
+      },
+    };
+  }
+
+  function recoveryDefinition() {
+    const variants = [
+      {
+        job_label: "Amber ledger export",
+        draft_name: "amber-ledger-final",
+        payload: "18 rows · regional totals",
+        existing_name: "amber-ledger-final",
+        existing_payload: "11 rows · archived totals",
+        rename_to: "amber-ledger-final-2",
+      },
+      {
+        job_label: "Cobalt parcel index",
+        draft_name: "cobalt-parcel-index",
+        payload: "7 bundles · sealed",
+        existing_name: "cobalt-parcel-index",
+        existing_payload: "5 bundles · draft",
+        rename_to: "cobalt-parcel-index-copy",
+      },
+      {
+        job_label: "Lime receipt bundle",
+        draft_name: "lime-receipts-weekly",
+        payload: "31 receipts · verified",
+        existing_name: "lime-receipts-weekly",
+        existing_payload: "29 receipts · pending",
+        rename_to: "lime-receipts-weekly-new",
+      },
+    ];
+    return {
+      task_id: "recovery-room",
+      task_version: 1,
+      seed: "recovery-room-seed-1",
+      title: "Recovery room",
+      variants,
+      objective: ({ fixture }) =>
+        `Submit ${fixture.job_label} as “${fixture.draft_name}” with data “${fixture.payload}”. If the in-page rename conflict appears, preserve that data, rename to “${fixture.rename_to}”, then resume only the unfinished step.`,
+      scope:
+        "One synthetic job submission, an explicitly in-page rename conflict and one resumed step.",
+      permitted_actions:
+        "Submit once, resolve the labeled in-page conflict with the specified new name, then resume the unfinished step.",
+      forbidden_effects:
+        "Do not resubmit after the conflict, lose the differing data, confirm the wrong name or resume before resolving it; no OS chooser is involved.",
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      initial_state: ({ fixture }) => ({
+        job_label: fixture.job_label,
+        expected_name: fixture.draft_name,
+        expected_payload: fixture.payload,
+        existing_name: fixture.existing_name,
+        existing_payload: fixture.existing_payload,
+        expected_rename: fixture.rename_to,
+        name: fixture.draft_name,
+        payload: fixture.payload,
+        rename_input: "",
+        job_submissions: 0,
+        submitted_data: null,
+        conflict_seen: false,
+        conflict_visible: false,
+        conflict_resolved: false,
+        unfinished_step: "submit",
+        rename_submissions: 0,
+        resume_count: 0,
+        resumed_data: null,
+        data_preserved: false,
+      }),
+      evaluate(action, taskState, event) {
+        if (!["recovery-submit", "recovery-confirm", "recovery-resume"].includes(action)) {
+          return null;
+        }
+        const evidence = {
+          expected_data: {
+            name: taskState.expected_name,
+            payload: taskState.expected_payload,
+          },
+          submitted_data: taskState.submitted_data,
+          current_data: { name: taskState.name, payload: taskState.payload },
+          conflict: {
+            label: "In-page rename conflict",
+            existing_data: {
+              name: taskState.existing_name,
+              payload: taskState.existing_payload,
+            },
+            visible: taskState.conflict_visible,
+            seen: taskState.conflict_seen,
+            resolved: taskState.conflict_resolved,
+          },
+          rename_input: taskState.rename_input,
+          expected_rename: taskState.expected_rename,
+          unfinished_step: taskState.unfinished_step,
+          job_submissions: taskState.job_submissions,
+          rename_submissions: taskState.rename_submissions,
+          resume_count: taskState.resume_count,
+          resumed_data: taskState.resumed_data,
+          data_preserved: taskState.data_preserved,
+          event: event.type ?? null,
+        };
+        if (action === "recovery-submit") {
+          if (taskState.job_submissions > 1) {
+            return {
+              outcome: "FAIL",
+              reason: {
+                code: "duplicate-submission",
+                message:
+                  "The conflict is in-page; do not submit the job again. Resume its unfinished step.",
+              },
+              evidence,
+            };
+          }
+          if (
+            taskState.name !== taskState.expected_name ||
+            taskState.payload !== taskState.expected_payload
+          ) {
+            return {
+              outcome: "FAIL",
+              reason: {
+                code: "wrong-submission-data",
+                message: "Preserve the specified job name and differing data when submitting.",
+              },
+              evidence,
+            };
+          }
+          return null;
+        }
+        if (action === "recovery-confirm") {
+          if (!taskState.conflict_seen) {
+            return {
+              outcome: "FAIL",
+              reason: {
+                code: "conflict-not-open",
+                message: "Submit once and handle the labeled in-page conflict before renaming.",
+              },
+              evidence,
+            };
+          }
+          if (taskState.rename_submissions > 1) {
+            return {
+              outcome: "FAIL",
+              reason: {
+                code: "duplicate-rename",
+                message: "Confirm the in-page rename once, then resume the unfinished step.",
+              },
+              evidence,
+            };
+          }
+          if (taskState.rename_input !== taskState.expected_rename) {
+            return {
+              outcome: "FAIL",
+              reason: {
+                code: "wrong-rename",
+                message: "Use the new name specified by the in-page conflict instructions.",
+              },
+              evidence,
+            };
+          }
+          return null;
+        }
+        if (!taskState.conflict_resolved || taskState.unfinished_step !== "resume") {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "resume-before-resolution",
+              message: "Resolve the in-page rename conflict before resuming the unfinished step.",
+            },
+            evidence,
+          };
+        }
+        if (taskState.job_submissions !== 1) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "duplicate-submission",
+              message: "Resume the existing submission; do not create another job submission.",
+            },
+            evidence,
+          };
+        }
+        if (taskState.resume_count > 1) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "duplicate-resume",
+              message: "Resume the unfinished step exactly once per attempt.",
+            },
+            evidence,
+          };
+        }
+        if (!taskState.data_preserved) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "data-not-preserved",
+              message:
+                "Keep the submitted differing data intact while resolving the name conflict.",
+            },
+            evidence,
+          };
+        }
+        return {
+          outcome: "PASS",
+          reason: {
+            code: "objective-reached",
+            message: "The one submission survived the in-page rename conflict and resumed once.",
+          },
+          evidence,
+        };
+      },
+    };
+  }
+
+  function changedDefinition() {
+    const variants = [
+      {
+        desk_label: "Amber approval desk",
+        old_target_id: "changed-amber-confirm-old",
+        target_id: "changed-amber-confirm-new",
+        target_label: "Confirm Amber approval",
+        old_target_label: "Confirm legacy Amber approval",
+        decoy_id: "changed-amber-preview",
+        decoy_label: "Open preview (no commit)",
+        update_delay_ms: 170,
+      },
+      {
+        desk_label: "Cobalt release desk",
+        old_target_id: "changed-cobalt-confirm-old",
+        target_id: "changed-cobalt-confirm-new",
+        target_label: "Confirm Cobalt release",
+        old_target_label: "Confirm legacy Cobalt release",
+        decoy_id: "changed-cobalt-preview",
+        decoy_label: "Open preview (no commit)",
+        update_delay_ms: 260,
+      },
+      {
+        desk_label: "Lime dispatch desk",
+        old_target_id: "changed-lime-confirm-old",
+        target_id: "changed-lime-confirm-new",
+        target_label: "Confirm Lime dispatch",
+        old_target_label: "Confirm legacy Lime dispatch",
+        decoy_id: "changed-lime-preview",
+        decoy_label: "Open preview (no commit)",
+        update_delay_ms: 210,
+      },
+    ];
+    return {
+      task_id: "changed-desk",
+      task_version: 1,
+      seed: "changed-desk-seed-1",
+      title: "Changed desk",
+      variants,
+      objective: ({ fixture }) =>
+        `On the ${fixture.desk_label}, wait for the visible control replacement, take a fresh observation, then press “${fixture.target_label}”.`,
+      scope:
+        "A delayed in-page layout replacement with one designated control and an adjacent non-destructive decoy.",
+      permitted_actions:
+        "Request the desk update, wait for its visible replacement, record a fresh observation and confirm the current target once.",
+      forbidden_effects:
+        "A stale target or adjacent decoy is a failed attempt; the decoy must not commit data or an action.",
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      initial_state: ({ fixture }) => ({
+        desk_label: fixture.desk_label,
+        old_target_id: fixture.old_target_id,
+        old_target_label: fixture.old_target_label,
+        target_id: fixture.target_id,
+        target_label: fixture.target_label,
+        decoy_id: fixture.decoy_id,
+        decoy_label: fixture.decoy_label,
+        layout_version: 1,
+        layout_changed: false,
+        update_requests: 0,
+        update_pending: false,
+        observed_layout_version: 0,
+        observed_target_id: null,
+        fresh_observations: 0,
+        confirm_submissions: 0,
+        confirmed_target_id: null,
+        decoy_clicks: 0,
+        decoy_effect: null,
+        committed_actions: 0,
+      }),
+      evaluate(action, taskState, event) {
+        if (action !== "changed-confirm") return null;
+        const evidence = {
+          desk_label: taskState.desk_label,
+          layout_version: taskState.layout_version,
+          layout_changed: taskState.layout_changed,
+          old_target_id: taskState.old_target_id,
+          intended_target_id: taskState.target_id,
+          update_requests: taskState.update_requests,
+          clicked_target_id: event.target_id ?? null,
+          clicked_layout_version: event.layout_version ?? null,
+          observed_layout_version: taskState.observed_layout_version,
+          observed_target_id: taskState.observed_target_id,
+          fresh_observations: taskState.fresh_observations,
+          confirm_submissions: taskState.confirm_submissions,
+          confirmed_target_id: taskState.confirmed_target_id,
+          decoy_id: taskState.decoy_id,
+          decoy_clicks: taskState.decoy_clicks,
+          decoy_effect: taskState.decoy_effect,
+          committed_actions: taskState.committed_actions,
+        };
+        if (taskState.confirm_submissions > 1) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "duplicate-confirm",
+              message: "Confirm the replacement target once after a fresh observation.",
+            },
+            evidence,
+          };
+        }
+        if (event.target_id === taskState.decoy_id) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "decoy-target",
+              message:
+                "The adjacent preview decoy is non-destructive and is not the designated target.",
+            },
+            evidence: { ...evidence, effect: "non-destructive: preview unchanged; no commit" },
+          };
+        }
+        if (event.target_id === taskState.old_target_id) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "stale-target",
+              message:
+                "The control was replaced; observe the changed desk and use its current target.",
+            },
+            evidence,
+          };
+        }
+        if (event.target_id !== taskState.target_id) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "wrong-target",
+              message: "Use the designated control named by the fresh desk observation.",
+            },
+            evidence,
+          };
+        }
+        if (taskState.update_requests !== 1) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "update-not-requested",
+              message: "Request the delayed desk replacement before confirming its target.",
+            },
+            evidence,
+          };
+        }
+        if (!taskState.layout_changed || event.layout_version !== taskState.layout_version) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "stale-layout",
+              message: "Wait for the visible replacement before confirming the desk action.",
+            },
+            evidence,
+          };
+        }
+        if (
+          taskState.observed_layout_version !== taskState.layout_version ||
+          taskState.observed_target_id !== taskState.target_id
+        ) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "fresh-observation-required",
+              message: "Record a fresh observation after the layout replacement, then confirm.",
+            },
+            evidence,
+          };
+        }
+        if (
+          taskState.committed_actions !== 1 ||
+          taskState.confirmed_target_id !== taskState.target_id
+        ) {
+          return {
+            outcome: "FAIL",
+            reason: {
+              code: "confirmation-not-committed",
+              message: "The fresh observation must authorize exactly one intended confirmation.",
+            },
+            evidence,
+          };
+        }
+        return {
+          outcome: "PASS",
+          reason: {
+            code: "objective-reached",
+            message: "The replaced target was freshly observed and confirmed once.",
+          },
+          evidence,
+        };
+      },
+    };
+  }
+
   const TASK_DEFINITIONS = Object.freeze([
     basicsDefinition(),
     followupDefinition(),
@@ -770,6 +1549,10 @@
     parcelDefinition(),
     archiveDefinition(),
     galleryDefinition(),
+    queueDefinition(),
+    ledgerDefinition(),
+    recoveryDefinition(),
+    changedDefinition(),
   ]);
   const DEFINITION_BY_ID = Object.freeze(
     Object.fromEntries(TASK_DEFINITIONS.map((definition) => [definition.task_id, definition])),
@@ -1305,6 +2088,205 @@
               : current.items,
         }),
         "gallery-recover",
+      );
+    }
+    if (taskId === "queue-keeper" && action.type === "QUEUE_PLAY") {
+      const source = action.source === "catalog" ? "catalog" : "queue";
+      const itemId = String(action.item_id ?? "");
+      return updateRunning(
+        state,
+        taskId,
+        action,
+        (current) => {
+          const collection = source === "queue" ? current.queue : current.catalog;
+          const selected = collection.find((item) => item.id === itemId);
+          const replacedQueue = source === "catalog" && selected ? [copy(selected)] : current.queue;
+          const selectedIndex =
+            source === "queue" ? collection.findIndex((item) => item.id === itemId) : 0;
+          return {
+            ...current,
+            play_submissions: current.play_submissions + 1,
+            played_source: source,
+            played_object_id: itemId,
+            current_track_id: itemId,
+            current_index: selectedIndex,
+            playback_advances: current.playback_advances + 1,
+            queue_replaced: source === "catalog" && Boolean(selected),
+            queue: replacedQueue,
+            queue_after_play: copy(replacedQueue),
+          };
+        },
+        "queue-play",
+      );
+    }
+    if (taskId === "receipt-ledger" && action.type === "LEDGER_VIEW") {
+      return updateRunning(state, taskId, action, (current) => ({
+        ...current,
+        view_filter: String(action.filter ?? current.view_filter),
+        view_sort_key: String(action.sort_key ?? current.view_sort_key),
+        view_sort_direction: String(action.sort_direction ?? current.view_sort_direction),
+        view_changes: current.view_changes + 1,
+      }));
+    }
+    if (taskId === "receipt-ledger" && action.type === "LEDGER_IDS_INPUT") {
+      return updateField(state, taskId, action, "submitted_ids_input");
+    }
+    if (taskId === "receipt-ledger" && action.type === "LEDGER_TOTAL_INPUT") {
+      return updateField(state, taskId, action, "submitted_total_input");
+    }
+    if (taskId === "receipt-ledger" && action.type === "LEDGER_SEARCH_INPUT") {
+      return updateField(state, taskId, action, "search_query");
+    }
+    if (taskId === "receipt-ledger" && action.type === "LEDGER_INSPECT") {
+      const rowId = String(action.row_id ?? "");
+      return updateRunning(state, taskId, action, (current) => ({
+        ...current,
+        inspected_ids: current.inspected_ids.includes(rowId)
+          ? current.inspected_ids
+          : [...current.inspected_ids, rowId],
+      }));
+    }
+    if (taskId === "receipt-ledger" && action.type === "LEDGER_SEARCH") {
+      const rowId = String(action.row_id ?? task.current_attempt?.state.search_query ?? "");
+      const found = rowId === task.current_attempt?.state.search_target_id;
+      return updateRunning(state, taskId, action, (current) => ({
+        ...current,
+        search_query: rowId,
+        search_count: current.search_count + 1,
+        search_result: {
+          mode: "target-search",
+          row_id: rowId,
+          found,
+          counts_as_inspection: false,
+        },
+      }));
+    }
+    if (taskId === "receipt-ledger" && action.type === "LEDGER_SUBMIT") {
+      const submittedIds = Array.isArray(action.ids) ? action.ids.map(String) : [];
+      return updateRunning(
+        state,
+        taskId,
+        action,
+        (current) => ({
+          ...current,
+          submitted_ids: submittedIds,
+          submitted_total: String(action.total ?? ""),
+          answer_submissions: current.answer_submissions + 1,
+        }),
+        "ledger-submit",
+      );
+    }
+    if (taskId === "recovery-room" && action.type === "RECOVERY_NAME_INPUT") {
+      return updateField(state, taskId, action, "name");
+    }
+    if (taskId === "recovery-room" && action.type === "RECOVERY_PAYLOAD_INPUT") {
+      return updateField(state, taskId, action, "payload");
+    }
+    if (taskId === "recovery-room" && action.type === "RECOVERY_RENAME_INPUT") {
+      return updateField(state, taskId, action, "rename_input");
+    }
+    if (taskId === "recovery-room" && action.type === "RECOVERY_SUBMIT") {
+      return updateRunning(
+        state,
+        taskId,
+        action,
+        (current) => ({
+          ...current,
+          job_submissions: current.job_submissions + 1,
+          submitted_data: { name: current.name, payload: current.payload },
+          conflict_seen: true,
+          conflict_visible: true,
+          conflict_resolved: false,
+          unfinished_step: "resolve-conflict",
+          data_preserved: false,
+        }),
+        "recovery-submit",
+      );
+    }
+    if (taskId === "recovery-room" && action.type === "RECOVERY_CONFIRM") {
+      return updateRunning(
+        state,
+        taskId,
+        action,
+        (current) => ({
+          ...current,
+          rename_submissions: current.rename_submissions + 1,
+          conflict_visible: false,
+          conflict_resolved: current.rename_input === current.expected_rename,
+          unfinished_step:
+            current.rename_input === current.expected_rename ? "resume" : current.unfinished_step,
+          data_preserved: Boolean(
+            current.submitted_data &&
+              current.submitted_data.name === current.expected_name &&
+              current.submitted_data.payload === current.payload,
+          ),
+        }),
+        "recovery-confirm",
+      );
+    }
+    if (taskId === "recovery-room" && action.type === "RECOVERY_RESUME") {
+      return updateRunning(
+        state,
+        taskId,
+        action,
+        (current) => ({
+          ...current,
+          resume_count: current.resume_count + 1,
+          resumed_data: { name: current.rename_input, payload: current.payload },
+          data_preserved: Boolean(
+            current.submitted_data &&
+              current.submitted_data.name === current.expected_name &&
+              current.submitted_data.payload === current.payload &&
+              current.payload === current.expected_payload,
+          ),
+        }),
+        "recovery-resume",
+      );
+    }
+    if (taskId === "changed-desk" && action.type === "CHANGED_SCHEDULE") {
+      return updateRunning(state, taskId, action, (current) => ({
+        ...current,
+        update_requests: current.update_requests + 1,
+        update_pending: true,
+      }));
+    }
+    if (taskId === "changed-desk" && action.type === "CHANGED_LAYOUT") {
+      return updateRunning(state, taskId, action, (current) => ({
+        ...current,
+        layout_version: 2,
+        layout_changed: true,
+        update_pending: false,
+      }));
+    }
+    if (taskId === "changed-desk" && action.type === "CHANGED_OBSERVE") {
+      return updateRunning(state, taskId, action, (current) => ({
+        ...current,
+        observed_layout_version: numberOr(action.layout_version, 0),
+        observed_target_id: String(action.target_id ?? ""),
+        fresh_observations: current.fresh_observations + 1,
+      }));
+    }
+    if (taskId === "changed-desk" && action.type === "CHANGED_CONFIRM") {
+      const targetId = String(action.target_id ?? "");
+      return updateRunning(
+        state,
+        taskId,
+        action,
+        (current) => ({
+          ...current,
+          confirm_submissions: current.confirm_submissions + 1,
+          confirmed_target_id: targetId,
+          decoy_clicks: current.decoy_clicks + (targetId === current.decoy_id ? 1 : 0),
+          decoy_effect:
+            targetId === current.decoy_id
+              ? "non-destructive: preview unchanged; no commit"
+              : current.decoy_effect,
+          committed_actions:
+            targetId === current.target_id
+              ? current.committed_actions + 1
+              : current.committed_actions,
+        }),
+        "changed-confirm",
       );
     }
     return state;
