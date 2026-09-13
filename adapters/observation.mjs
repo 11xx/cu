@@ -4,7 +4,7 @@ import { open } from "node:fs/promises";
 
 const MAX_TEXT = 64 * 1024;
 const MAX_IMAGE = 4 * 1024 * 1024;
-const SHOT_FLAGS = new Set(["--window", "--output", "--region", "--landmark", "--context", "--for", "--after", "--watch"]);
+const SHOT_FLAGS = new Set(["--window", "--output", "--region", "--target-window", "--landmark", "--context", "--for", "--after", "--watch"]);
 
 // No shell, retries, caches, or input-device access: cu owns execution.
 export function runCu(argv, input, { signal, cwd, executable = "cu", timeout = 120000 } = {}) {

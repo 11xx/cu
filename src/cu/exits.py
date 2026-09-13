@@ -23,6 +23,7 @@ TARGET_NOT_VISIBLE = 27
 VERIFY_UNAVAILABLE = 28
 CAPTURE_BUDGET_EXCEEDED = 29
 DENIED_BY_POLICY = 30
+TARGET_AMBIGUOUS = 31
 ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
 DESKTOP_BUSY = 42
@@ -82,6 +83,10 @@ RESPONSE = {
         "The encoded image exceeds the capture profile's byte limit. "
         "Request a smaller region or a lower-resolution profile."
     ),
+    TARGET_AMBIGUOUS: (
+        "The intended recipient cannot be established at the aimed point. "
+        "Re-observe and arrange the target or choose an unambiguous point."
+    ),
     DENIED_BY_POLICY: "Refused by the denylist or a locked session. Do not retry; tell the user.",
     ABORTED_BY_USER: (
         "The user aborted. Stop. Do not retry, and do not attempt to clear the abort."
@@ -126,6 +131,7 @@ RETRYABLE = frozenset(
         FOCUS_CHANGED,
         CONTENT_CHANGED,
         TARGET_NOT_FOUND,
+        TARGET_AMBIGUOUS,
         TIMED_OUT,
         HUMAN_ACTIVE,
         DESKTOP_BUSY,
