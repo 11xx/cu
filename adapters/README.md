@@ -30,11 +30,46 @@ the batch and capture. Human activity and independent observations remain possib
 
 ## Other harnesses
 
-Import `observeTogether(request, {signal, cwd})`. It returns `content` plus
+Import `observeTogether(request, {signal, cwd})`, `seekTarget`, or
+`scanCoverage`. `observeTogether` returns `content` plus
 `details`. Register it using the harness's existing tool API; send each text and
 image block together, without resizing the image. Image blocks contain
 `type: "image"`, `mimeType: "image/png"`, and base64 `data`. Translate only this
 outer representation when a harness uses another image-block schema.
+
+The adapter also exports `seekTarget` and `scanCoverage` for callers that need
+more than one bounded scroll. These are policies around `observeTogether`, not
+CU commands: each call requires a caller-owned `assess` function, and that
+function supplies structured evidence from the returned report. The adapter
+does not inspect pixels, evaluate a selector, or choose a model.
+
+`seekTarget` requires a named `target`, `windowAddress`, `containerId`, image
+`at` point, capture `shot`, `direction`, `initialStep`, `maxStep`, `maxInput`,
+`maxTravel`, `deadlineMs`, and `maxNoProgress`. `maxBacktracks` is an optional
+finite bound. The assessor returns a stable `source`, the observed
+`container: {id, position}`, and `target: {state, verified, postcondition}`.
+States are `absent`, `not-observed`, `candidate`, `visible`, and `reached`;
+absence must be authoritative. Only `verified: true` together with
+`postcondition: true` completes SEEK. A candidate or near-target report halves
+the next step, while fresh `overshot: true` evidence permits only the declared
+number of smaller reverse steps. `maxInput` counts requested detents and
+`maxTravel` counts observed container-position travel; neither is a pixel
+conversion.
+
+`scanCoverage` requires the same binding and budgets plus a source `range`,
+fixed detent `step`, and required `overlap`. Its assessor returns
+`coverage: {start, end}` and boolean `end` evidence. The result retains every
+segment's source and CU frame descriptor. SCAN is complete only when the
+requested range has no gap and every added segment overlaps earlier evidence
+by at least the declared amount; an overlap violation remains recorded even if
+later evidence happens to bridge the interval. SCAN never grows its step
+geometrically.
+
+Both policies capture after every action, verify the captured frame's bound
+window and the assessor's container identity, and stop on refusal, uncertain
+or partial action outcome, mutation, cancellation, deadline, or no progress.
+`attempts[].receipt` retains the CU action receipt. No action prefix is replayed
+after a refusal, cancellation, deadline, or unavailable fresh observation.
 
 The text block is JSON with schema `cu-observation/2`:
 
