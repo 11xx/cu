@@ -167,3 +167,8 @@ def test_every_command_the_tactic_names_exists(command):
     subparsers = [a for a in parser._actions if hasattr(a, "choices") and a.choices]
     assert any(name in (a.choices or {}) for a in subparsers)
     assert command in guide.GUIDE
+
+
+def test_guide_keeps_arrangement_explicit_and_capture_observational():
+    assert "Capture does not arrange a window" in guide.GUIDE
+    assert "no automatic" in guide.GUIDE

@@ -150,6 +150,11 @@ ACT THROUGH THE FRAME YOU READ
   Native pointer, keyboard, and focus commands take --dry-run: each interlock
   runs and the log is written without emitting an event.
 
+  `focus` is the explicit operation that can bring a named window's workspace
+  into view. Capture does not arrange a window, and there is no automatic
+  maximize, fullscreen, move, or restore step. Treat any layout change as a
+  visible user decision until a reversible presentation contract is available.
+
   A frame is bound to what it depicted, not only to where. A window that keeps
   its place while its content changes — a tab that navigated, a view that was
   replaced — refuses with 26 rather than clicking the old picture's coordinate

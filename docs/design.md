@@ -374,6 +374,13 @@ drive their desktop can see it going wrong and stop it, which is the cheapest
 and fastest interlock in the system, and the only one that needs no code to
 work. Somewhere invisible is where an agent's mistakes get expensive.
 
+`focus` may bring the selected window's workspace into view as part of the
+explicit focus request. Capture remains observational and does not rearrange a
+window. A reversible `present`/`restore` capability requires a compositor seam
+that can report exact before and after geometry and refuse a restore after the
+user changes the layout; no such public operation is assumed by the current
+contract.
+
 Headless outputs remain the right place to *develop* the input path, so they
 are reachable through `cu sandbox create` — a command that names what it is
 doing — rather than by improvising `hyprctl output` calls. `cu sandbox remove`
