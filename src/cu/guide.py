@@ -383,6 +383,7 @@ CHOOSE THE POSTCONDITION BEFORE INPUT
 
 BROWSERS
   cu browser list                What is installed, and what each resolves.
+  cu browser products            Google Chrome/Chromium binaries and profiles.
   cu browser actions             What the focused browser can be driven by.
   cu browser focus-urlbar
   cu browser close-tab
@@ -390,6 +391,11 @@ BROWSERS
   Drive chrome by action and page content by coordinates. Actions resolve from
   each browser's own configuration; a browser that resolves nothing until the
   user configures it is being honest, not broken.
+
+  `cu browser products` reports Chrome and Chromium candidates, resolved binary
+  paths, profile directories, and whether both are present. It does not install
+  an extension, register a native host, grant a tab, or claim that a Firefox
+  Manifest V2 setup works in a Chromium Manifest V3 worker.
 
   A browser may be configured to keep its chrome hidden until the pointer
   reaches an edge, so an address bar missing from a capture may be revealable

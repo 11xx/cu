@@ -39,6 +39,25 @@ CHROMIUM = {
     "microsoft-edge", "opera",
 }
 
+# Chromium product paths are candidates, not proof of installation. A row is
+# usable only when a matching binary and profile are both present at runtime.
+CHROMIUM_PRODUCTS = {
+    "google-chrome": {
+        "name": "Google Chrome",
+        "binaries": ("google-chrome", "google-chrome-stable"),
+        "profiles": (
+            "~/.config/google-chrome",
+            "~/.config/google-chrome-beta",
+            "~/.config/google-chrome-unstable",
+        ),
+    },
+    "chromium": {
+        "name": "Chromium",
+        "binaries": ("chromium", "chromium-browser"),
+        "profiles": ("~/.config/chromium",),
+    },
+}
+
 #: Where each Gecko browser keeps its profiles. The directory name does not
 #: follow the executable name, so it is listed rather than derived.
 GECKO_HOMES = {
@@ -133,6 +152,35 @@ DESKTOP_DIRS = ("/usr/share/applications", "~/.local/share/applications")
 
 class BrowserError(RuntimeError):
     pass
+
+
+def product_candidates() -> list[dict[str, Any]]:
+    """Report named Chromium products without claiming a usable setup."""
+    candidates = []
+    for product_id, definition in CHROMIUM_PRODUCTS.items():
+        resolved = None
+        for binary in definition["binaries"]:
+            resolved = shutil.which(binary)
+            if resolved:
+                break
+        profiles = [
+            str(Path(profile).expanduser())
+            for profile in definition["profiles"]
+            if Path(profile).expanduser().is_dir()
+        ]
+        candidates.append(
+            {
+                "id": product_id,
+                "name": definition["name"],
+                "family": "chromium",
+                "binary_candidates": list(definition["binaries"]),
+                "resolved": resolved,
+                "profiles": profiles,
+                "available": resolved is not None and bool(profiles),
+                "setup": "unsupported-until-mv3-identity-is-proven",
+            }
+        )
+    return candidates
 
 
 def _parse_desktop(path: Path) -> dict[str, str] | None:

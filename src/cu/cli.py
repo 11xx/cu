@@ -1589,6 +1589,20 @@ def cmd_browser(args: argparse.Namespace) -> int:
     cfg = config.load()
     browsers = browser.discover()
 
+    if args.action == "products":
+        products = browser.product_candidates()
+
+        def render_products(data: Any) -> None:
+            for product in data["products"]:
+                state = "available" if product["available"] else "unavailable"
+                print(
+                    f"{product['name']}: {state}; binary {product['resolved'] or 'missing'}; "
+                    f"profiles {len(product['profiles'])}"
+                )
+
+        _emit({"products": products}, args.json, render_products)
+        return exits.OK
+
     if args.action == "list":
         def render(data: Any) -> None:
             for b in data["browsers"]:
@@ -2560,7 +2574,8 @@ def build_parser() -> argparse.ArgumentParser:
     browsing.add_argument(
         "action",
         help="An action such as focus-urlbar or close-tab; "
-        "'list' shows installed browsers and 'actions' shows what one resolves",
+        "'list' shows installed browsers, 'products' shows Chrome/Chromium candidates, "
+        "and 'actions' shows what one resolves",
     )
     browsing.add_argument(
         "--browser", metavar="NAME", help="Which browser (default: the focused window's)"
