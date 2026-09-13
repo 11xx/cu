@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
-from cu import actions, capture, checks, cli, frames, observe, png
+from cu import actions, capture, checks, cli, config, exits, frames, observe, png
 
 
 def _world(monkeypatch, sequence):
@@ -124,3 +125,31 @@ def test_hover_dwell_only_returns_a_frame_without_reveal_success(monkeypatch, ca
     assert result["condition"]["status"] == "not-requested"
     assert result["observation"] is not None
     assert result["reveal"]["status"] == "unknown"
+
+
+def test_hover_watch_yields_to_abort_during_capture(monkeypatch, capsys, tmp_path):
+    reference, cursor, _window = _world(monkeypatch, [_png(0), _png(1)])
+    _device(monkeypatch, cursor)
+    runtime = Path(tmp_path) / "runtime"
+    abort = runtime / "cu" / config.ABORT_FILENAME
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    original = capture.grab_region
+
+    def capture_and_abort(*args):
+        abort.parent.mkdir(parents=True, exist_ok=True)
+        abort.touch()
+        return original(*args)
+
+    monkeypatch.setattr(capture, "grab_region", capture_and_abort)
+    assert cli.main([
+        "hover", "--frame", reference["id"], "--at", "10,10", "--duration", "0.1",
+        "--hz", "10", "--move-timeout", "1", "--dwell", "0", "--watch", "full",
+        "--poll-ms", "1", "--quiet-ms", "0", "--timeout", "0.1", "--json",
+    ]) == exits.ABORTED_BY_USER
+    assert capsys.readouterr().out == ""
+
+
+def test_hover_watch_timeout_has_a_finite_bound():
+    assert cli.main([
+        "hover", "--frame", "f1", "--at", "0,0", "--watch", "full", "--timeout", "10.1",
+    ]) == exits.USAGE

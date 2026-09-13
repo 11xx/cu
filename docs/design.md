@@ -150,14 +150,18 @@ feeds back through cursor observation because libinput acceleration means an
 event delta is not a logical-pixel distance. The route is checked against the
 inspected frame before every sample; abort, stale target, a pointer outside the
 route, device failure, deadline, or non-convergence stops the operation. It
-never finishes with a hidden warp. A click remains: warp through IPC, assert the
-expected window is still under the point, then press and release through uinput.
+never finishes with a hidden warp. A pointer displacement between native
+samples is treated as user intervention and yields with `HUMAN_ACTIVE` instead
+of being corrected as acceleration. A click remains: warp through IPC, assert
+the expected window is still under the point, then press and release through
+uinput.
 
 `cu hover` composes one native entry with a stationary dwell. It can poll a
 watched image box for change and settle, then returns the final frame with pixel
 condition evidence. A changed frame and a dwell alone do not establish that a
 particular application control appeared; the caller reads the returned frame
-before selecting the next action.
+before selecting the next action. The watched phase rechecks abort, focus, and
+pointer ownership and has a ten-second upper bound.
 
 **A second keyboard path exists, for a sleeping desktop.** Genuine libinput
 events are what make uinput injection indistinguishable from a human, and are
@@ -369,9 +373,10 @@ resolves to one exact observed address at capture time and is stored as
 window capture would refuse its obstruction. Aimed input rechecks the target's
 address, class, geometry, content identity when available, visible windows, and
 covering layer surfaces immediately before dispatch and after device
-settlement. A covering layer or more than one possible window refuses with
-`TARGET_AMBIGUOUS` (31); an unbound output or region retains its observational
-meaning and records `target_window: null`.
+settlement. A top or overlay layer or more than one possible window refuses
+with `TARGET_AMBIGUOUS` (31); background and bottom layers remain below the
+window. An unbound output or region retains its observational meaning and
+records `target_window: null`.
 
 Aimed capture is an optimization over a working default, not the default
 itself. `--window active` stays the recommended first call.

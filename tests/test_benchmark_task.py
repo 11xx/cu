@@ -14,6 +14,8 @@ def test_verifier_accepts_exact_recovered_fixture(tmp_path):
     assert result["recovery"]["ids"] == ["item-03"]
     assert result["unexpected_dialog"]["status"] == "observed"
     assert result["timing"]["model_seconds"] is None
+    assert result["preservation"]["receipts"][0]["status"] == "unchanged"
+    assert result["preservation"]["receipts"][0]["different_from_expected"] is True
 
 
 def test_verifier_rejects_missing_zero_wrong_and_duplicate_count_only(tmp_path):
@@ -49,6 +51,28 @@ def test_verifier_rejects_a_still_changing_file(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "read_bytes", changing_read)
     result = verify(output, items)
     assert any(failure["kind"] == "changing" for failure in result["failures"])
+
+
+def test_verifier_rejects_wrong_artifact_names_and_formats(tmp_path):
+    result = run_trial(tmp_path)
+    assert result["outcome"] == "completed"
+    output = tmp_path / "artifacts"
+    for path in list(output.rglob("*")):
+        if path.is_file():
+            path.rename(path.with_name("wrong.extension"))
+    rejected = verify(output)
+    kinds = {failure["kind"] for failure in rejected["failures"]}
+    assert rejected["ok"] is False
+    assert "missing-artifact" in kinds
+    assert "unexpected-artifact" in kinds
+
+
+def test_duplicate_basenames_are_scoped_by_artifact_id(tmp_path):
+    result = run_trial(tmp_path)
+    output = tmp_path / "artifacts"
+    assert result["verification"]["ok"] is True
+    assert (output / "item-01" / "README.md").exists()
+    assert (output / "item-02" / "README.md").exists()
 
 
 def test_modes_emit_same_fixture_contract_and_unknown_external_costs(tmp_path):

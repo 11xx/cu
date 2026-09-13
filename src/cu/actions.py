@@ -266,6 +266,23 @@ def _motion_point_guard(
     return under
 
 
+def _confirm_motion_cursor(
+    expected: dict[str, float], current: dict[str, float], *, phase: str
+) -> None:
+    """Yield when the pointer moved without a native event from this command.
+
+    The feedback loop may correct compositor acceleration, but it must never
+    treat an unexplained displacement as acceleration. Once a human moves the
+    pointer between samples, sending another corrective delta would fight the
+    hand and can land on a different target.
+    """
+    if current != expected:
+        raise Refused(
+            exits.HUMAN_ACTIVE,
+            f"pointer moved between native samples during {phase}; yielding to the user",
+        )
+
+
 def move(
     cfg: dict[str, Any],
     frame_id: str,
@@ -332,6 +349,7 @@ def move(
         settled = observe.cursor()
         safety.confirm_pointer(cfg, (start["x"], start["y"]), settled)
         actual = settled
+        last_own_cursor = actual
         for index, waypoint in enumerate(route[1:], 1):
             scheduled = started + min(duration, index * period)
             remaining = scheduled - time.monotonic()
@@ -351,6 +369,7 @@ def move(
                 cfg, frame, waypoint, live_monitors, live_windows, live_layers, expected_focus
             )
             current = observe.cursor()
+            _confirm_motion_cursor(last_own_cursor, current, phase="sample")
             if not _inside(frame["logical_rect"], current):
                 raise Refused(
                     exits.HUMAN_ACTIVE,
@@ -365,6 +384,7 @@ def move(
                 device.move_relative(dx, dy)
                 result["delta_events"] += 1
             actual = observe.cursor()
+            last_own_cursor = actual
         while True:
             live_monitors = observe.monitors() if frame.get("window") is None else monitors
             live_windows = observe.windows(live_monitors)
@@ -372,6 +392,7 @@ def move(
                 observe.layer_surfaces() if frame.get("target_window") is not None else layers
             )
             actual = observe.cursor()
+            _confirm_motion_cursor(last_own_cursor, actual, phase="convergence")
             _motion_point_guard(
                 cfg, frame, actual, live_monitors, live_windows, live_layers, expected_focus
             )
@@ -389,6 +410,7 @@ def move(
             if dx or dy:
                 device.move_relative(dx, dy)
                 result["delta_events"] += 1
+                last_own_cursor = observe.cursor()
             time.sleep(period)
     result.update(
         {

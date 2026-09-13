@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 FIXTURE_VERSION = "cu-task-fixture/1"
+PRESERVED_RELATIVE = Path("pre-existing") / "README.md"
+PRESERVED_CONTENT = "pre-existing fixture data; keep this file unchanged\n"
 FORMATS = ("md", "txt", "js", "json", "c")
 NAMES = (
     "README.md",
@@ -69,14 +71,86 @@ def _write_item(root: Path, item: dict[str, Any]) -> Path:
     return path
 
 
+def _relative_artifact(item: dict[str, Any]) -> Path:
+    """Return the fixture path, rejecting names that escape their item scope."""
+    basename = Path(item["basename"])
+    if basename.name != item["basename"] or basename.suffix.lstrip(".") != item["format"]:
+        raise ValueError(f"invalid artifact name/format for {item['id']!r}")
+    item_id = Path(item["id"])
+    if item_id.name != item["id"] or item_id in {Path("."), Path("..")}:
+        raise ValueError(f"invalid artifact id {item['id']!r}")
+    return item_id / basename
+
+
+def _preservation_receipt(root: Path, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Create a differing pre-existing file outside the produced artifact tree."""
+    path = root / PRESERVED_RELATIVE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(PRESERVED_CONTENT)
+    before = path.read_bytes()
+    expected = {item["sha256"] for item in items}
+    return {
+        "path": str(PRESERVED_RELATIVE),
+        "before_sha256": hashlib.sha256(before).hexdigest(),
+        "before_size": len(before),
+        "different_from_expected": hashlib.sha256(before).hexdigest() not in expected,
+        "_path": path,
+    }
+
+
+def _finish_preservation(receipt: dict[str, Any]) -> dict[str, Any]:
+    path = receipt.pop("_path")
+    try:
+        after = path.read_bytes()
+    except OSError:
+        receipt.update({"status": "missing", "ok": False})
+        return receipt
+    after_sha256 = hashlib.sha256(after).hexdigest()
+    receipt.update(
+        {
+            "after_sha256": after_sha256,
+            "after_size": len(after),
+            "status": "unchanged" if after_sha256 == receipt["before_sha256"] else "changed",
+        }
+    )
+    receipt["ok"] = (
+        receipt["status"] == "unchanged" and receipt["different_from_expected"]
+    )
+    return receipt
+
+
 def verify(root: Path, items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Verify exact content, count, and stability of every produced artifact."""
+    """Verify exact paths, formats, content, count, and stability of artifacts."""
     items = items or expected_items()
     expected = Counter(item["sha256"] for item in items)
-    files = sorted(path for path in root.rglob("*") if path.is_file())
     failures: list[dict[str, Any]] = []
+    expected_by_path: dict[Path, dict[str, Any]] = {}
+    for item in items:
+        try:
+            relative = _relative_artifact(item)
+        except (KeyError, TypeError, ValueError) as exc:
+            failures.append({"kind": "invalid-expected-artifact", "detail": str(exc)})
+            continue
+        if relative in expected_by_path:
+            failures.append({"kind": "duplicate-expected-path", "path": str(relative)})
+        expected_by_path[relative] = item
+    files = sorted(path for path in root.rglob("*") if path.is_file())
     actual: Counter[str] = Counter()
     for path in files:
+        relative = path.relative_to(root)
+        item = expected_by_path.get(relative)
+        if item is None:
+            failures.append({"kind": "unexpected-artifact", "path": str(relative)})
+        elif path.suffix.lstrip(".") != item["format"]:
+            failures.append(
+                {
+                    "kind": "format-mismatch",
+                    "path": str(relative),
+                    "expected": item["format"],
+                    "actual": path.suffix.lstrip("."),
+                }
+            )
         before = path.stat()
         data = path.read_bytes()
         after = path.stat()
@@ -87,6 +161,14 @@ def verify(root: Path, items: list[dict[str, Any]] | None = None) -> dict[str, A
             failures.append({"kind": "changing", "path": str(path.relative_to(root))})
             continue
         actual[hashlib.sha256(data).hexdigest()] += 1
+    for relative in sorted(set(expected_by_path) - {path.relative_to(root) for path in files}):
+        failures.append(
+            {
+                "kind": "missing-artifact",
+                "path": str(relative),
+                "id": expected_by_path[relative]["id"],
+            }
+        )
     missing = list((expected - actual).elements())
     unexpected = list((actual - expected).elements())
     for digest in missing:
@@ -132,6 +214,7 @@ def run_trial(
     recovery: list[str] = []
     output = root / "artifacts"
     output.mkdir(parents=True, exist_ok=True)
+    preservation = _preservation_receipt(root, items)
     application_started = time.perf_counter()
     batches = [[item] for item in items] if mode == "individual" else [items]
     for batch in batches:
@@ -154,6 +237,7 @@ def run_trial(
             receipts.append({"id": item["id"], "status": "recovered"})
     application_seconds = time.perf_counter() - application_started
     verification = verify(output, items)
+    preservation = _finish_preservation(preservation)
     envelope = {
         "schema": "cu-task-benchmark/1",
         "fixture": {
@@ -173,8 +257,9 @@ def run_trial(
             "model": os.environ.get("CU_MODEL"),
             "effort": os.environ.get("CU_EFFORT"),
         },
-        "outcome": "completed" if verification["ok"] else "incomplete",
+        "outcome": "completed" if verification["ok"] and preservation["ok"] else "incomplete",
         "verification": verification,
+        "preservation": {"policy": "outside-artifacts-root", "receipts": [preservation]},
         "receipts": receipts,
         "failures": failures,
         "recovery": {"attempted": recover, "ids": recovery},

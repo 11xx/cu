@@ -52,7 +52,7 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   --target-window SELECTOR. The selector resolves to one address at capture
   time while the frame keeps `window: null`, so an obstructed dialog can remain
   observable. A later aimed move, click, scroll, or type refuses if another
-  window, a covering layer, or ambiguous overlap covers the point. Omit the
+  window, a top or overlay layer, or ambiguous overlap covers the point. Omit the
   option when the capture is observation only; its descriptor and action
   receipt say that no recipient was asserted.
 
@@ -158,6 +158,9 @@ ACT THROUGH THE FRAME YOU READ
   that reports pixel evidence only. A dwell-only result, or a changed-pixel
   result, never claims that the application revealed a particular control. Read
   the returned frame, then aim the first click or wheel through that frame.
+  Native movement yields with 41 if the pointer moves between CU samples. A
+  watched hover rechecks abort, focus, and pointer ownership and is bounded to
+  ten seconds; it yields instead of completing after an interruption.
 
   Native pointer, keyboard, and focus commands take --dry-run: each interlock
   runs and the log is written without emitting an event.

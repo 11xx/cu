@@ -585,6 +585,42 @@ def test_native_move_uses_relative_device_without_a_final_warp(monkeypatch):
     assert deltas
 
 
+def test_native_move_yields_when_pointer_moves_between_samples(monkeypatch):
+    _frame, cursor = _native_move_fixture(monkeypatch)
+    clock = [0.0]
+    moves = []
+    bumped = [False]
+    monkeypatch.setattr(actions.time, "monotonic", lambda: clock[0])
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if moves and not bumped[0]:
+            cursor[0] = {"x": 70.0, "y": 70.0}
+            bumped[0] = True
+
+    monkeypatch.setattr(actions.time, "sleep", sleep)
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def move_relative(self, dx, dy):
+            moves.append((dx, dy))
+            cursor[0] = {"x": cursor[0]["x"] + dx, "y": cursor[0]["y"] + dy}
+
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    with pytest.raises(Refused) as caught:
+        actions.move(CFG, "f1", (40, 40), duration=0.2, hz=10, timeout=1, dry_run=False)
+    assert caught.value.code == exits.HUMAN_ACTIVE
+    assert len(moves) == 1
+
+
 def test_native_move_refuses_a_start_outside_the_inspected_frame(monkeypatch):
     frame, _cursor = _native_move_fixture(monkeypatch)
     frame["logical_rect"] = {"x": 20, "y": 20, "w": 80, "h": 80}

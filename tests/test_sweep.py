@@ -65,6 +65,22 @@ def test_shot_reports_bounded_nonprivate_timing(world, capsys):
     assert "0x1" not in output.err
 
 
+def test_background_layer_does_not_block_window_action(world, capsys):
+    world["layer_surfaces"] = [
+        {
+            "address": "wallpaper",
+            "namespace": "wallpaper",
+            "level": 0,
+            "logical_rect": world["monitors"][0]["logical_rect"],
+        }
+    ]
+    assert cli.main(["shot", "--window", "active", "--json"]) == exits.OK
+    reference = json.loads(capsys.readouterr().out)
+    assert cli.main([
+        "click", "--frame", reference["id"], "--at", "1,0", "--dry-run", "--json"
+    ]) == exits.OK
+
+
 def test_shot_refuses_encoded_bytes_beyond_profile_budget(world, monkeypatch, capsys):
     cfg = copy.deepcopy(config.DEFAULTS)
     cfg["capture"]["profiles"]["generic"]["max_bytes"] = 1

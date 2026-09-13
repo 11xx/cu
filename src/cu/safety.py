@@ -151,7 +151,9 @@ def check_target(
             f"frame {frame['id']} intends {declared['class']}, but the aimed point "
             f"is covered by several windows: {names}; refusing input",
         )
-    if layer_surface is not None:
+    # Wallpaper and bottom layers sit below normal windows. Only top and
+    # overlay layers can make the intended window recipient ambiguous.
+    if layer_surface is not None and layer_surface.get("level", 0) >= 2:
         surface = layer_surface.get("namespace") or layer_surface.get("address", "layer")
         raise Refused(
             exits.TARGET_AMBIGUOUS,

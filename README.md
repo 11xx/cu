@@ -140,8 +140,8 @@ or region capture remains available without asserting window identity. Add
 `--target-window <selector>` to an output or region capture when later aimed
 input must be bound to that exact window; the frame keeps `window: null` and
 retains a separate target descriptor so an obstructed dialog can be observed.
-Input refuses with exit 31 when a covering layer or ambiguous overlap prevents
-establishing that recipient. Unbound frames and their action receipts state that
+Input refuses with exit 31 when a top or overlay layer or ambiguous overlap
+prevents establishing that recipient. Unbound frames and their action receipts state that
 no recipient assertion exists.
 
 `cu observe` reports each window's intersections with active output rectangles,

@@ -122,6 +122,7 @@ class _Parser(argparse.ArgumentParser):
 
 STATUS_MARK = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL"}
 MAX_MAGNIFIED_LONG_EDGE = 8192
+MAX_HOVER_WAIT = 10.0
 
 # These commands do not make the desktop look agent-driven. Their parsers also
 # refuse the activity-only options whose values would otherwise be ignored.
@@ -631,6 +632,22 @@ def _hover_frame_from_probe(
     )
 
 
+def _check_hover_interruption(
+    cfg: dict[str, Any],
+    expected_cursor: dict[str, float],
+    expected_focus: dict[str, Any] | None,
+) -> None:
+    """Recheck user-owned interlocks before accepting a hover observation."""
+    safety.check_abort()
+    safety.confirm_pointer(
+        cfg,
+        (expected_cursor["x"], expected_cursor["y"]),
+        observe.cursor(),
+    )
+    if expected_focus is not None:
+        safety.confirm_focus(expected_focus, observe.focused())
+
+
 def _hover_observe(
     reference: dict[str, Any],
     cfg: dict[str, Any],
@@ -639,6 +656,8 @@ def _hover_observe(
     timeout: float,
     poll_ms: float,
     quiet_ms: float,
+    expected_cursor: dict[str, float],
+    expected_focus: dict[str, Any] | None,
 ) -> dict[str, Any]:
     try:
         width, height, baseline_rgba = png.decode(Path(reference["path"]).read_bytes())
@@ -659,6 +678,7 @@ def _hover_observe(
     scale = _frame_capture_scale(reference)
 
     while True:
+        _check_hover_interruption(cfg, expected_cursor, expected_focus)
         if probes and time.monotonic() >= deadline:
             return {
                 "status": "timed-out",
@@ -689,6 +709,7 @@ def _hover_observe(
                 quiet_since = now
             previous = current
             if changed and now - quiet_since >= quiet_seconds:
+                _check_hover_interruption(cfg, expected_cursor, expected_focus)
                 frame = _hover_frame_from_probe(
                     reference,
                     cfg,
@@ -726,6 +747,8 @@ def _validate_hover_wait(args: argparse.Namespace) -> None:
         raise ValueError("--quiet-ms cannot be negative")
     if args.timeout <= 0:
         raise ValueError("--timeout must be positive")
+    if args.timeout > MAX_HOVER_WAIT:
+        raise ValueError(f"--timeout must be at most {MAX_HOVER_WAIT:g}s")
 
 
 def _render_hover(result: dict[str, Any]) -> None:
@@ -744,6 +767,7 @@ def cmd_hover(args: argparse.Namespace) -> int:
     cfg = config.load()
     reference = frames.load(args.frame)
     watch = _parse_watch(args.watch, reference["image_size"]) if args.watch else None
+    expected_focus = observe.focused()
     result = actions.hover(
         cfg,
         args.frame,
@@ -775,6 +799,7 @@ def cmd_hover(args: argparse.Namespace) -> int:
                 captured_snap,
                 capture.size_of(scratch),
             )
+        _check_hover_interruption(cfg, result["entry"]["cursor"], expected_focus)
         result["observation"] = frame
         result["status"] = "observed"
     else:
@@ -785,6 +810,8 @@ def cmd_hover(args: argparse.Namespace) -> int:
             timeout=args.timeout,
             poll_ms=args.poll_ms,
             quiet_ms=args.quiet_ms,
+            expected_cursor=result["entry"]["cursor"],
+            expected_focus=expected_focus,
         )
         result["condition"] = {
             "kind": "pixels",
@@ -795,6 +822,7 @@ def cmd_hover(args: argparse.Namespace) -> int:
         }
         result["observation"] = condition["frame"]
         result["status"] = "observed" if condition["frame"] else "timed-out"
+    _check_hover_interruption(cfg, result["entry"]["cursor"], expected_focus)
     result["reveal"] = {
         "status": "unknown",
         "meaning": "a frame or pixel change does not establish application state",
@@ -2452,7 +2480,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hover.add_argument(
         "--timeout", type=float, default=3.0,
-        help="Seconds to wait for watched pixels (default: 3)",
+        help="Seconds to wait for watched pixels, at most 10 (default: 3)",
     )
 
     click = add_injecting("click", "Warp, assert focus, press and release", cmd_click)
