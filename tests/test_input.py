@@ -621,7 +621,9 @@ def test_native_move_yields_when_pointer_moves_between_samples(
 
     monkeypatch.setattr(actions.uinput, "Device", Device)
     with pytest.raises(Refused) as caught:
-        actions.move(CFG, "f1", (40, 40), duration=duration, hz=10, timeout=1, dry_run=False)
+        # Keep the target beyond one bounded native sample so the injected
+        # human displacement is observed at the next boundary.
+        actions.move(CFG, "f1", (80, 80), duration=duration, hz=10, timeout=1, dry_run=False)
     assert caught.value.code == exits.HUMAN_ACTIVE
     assert len(moves) == expected_events
 
@@ -699,6 +701,68 @@ def test_native_move_reports_non_convergence(monkeypatch):
     with pytest.raises(Refused) as caught:
         actions.move(CFG, "f1", (30, 30), duration=0.1, hz=10, timeout=0.3, dry_run=False)
     assert caught.value.code == exits.MOTION_NOT_CONVERGED
+
+
+def test_native_move_deadline_includes_route_preflight(monkeypatch):
+    _frame, _cursor = _native_move_fixture(monkeypatch)
+    clock = [0.0]
+    created = []
+    monkeypatch.setattr(actions.time, "monotonic", lambda: clock[0])
+    original_guard = actions._motion_route_point_guard
+
+    def slow_guard(*args, **kwargs):
+        clock[0] += 0.11
+        return original_guard(*args, **kwargs)
+
+    monkeypatch.setattr(actions, "_motion_route_point_guard", slow_guard)
+    monkeypatch.setattr(actions.uinput, "Device", lambda **_kwargs: created.append(True))
+    with pytest.raises(Refused) as caught:
+        actions.move(CFG, "f1", (30, 30), duration=0.1, hz=10, timeout=0.1, dry_run=False)
+    assert caught.value.code == exits.MOTION_NOT_CONVERGED
+    assert "preflight" in caught.value.reason
+    assert created == []
+
+
+def test_native_move_refuses_a_tiny_motion_region(monkeypatch):
+    frame, _cursor = _native_move_fixture(monkeypatch)
+    frame["logical_rect"] = {"x": 9, "y": 9, "w": 3, "h": 3}
+    with pytest.raises(Refused) as caught:
+        actions.move(CFG, "f1", (50, 50), dry_run=False)
+    assert caught.value.code == exits.MOTION_UNSAFE_ROUTE
+    assert "inspected region" in caught.value.reason
+
+
+def test_native_move_timings_report_phases_and_read_counts(monkeypatch, capsys, tmp_path):
+    _frame, cursor = _native_move_fixture(monkeypatch)
+    monkeypatch.setattr(config, "log_path", lambda _cfg: tmp_path / "actions.jsonl")
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def move_relative(self, dx, dy):
+            cursor[0] = {"x": cursor[0]["x"] + dx, "y": cursor[0]["y"] + dy}
+
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    monkeypatch.setattr(actions.time, "sleep", lambda _seconds: None)
+    assert cli.main([
+        "move", "--frame", "f1", "--at", "30,30", "--duration", "0.1",
+        "--hz", "10", "--timings", "--json",
+    ]) == exits.OK
+    captured = capsys.readouterr()
+    report = json.loads(captured.err.removeprefix("cu metrics: ").strip())
+    assert report["seconds"]["native_preflight"] >= 0
+    assert report["seconds"]["native_delivery"] >= 0
+    assert report["seconds"]["native_convergence"] >= 0
+    assert report["operations"]["native_snapshot"] == 1
+    assert report["operations"]["native_delta_event"] >= 1
+    assert report["operations"]["native_cursor_read"] >= 1
 
 
 def test_closing_a_device_writes_explicit_releases(monkeypatch):

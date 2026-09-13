@@ -95,6 +95,9 @@ def test_hover_cli_returns_changed_pixel_evidence_without_reveal_claim(monkeypat
     assert result["reveal"]["status"] == "unknown"
     assert result["observation"]["changed"] is True
     assert result["entry"]["transport"] == "uinput-relative-v1"
+    assert result["placement"]["status"] == "converged"
+    assert result["delivery"]["status"] == "observed"
+    assert result["effect"]["status"] == "unknown"
 
 
 def test_hover_timeout_keeps_application_meaning_unknown(monkeypatch, capsys):
