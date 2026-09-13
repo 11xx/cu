@@ -7,6 +7,7 @@ Every rectangle here is in logical coordinates, the space Hyprland accepts back.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import Any
 
 from . import hypr
@@ -14,6 +15,103 @@ from . import hypr
 
 def _rect(x: float, y: float, w: float, h: float) -> dict[str, float]:
     return {"x": x, "y": y, "w": w, "h": h}
+
+
+def intersection(
+    first: dict[str, float], second: dict[str, float]
+) -> dict[str, float] | None:
+    """Return the positive-area intersection of two logical rectangles."""
+    left = max(first["x"], second["x"])
+    top = max(first["y"], second["y"])
+    right = min(first["x"] + first["w"], second["x"] + second["w"])
+    bottom = min(first["y"] + first["h"], second["y"] + second["h"])
+    if right <= left or bottom <= top:
+        return None
+    return _rect(left, top, right - left, bottom - top)
+
+
+def reachability(
+    rect: dict[str, float],
+    mons: list[dict[str, Any]],
+    *,
+    max_gaps: int = 64,
+) -> dict[str, Any]:
+    """Describe a rectangle's coverage by the active output union.
+
+    The grid uses only the rectangle edges, making its area exact for the
+    reported geometry. Interior gap details are bounded while their full count
+    and area remain in the result.
+    """
+    active = [
+        monitor
+        for monitor in mons
+        if not monitor.get("disabled", False) and monitor.get("logical_rect")
+    ]
+    intersections = [
+        {"output": monitor["name"], "logical_rect": clipped}
+        for monitor in active
+        if (clipped := intersection(rect, monitor["logical_rect"])) is not None
+    ]
+    total = max(0.0, rect["w"] * rect["h"])
+    if not active:
+        return {
+            "status": "unreachable",
+            "rect": rect,
+            "intersections": intersections,
+            "reachable_area": 0.0,
+            "unreachable_area": total,
+            "edge_excess": {
+                "left": rect["w"], "right": rect["w"],
+                "top": rect["h"], "bottom": rect["h"],
+            },
+            "gaps": [],
+            "gap_count": 0,
+            "truncated": False,
+        }
+    xs = {rect["x"], rect["x"] + rect["w"]}
+    ys = {rect["y"], rect["y"] + rect["h"]}
+    for item in intersections:
+        clipped = item["logical_rect"]
+        xs.update((clipped["x"], clipped["x"] + clipped["w"]))
+        ys.update((clipped["y"], clipped["y"] + clipped["h"]))
+    bounds = desktop_bounds(active)
+    reachable_area = 0.0
+    gaps: list[dict[str, float]] = []
+    gap_count = 0
+    for left, right in pairwise(sorted(xs)):
+        for top, bottom in pairwise(sorted(ys)):
+            center_x, center_y = (left + right) / 2, (top + bottom) / 2
+            area = (right - left) * (bottom - top)
+            if any(contains(monitor["logical_rect"], center_x, center_y) for monitor in active):
+                reachable_area += area
+            elif contains(bounds, center_x, center_y):
+                gap_count += 1
+                if len(gaps) < max_gaps:
+                    gaps.append(_rect(left, top, right - left, bottom - top))
+    edge_excess = {
+        "left": max(0.0, bounds["x"] - rect["x"]),
+        "right": max(0.0, rect["x"] + rect["w"] - (bounds["x"] + bounds["w"])),
+        "top": max(0.0, bounds["y"] - rect["y"]),
+        "bottom": max(0.0, rect["y"] + rect["h"] - (bounds["y"] + bounds["h"])),
+    }
+    unreachable_area = max(0.0, total - reachable_area)
+    if unreachable_area == 0:
+        status = "fully-reachable"
+    elif reachable_area == 0:
+        status = "unreachable"
+    else:
+        status = "partially-reachable"
+    return {
+        "status": status,
+        "rect": rect,
+        "intersections": intersections,
+        "reachable_area": reachable_area,
+        "unreachable_area": unreachable_area,
+        "edge_excess": edge_excess,
+        "gaps": gaps,
+        "gap_count": gap_count,
+        "truncated": gap_count > len(gaps),
+    }
 
 
 def monitors() -> list[dict[str, Any]]:
@@ -78,7 +176,8 @@ def windows(mons: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     Client visibility also requires a displayed workspace: the client's visible
     flag alone can remain true while another workspace occupies the output.
     """
-    by_id = {m.get("id", i): m for i, m in enumerate(mons if mons is not None else monitors())}
+    mons = mons if mons is not None else monitors()
+    by_id = {m.get("id", i): m for i, m in enumerate(mons)}
     out = []
     for c in hypr.query("clients"):
         if not c.get("mapped", True):
@@ -109,6 +208,7 @@ def windows(mons: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
                 "logical_rect": _rect(at[0], at[1], size[0], size[1]),
             }
         )
+        out[-1]["reachability"] = reachability(out[-1]["logical_rect"], mons)
     return out
 
 
@@ -165,7 +265,7 @@ def cursor() -> dict[str, float]:
 
 def desktop_bounds(mons: list[dict[str, Any]]) -> dict[str, float]:
     """The logical bounding box of all enabled outputs."""
-    rects = [m["logical_rect"] for m in mons if not m["disabled"]]
+    rects = [m["logical_rect"] for m in mons if not m.get("disabled", False)]
     if not rects:
         return _rect(0, 0, 0, 0)
     x0 = min(r["x"] for r in rects)

@@ -99,6 +99,19 @@ def test_window_capture_refuses_obstructed_identity(world, obstruction, capsys):
     assert not list(frames.store_dir().glob("f*.json"))
 
 
+def test_window_capture_refusal_names_the_intersecting_window(world, capsys):
+    world["windows"].append({
+        **world["windows"][0],
+        "address": "0x2",
+        "class": "dialog",
+        "title": "child dialog",
+    })
+    assert cli.main(["shot", "--json"]) == exits.TARGET_NOT_VISIBLE
+    error = capsys.readouterr().err
+    assert "dialog" in error and "0x2" in error
+    assert "'w': 200" in error
+
+
 def test_window_hidden_during_capture_publishes_no_frame(world, monkeypatch, capsys):
     def grab(rect, dest, scale):
         dest.write_bytes(png.encode(1, 1, b"\0\0\0\xff"))

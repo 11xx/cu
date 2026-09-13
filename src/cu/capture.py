@@ -177,7 +177,9 @@ class CaptureToolError(CaptureError):
 
 
 class CaptureVisibilityError(CaptureError):
-    pass
+    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.details = details or {}
 
 
 class CaptureBudgetError(CaptureError):
@@ -202,15 +204,49 @@ def require_visible(window: dict[str, Any], rect: dict[str, float], snap: dict[s
     live = next((w for w in snap["windows"] if w["address"] == window["address"]), None)
     if live is None or not live.get("visible", True) or live.get("hidden", False):
         raise CaptureVisibilityError("the requested window is not on a visible workspace")
+    overlaps = []
     for other in snap["windows"]:
         if (
             other["address"] != window["address"] and other.get("visible", True)
-            and not other.get("hidden", False) and intersects(rect, other["logical_rect"])
+            and not other.get("hidden", False)
+            and intersects(rect, other["logical_rect"])
         ):
-            raise CaptureVisibilityError("another window overlaps the requested capture")
-    for surface in snap.get("layer_surfaces", []):
-        if surface["level"] >= 2 and intersects(rect, surface["logical_rect"]):
-            raise CaptureVisibilityError("a top or overlay layer overlaps the requested capture")
+            overlaps.append(
+                {
+                    "class": other.get("class"),
+                    "title": other.get("title"),
+                    "address": other.get("address"),
+                    "logical_rect": _intersection(rect, other["logical_rect"]),
+                }
+            )
+    if overlaps:
+        shown = overlaps[:8]
+        names = ", ".join(
+            f"{item['class']} ({item['address']}) at {item['logical_rect']}"
+            for item in shown
+        )
+        suffix = f"; {len(overlaps) - len(shown)} more" if len(overlaps) > len(shown) else ""
+        raise CaptureVisibilityError(
+            f"another window overlaps the requested capture: {names}{suffix}",
+            details={"windows": overlaps, "truncated": len(overlaps) > len(shown)},
+        )
+    layers = [
+        {
+            "namespace": surface.get("namespace"),
+            "address": surface.get("address"),
+            "level": surface.get("level"),
+            "logical_rect": _intersection(rect, surface["logical_rect"]),
+        }
+        for surface in snap.get("layer_surfaces", [])
+        if surface["level"] >= 2 and intersects(rect, surface["logical_rect"])
+    ]
+    if layers:
+        layer = layers[0]
+        raise CaptureVisibilityError(
+            f"top or overlay layer {layer['namespace'] or layer['address']} overlaps "
+            f"the requested capture at {layer['logical_rect']}",
+            details={"layers": layers, "truncated": False},
+        )
 
 
 def _run(args: list[str]) -> None:
@@ -231,6 +267,16 @@ def intersects(rect: dict[str, float], other: dict[str, float]) -> bool:
         or rect["y"] + rect["h"] <= other["y"]
         or other["y"] + other["h"] <= rect["y"]
     )
+
+
+def _intersection(
+    rect: dict[str, float], other: dict[str, float]
+) -> dict[str, float]:
+    left = max(rect["x"], other["x"])
+    top = max(rect["y"], other["y"])
+    right = min(rect["x"] + rect["w"], other["x"] + other["w"])
+    bottom = min(rect["y"] + rect["h"], other["y"] + other["h"])
+    return {"x": left, "y": top, "w": right - left, "h": bottom - top}
 
 
 def sole_monitor(

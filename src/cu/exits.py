@@ -26,6 +26,7 @@ DENIED_BY_POLICY = 30
 TARGET_AMBIGUOUS = 31
 MOTION_NOT_CONVERGED = 32
 MOTION_UNSAFE_ROUTE = 33
+UNREACHABLE_AIM = 34
 ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
 DESKTOP_BUSY = 42
@@ -97,6 +98,10 @@ RESPONSE = {
         "Native movement leaves the inspected safe region. "
         "Capture a wider region or place the pointer inside it first."
     ),
+    UNREACHABLE_AIM: (
+        "The aimed point is outside the union of active outputs. "
+        "Choose a reachable point or explicitly change the desktop layout."
+    ),
     DENIED_BY_POLICY: "Refused by the denylist or a locked session. Do not retry; tell the user.",
     ABORTED_BY_USER: (
         "The user aborted. Stop. Do not retry, and do not attempt to clear the abort."
@@ -144,6 +149,7 @@ RETRYABLE = frozenset(
         TARGET_AMBIGUOUS,
         MOTION_NOT_CONVERGED,
         MOTION_UNSAFE_ROUTE,
+        UNREACHABLE_AIM,
         TIMED_OUT,
         HUMAN_ACTIVE,
         DESKTOP_BUSY,
