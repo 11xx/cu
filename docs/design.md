@@ -432,10 +432,23 @@ work. Somewhere invisible is where an agent's mistakes get expensive.
 
 `focus` may bring the selected window's workspace into view as part of the
 explicit focus request. Capture remains observational and does not rearrange a
-window. A reversible `present`/`restore` capability requires a compositor seam
-that can report exact before and after geometry and refuse a restore after the
-user changes the layout; no such public operation is assumed by the current
-contract.
+window. `cu present WINDOW` is the separate, explicit arrangement operation.
+It requires a visible window, selects that window's active output unless the
+caller names another active output, makes a tiled window floating when needed,
+and centers its current rectangle on the selected output. The implemented
+Hyprland seam uses only the verified floating-state and move operations; it
+does not guess resize, maximize, fullscreen, workspace, or rule behavior.
+
+Each mutating step is followed by a fresh identity and geometry read-back. A
+successful result records actual before/after state and returns an opaque token
+held in volatile CU runtime state. `cu restore TOKEN` compares the address,
+identity, geometry, floating state, workspace/output and visibility state with
+that token before dispatching. A changed or unknown window invalidates the
+token and refuses without overwriting the current state. A compositor refusal,
+partial read-back, or invalid token is a typed outcome with bounded actual
+state where it exists. The token is not application knowledge, and these
+claims describe the implemented Hyprland seam rather than universal compositor
+support.
 
 Headless outputs remain the right place to *develop* the input path, so they
 are reachable through `cu sandbox create` — a command that names what it is
@@ -865,6 +878,8 @@ also take `--dry-run`.
 | `cu export` | Opt-in validated evidence envelope from a stored frame | no |
 | `cu wait` | Block on a Hyprland event (`openwindow`, focus change, title match) | no |
 | `cu focus` | Give a window keyboard focus | no |
+| `cu present` | Explicitly float and center one visible window; returns a restore token | no |
+| `cu restore` | Restore a presentation only when its identity and state are unchanged | no |
 | `cu warp` | Place the compositor pointer at a frame coordinate | no |
 | `cu move` | Bounded native movement to a frame coordinate | yes |
 | `cu hover` | Native entry, bounded dwell, and optional changed-pixel observation | yes |

@@ -56,8 +56,15 @@ def extent(rect: dict[str, float], mons: list[dict[str, Any]]) -> dict[str, Any]
     clipped = intersection(rect, outer) if active else None
     if not active:
         state = "unavailable"
+        edge_excess = None
     elif clipped is None:
         state = "outside"
+        edge_excess = {
+            "left": max(0.0, outer["x"] - rect["x"]),
+            "right": max(0.0, rect["x"] + rect["w"] - (outer["x"] + outer["w"])),
+            "top": max(0.0, outer["y"] - rect["y"]),
+            "bottom": max(0.0, rect["y"] + rect["h"] - (outer["y"] + outer["h"])),
+        }
     else:
         edge_excess = {
             "left": max(0.0, outer["x"] - rect["x"]),
@@ -66,8 +73,6 @@ def extent(rect: dict[str, float], mons: list[dict[str, Any]]) -> dict[str, Any]
             "bottom": max(0.0, rect["y"] + rect["h"] - (outer["y"] + outer["h"])),
         }
         state = "partially-outside" if any(edge_excess.values()) else "inside"
-    if not active:
-        edge_excess = None
     return {
         "status": state,
         "outer_bounds": outer,

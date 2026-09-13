@@ -23,7 +23,19 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Any
 
-from . import compositor, config, exits, frames, hypr, metrics, motion, observe, safety, uinput
+from . import (
+    compositor,
+    config,
+    exits,
+    frames,
+    hypr,
+    metrics,
+    motion,
+    observe,
+    presentation,
+    safety,
+    uinput,
+)
 from .safety import Refused
 
 MOTION_TRANSPORT = "uinput-relative-v1"
@@ -46,6 +58,14 @@ NATIVE_SETTLE_POLL_SECONDS = 0.005
 DEFAULT_HOVER_DWELL = 0.2
 MAX_HOVER_DWELL = 10.0
 DWELL_POLL_SECONDS = 0.05
+
+_PRESENTATION_CODES = {
+    "refused": exits.PRESENTATION_REFUSED,
+    "partial": exits.PRESENTATION_PARTIAL,
+    "changed": exits.PRESENTATION_CHANGED,
+    "stale": exits.PRESENTATION_STALE,
+    "token": exits.PRESENTATION_TOKEN,
+}
 
 
 def send_chords(
@@ -157,6 +177,99 @@ def focus(cfg: dict[str, Any], window: dict[str, Any], *, dry_run: bool) -> dict
         hypr.lua(f'hl.dispatch(hl.dsp.focus({{window = "address:{window["address"]}"}}))')
         safety.confirm_focus(window, observe.focused())
     result = {"action": "focus", "window": _describe(window), "dry_run": dry_run}
+    safety.record(cfg, result)
+    return result
+
+
+def _presentation_guard(cfg: dict[str, Any], window: dict[str, Any]) -> None:
+    """Repeat the focus-like safety checks before each arrangement dispatch."""
+    safety.check_abort()
+    safety.check_session()
+    safety.check_denylist(cfg, window)
+
+
+def _presentation_failure(
+    cfg: dict[str, Any],
+    action: str,
+    why: str,
+    dry_run: bool,
+    failure: presentation.PresentationFailure,
+) -> None:
+    details = dict(failure.details)
+    safety.record(
+        cfg,
+        {
+            "action": action,
+            "why": why,
+            "dry_run": dry_run,
+            "outcome": failure.kind,
+            **details,
+        },
+    )
+    code = _PRESENTATION_CODES.get(failure.kind, exits.PRESENTATION_REFUSED)
+    raise Refused(code, str(failure), details=details) from failure
+
+
+def present(
+    cfg: dict[str, Any],
+    window: dict[str, Any],
+    *,
+    output_name: str | None = None,
+    why: str = "",
+    dry_run: bool,
+    seam: presentation.WindowSeam | None = None,
+    store: presentation.TokenStore | None = None,
+    snapshot_reader: Callable[[], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Explicitly float and center one visible window, with read-back guards."""
+    safety.check_abort()
+    safety.check_session()
+    safety.check_denylist(cfg, window)
+    reader = snapshot_reader or observe.snapshot
+    try:
+        result = presentation.present(
+            window,
+            reader(),
+            output_name=output_name,
+            snapshot_reader=reader,
+            seam=seam or presentation.hyprland_seam(),
+            store=store or presentation.RuntimeTokenStore(),
+            guard=lambda live: _presentation_guard(cfg, live),
+            dry_run=dry_run,
+        )
+    except presentation.PresentationFailure as failure:
+        _presentation_failure(cfg, "present", why, dry_run, failure)
+    result["why"] = why
+    safety.record(cfg, result)
+    return result
+
+
+def restore(
+    cfg: dict[str, Any],
+    token: str,
+    *,
+    why: str = "",
+    dry_run: bool,
+    seam: presentation.WindowSeam | None = None,
+    store: presentation.TokenStore | None = None,
+    snapshot_reader: Callable[[], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Restore one token only when its presented window state is unchanged."""
+    safety.check_abort()
+    safety.check_session()
+    reader = snapshot_reader or observe.snapshot
+    try:
+        result = presentation.restore(
+            token,
+            snapshot_reader=reader,
+            seam=seam or presentation.hyprland_seam(),
+            store=store or presentation.RuntimeTokenStore(),
+            guard=lambda live: _presentation_guard(cfg, live),
+            dry_run=dry_run,
+        )
+    except presentation.PresentationFailure as failure:
+        _presentation_failure(cfg, "restore", why, dry_run, failure)
+    result["why"] = why
     safety.record(cfg, result)
     return result
 

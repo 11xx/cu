@@ -1261,7 +1261,19 @@ def _render_action(result: dict[str, Any]) -> None:
     layer_surface = result.get("layer_surface")
     if result["action"] == "click" and window is None and layer_surface is not None:
         where += f"; layer '{layer_surface['namespace']}' covers this point"
-    if result["action"] in {"move", "warp", "click"}:
+    if result["action"] in {"present", "restore"}:
+        after = result.get("after") or result.get("presented") or {}
+        rect = after.get("logical_rect") if isinstance(after, dict) else None
+        geometry = f"  {fmt_rect(rect)}" if rect else ""
+        detail = f"{where}{geometry}"
+        if result["action"] == "present":
+            output = result.get("output", {}).get("name", "selected output")
+            detail += f" on {output}"
+            if result.get("token"):
+                detail += f"; restore token {result['token']}"
+        else:
+            detail += " to the saved state"
+    elif result["action"] in {"move", "warp", "click"}:
         point = result["logical"]
         detail = f"at image {result['at']['x']:g},{result['at']['y']:g} "
         detail += f"→ logical {point['x']:.0f},{point['y']:.0f}"
@@ -1857,6 +1869,33 @@ def cmd_focus(args: argparse.Namespace) -> int:
             f"{r['window']['class']}  {r['window']['title'][:60]}"
         ),
     )
+    return exits.OK
+
+
+def cmd_present(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    snap = observe.snapshot()
+    window = _resolve_window(args.selector, snap)
+    result = actions.present(
+        cfg,
+        window,
+        output_name=args.output,
+        why=getattr(args, "why", ""),
+        dry_run=args.dry_run,
+    )
+    _emit(result, args.json, _render_action)
+    return exits.OK
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    result = actions.restore(
+        cfg,
+        args.token,
+        why=getattr(args, "why", ""),
+        dry_run=args.dry_run,
+    )
+    _emit(result, args.json, _render_action)
     return exits.OK
 
 
@@ -2464,9 +2503,9 @@ def build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="Check and log the action without injecting it",
         )
-        # Marks the commands that reach the shared pointer, focus, or
-        # clipboard, and so must hold the desktop while they run. `main`
-        # reads it; nothing else needs to know which commands these are.
+        # Marks commands that touch shared desktop state and so must hold the
+        # desktop while they run. `main` reads it; nothing else needs to know
+        # which commands these are.
         p.set_defaults(injects=True)
         return p
 
@@ -2487,6 +2526,25 @@ def build_parser() -> argparse.ArgumentParser:
         "selector",
         help="'active', a window address, or a class substring",
     )
+
+    present = add_injecting(
+        "present", "Present one visible window on an active output", cmd_present
+    )
+    present.add_argument(
+        "selector",
+        metavar="WINDOW",
+        help="'active', a window address, or a unique class/title fragment",
+    )
+    present.add_argument(
+        "--output",
+        metavar="NAME",
+        help="Active output to center the window on (default: its visible output)",
+    )
+
+    restore = add_injecting(
+        "restore", "Restore a presentation only if its window is unchanged", cmd_restore
+    )
+    restore.add_argument("token", metavar="TOKEN", help="Opaque token printed by `cu present`")
 
     move = add_injecting("move", "Move the pointer natively to a frame coordinate", cmd_move)
     add_aim(move, required=True)
@@ -2722,7 +2780,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args: argparse.Namespace, why: str, session: str | None) -> int:
-    # One hold spans every step that touches pointer, focus or clipboard.
+    # One hold spans every step that touches shared desktop state.
     injecting = getattr(args, "injects", False)
     exclusive_begin = (
         args.command == "session" and args.subcommand == "begin" and args.exclusive
