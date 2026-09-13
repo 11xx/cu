@@ -1,0 +1,33 @@
+# Chrome and Chromium setup boundary
+
+`cu browser products` reports named Google Chrome and Chromium binary/profile
+candidates. A product is available only when a matching binary and profile are
+both present at runtime; a profile directory alone is not an installed browser.
+The report does not select the first match, grant a page, or register a host.
+
+The current Firefox route uses a Manifest V2 background page, the Firefox
+`browser` API, and the fixed `cu-browser-read@local` native-host allowlist. A
+Chromium route needs a separate Manifest V3 service-worker entry, Chrome API
+surface, extension development identity, and native-messaging registration for
+that exact extension origin. Service workers can be suspended, so grant and
+pending-request state must survive worker restart or be revoked; a native port
+or a reconnect is not proof that a page remains authorized.
+
+The bounded successor contract is:
+
+1. Select one product and one profile explicitly and verify its binary, profile,
+   extension identity, and native-host manifest before writing anything.
+2. Load the unpacked development extension without granting a tab; grant only
+   the current tab through the product's explicit UI.
+3. Prove read, Stop, navigation, closure, worker restart, native disconnect,
+   missing/mismatched host, and conflicting-manifest behavior with the selected
+   product. A same-looking Firefox manifest or an engine-family match does not
+   satisfy this proof.
+4. Remove only files created by the setup and report the exact product/profile
+   identity. Store publication, signing, security preference changes, and
+   profile restart remain outside this route.
+
+Whether a product is present is a runtime reading. Record the selected product,
+profile, executable, extension identity, and native-host path in the run's
+evidence; this document states the setup boundary without turning one host's
+inventory into a support claim.
