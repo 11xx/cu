@@ -21,12 +21,15 @@ from . import checks, config, context, exits, frames
 
 
 class Refused(RuntimeError):
-    """An interlock said no. The code is the contract; the message is for a human."""
+    """An interlock said no; optional details carry source-backed facts."""
 
-    def __init__(self, code: int, reason: str) -> None:
+    def __init__(
+        self, code: int, reason: str, *, details: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(reason)
         self.code = code
         self.reason = reason
+        self.details = details or {}
 
 
 def _matches(value: str, needles: list[str]) -> str | None:

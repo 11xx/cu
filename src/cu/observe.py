@@ -12,6 +12,11 @@ from typing import Any
 
 from . import hypr
 
+# Observation is a caller-facing diagnostic, so no collection grows with the
+# number of compositor objects or geometry edges without a declared bound.
+MAX_OUTPUT_DETAILS = 32
+MAX_GAP_DETAILS = 64
+
 
 def _rect(x: float, y: float, w: float, h: float) -> dict[str, float]:
     return {"x": x, "y": y, "w": w, "h": h}
@@ -30,6 +35,47 @@ def intersection(
     return _rect(left, top, right - left, bottom - top)
 
 
+def _active_outputs(mons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        monitor
+        for monitor in mons
+        if not monitor.get("disabled", False) and monitor.get("logical_rect")
+    ]
+
+
+def extent(rect: dict[str, float], mons: list[dict[str, Any]]) -> dict[str, Any]:
+    """Describe clipping against the outer desktop bounds.
+
+    The outer box is intentionally not a reachability claim: disconnected
+    outputs leave holes inside it. ``clipped_to_outer_bounds`` therefore says
+    only what part survives that box, while :func:`reachability` answers which
+    parts lie on an active output.
+    """
+    active = _active_outputs(mons)
+    outer = desktop_bounds(active)
+    clipped = intersection(rect, outer) if active else None
+    if not active:
+        state = "unavailable"
+    elif clipped is None:
+        state = "outside"
+    else:
+        edge_excess = {
+            "left": max(0.0, outer["x"] - rect["x"]),
+            "right": max(0.0, rect["x"] + rect["w"] - (outer["x"] + outer["w"])),
+            "top": max(0.0, outer["y"] - rect["y"]),
+            "bottom": max(0.0, rect["y"] + rect["h"] - (outer["y"] + outer["h"])),
+        }
+        state = "partially-outside" if any(edge_excess.values()) else "inside"
+    if not active:
+        edge_excess = None
+    return {
+        "status": state,
+        "outer_bounds": outer,
+        "clipped_to_outer_bounds": clipped,
+        "edge_excess": edge_excess,
+    }
+
+
 def reachability(
     rect: dict[str, float],
     mons: list[dict[str, Any]],
@@ -42,35 +88,39 @@ def reachability(
     reported geometry. Interior gap details are bounded while their full count
     and area remain in the result.
     """
-    active = [
-        monitor
-        for monitor in mons
-        if not monitor.get("disabled", False) and monitor.get("logical_rect")
-    ]
-    intersections = [
-        {"output": monitor["name"], "logical_rect": clipped}
+    active = _active_outputs(mons)
+    all_intersections = [
+        {
+            "output": monitor["name"],
+            "logical_rect": clipped,
+            **({"scale": monitor["scale"]} if "scale" in monitor else {}),
+        }
         for monitor in active
         if (clipped := intersection(rect, monitor["logical_rect"])) is not None
     ]
+    intersections = all_intersections[:MAX_OUTPUT_DETAILS]
+    intersection_count = len(all_intersections)
+    intersections_truncated = intersection_count > len(intersections)
     total = max(0.0, rect["w"] * rect["h"])
+    extent_info = extent(rect, active)
     if not active:
         return {
             "status": "unreachable",
             "rect": rect,
             "intersections": intersections,
+            "intersection_count": intersection_count,
+            "intersections_truncated": intersections_truncated,
             "reachable_area": 0.0,
             "unreachable_area": total,
-            "edge_excess": {
-                "left": rect["w"], "right": rect["w"],
-                "top": rect["h"], "bottom": rect["h"],
-            },
+            "edge_excess": extent_info["edge_excess"],
             "gaps": [],
             "gap_count": 0,
             "truncated": False,
+            "extent": extent_info,
         }
     xs = {rect["x"], rect["x"] + rect["w"]}
     ys = {rect["y"], rect["y"] + rect["h"]}
-    for item in intersections:
+    for item in all_intersections:
         clipped = item["logical_rect"]
         xs.update((clipped["x"], clipped["x"] + clipped["w"]))
         ys.update((clipped["y"], clipped["y"] + clipped["h"]))
@@ -78,6 +128,7 @@ def reachability(
     reachable_area = 0.0
     gaps: list[dict[str, float]] = []
     gap_count = 0
+    gap_limit = min(max(0, max_gaps), MAX_GAP_DETAILS)
     for left, right in pairwise(sorted(xs)):
         for top, bottom in pairwise(sorted(ys)):
             center_x, center_y = (left + right) / 2, (top + bottom) / 2
@@ -86,14 +137,9 @@ def reachability(
                 reachable_area += area
             elif contains(bounds, center_x, center_y):
                 gap_count += 1
-                if len(gaps) < max_gaps:
+                if len(gaps) < gap_limit:
                     gaps.append(_rect(left, top, right - left, bottom - top))
-    edge_excess = {
-        "left": max(0.0, bounds["x"] - rect["x"]),
-        "right": max(0.0, rect["x"] + rect["w"] - (bounds["x"] + bounds["w"])),
-        "top": max(0.0, bounds["y"] - rect["y"]),
-        "bottom": max(0.0, rect["y"] + rect["h"] - (bounds["y"] + bounds["h"])),
-    }
+    edge_excess = extent_info["edge_excess"]
     unreachable_area = max(0.0, total - reachable_area)
     if unreachable_area == 0:
         status = "fully-reachable"
@@ -105,12 +151,16 @@ def reachability(
         "status": status,
         "rect": rect,
         "intersections": intersections,
+        "intersection_count": intersection_count,
+        "intersections_truncated": intersections_truncated,
         "reachable_area": reachable_area,
         "unreachable_area": unreachable_area,
         "edge_excess": edge_excess,
         "gaps": gaps,
         "gap_count": gap_count,
-        "truncated": gap_count > len(gaps),
+        "gap_limit": gap_limit,
+        "truncated": gap_count > len(gaps) or intersections_truncated,
+        "extent": extent_info,
     }
 
 
@@ -169,6 +219,63 @@ def layer_surfaces() -> list[dict[str, Any]]:
     return out
 
 
+_TRANSIENT_OWNER_FIELDS = (
+    "transient_owner",
+    "transientOwner",
+    "transient_for",
+    "transientFor",
+    "parent",
+)
+
+
+def _owner_address(value: Any) -> str | None:
+    if isinstance(value, str):
+        value = value.strip()
+        return None if value in {"", "0", "0x0"} else value
+    if isinstance(value, dict):
+        address = value.get("address")
+        if isinstance(address, str) and address.strip() not in {"", "0", "0x0"}:
+            return address.strip()
+    return None
+
+
+def _transient_owner(client: dict[str, Any], addresses: set[str]) -> dict[str, Any]:
+    """Use only a compositor-supplied ownership field.
+
+    Geometry, PID, class and containment are deliberately not fallbacks. A
+    compositor that omits the relation makes ownership unsupported, not false.
+    """
+    field = next((name for name in _TRANSIENT_OWNER_FIELDS if name in client), None)
+    if field is None:
+        return {
+            "status": "unsupported",
+            "reason": "the compositor client data did not expose transient ownership",
+        }
+    value = client[field]
+    if (
+        value is None
+        or value is False
+        or value == 0
+        or (isinstance(value, str) and value in {"", "0", "0x0"})
+    ):
+        return {"status": "none", "source": field}
+    address = _owner_address(value)
+    if address is None:
+        return {
+            "status": "unknown",
+            "source": field,
+            "reason": "the compositor supplied an ownership value without a window address",
+        }
+    if address not in addresses:
+        return {
+            "status": "unknown",
+            "source": field,
+            "address": address,
+            "reason": "the reported transient owner is absent from this observation",
+        }
+    return {"status": "known", "source": field, "address": address}
+
+
 def windows(mons: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Mapped windows, with the monitor named rather than indexed.
 
@@ -178,10 +285,12 @@ def windows(mons: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """
     mons = mons if mons is not None else monitors()
     by_id = {m.get("id", i): m for i, m in enumerate(mons)}
+    clients = [c for c in hypr.query("clients") if c.get("mapped", True)]
+    addresses = {
+        c.get("address") for c in clients if isinstance(c.get("address"), str)
+    }
     out = []
-    for c in hypr.query("clients"):
-        if not c.get("mapped", True):
-            continue
+    for c in clients:
         at, size = c["at"], c["size"]
         monitor = by_id.get(c["monitor"])
         workspace = c["workspace"]["name"]
@@ -206,8 +315,10 @@ def windows(mons: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
                 "workspace": c["workspace"]["name"],
                 "monitor": monitor["name"] if monitor else str(c["monitor"]),
                 "logical_rect": _rect(at[0], at[1], size[0], size[1]),
+                "transient_owner": _transient_owner(c, addresses),
             }
         )
+        out[-1]["extent"] = extent(out[-1]["logical_rect"], mons)
         out[-1]["reachability"] = reachability(out[-1]["logical_rect"], mons)
     return out
 

@@ -114,6 +114,22 @@ def test_refused_shot_still_reports_total_time(world, capsys):
     assert report["total_seconds"] >= 0
 
 
+def test_no_request_capture_does_not_dispatch_or_change_layout(world, monkeypatch, capsys):
+    dispatches = []
+
+    def record_dispatch(code):
+        dispatches.append(code)
+
+    monkeypatch.setattr(actions.hypr, "lua", record_dispatch)
+
+    assert cli.main(["observe", "--json"]) == exits.OK
+    capsys.readouterr()
+    assert cli.main(["shot", "--json"]) == exits.OK
+    capsys.readouterr()
+
+    assert dispatches == []
+
+
 @pytest.mark.parametrize("obstruction", ["hidden", "overlap", "layer"])
 def test_window_capture_refuses_obstructed_identity(world, obstruction, capsys):
     if obstruction == "hidden":
@@ -125,7 +141,14 @@ def test_window_capture_refuses_obstructed_identity(world, obstruction, capsys):
             {"level": 3, "logical_rect": world["windows"][0]["logical_rect"]}
         ]
     assert cli.main(["shot", "--json"]) == 27
-    assert capsys.readouterr().out == ""
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["code"] == exits.TARGET_NOT_VISIBLE
+    assert payload["name"] == "TARGET_NOT_VISIBLE"
+    assert payload["details"]["target"]["address"] == "0x1"
+    if obstruction == "hidden":
+        assert payload["details"]["visibility"]["status"] == "not-visible"
+    else:
+        assert payload["details"]["target"]["extent"]["status"] == "inside"
     assert not list(frames.store_dir().glob("f*.json"))
 
 
@@ -137,9 +160,68 @@ def test_window_capture_refusal_names_the_intersecting_window(world, capsys):
         "title": "child dialog",
     })
     assert cli.main(["shot", "--json"]) == exits.TARGET_NOT_VISIBLE
-    error = capsys.readouterr().err
+    output = capsys.readouterr()
+    payload = json.loads(output.out)
+    error = output.err
+    detail = payload["details"]["windows"][0]
     assert "dialog" in error and "0x2" in error
+    assert "child dialog" in error
+    assert detail["intersection"] == world["windows"][0]["logical_rect"]
+    assert detail["containment"] == "other-contains-target"
+    assert detail["transient_owner"]["status"] == "unsupported"
     assert "'w': 200" in error
+
+
+def test_window_refusal_text_and_json_share_bounded_obstruction_facts(world, capsys):
+    world["windows"].extend(
+        {
+            **world["windows"][0],
+            "address": f"0x{index:x}",
+            "class": "same-class",
+            "title": f"same-class dialog {index}",
+        }
+        for index in range(2, 12)
+    )
+
+    assert cli.main(["shot", "--json"]) == exits.TARGET_NOT_VISIBLE
+    json_output = capsys.readouterr()
+    payload = json.loads(json_output.out)
+    details = payload["details"]
+    assert len(details["windows"]) == capture.MAX_WINDOW_DETAILS
+    assert details["window_count"] == 10
+    assert details["windows_truncated"] is True
+    assert details["truncated"] is True
+    first = details["windows"][0]
+
+    assert cli.main(["shot"]) == exits.TARGET_NOT_VISIBLE
+    text = capsys.readouterr().err
+    assert f"{first['class']} {first['title']!r} ({first['address']})" in text
+    assert str(first["intersection"]) in text
+    assert "2 more" in text
+    assert "transient ownership unsupported" in text
+
+
+def test_window_refusal_bounds_top_layer_details_and_keeps_input_unknown(world, capsys):
+    world["layer_surfaces"] = [
+        {
+            "address": f"layer-{index}",
+            "namespace": f"overlay-{index}",
+            "level": 3,
+            "logical_rect": world["windows"][0]["logical_rect"],
+        }
+        for index in range(capture.MAX_LAYER_DETAILS + 2)
+    ]
+
+    assert cli.main(["shot", "--json"]) == exits.TARGET_NOT_VISIBLE
+    output = capsys.readouterr()
+    payload = json.loads(output.out)
+    details = payload["details"]
+    assert len(details["layers"]) == capture.MAX_LAYER_DETAILS
+    assert details["layer_count"] == capture.MAX_LAYER_DETAILS + 2
+    assert details["layers_truncated"] is True
+    assert details["layers"][0]["input_authority"]["status"] == "unknown"
+    assert details["stacking"]["status"] == "unsupported"
+    assert "2 more" in output.err
 
 
 def test_window_hidden_during_capture_publishes_no_frame(world, monkeypatch, capsys):
@@ -148,7 +230,8 @@ def test_window_hidden_during_capture_publishes_no_frame(world, monkeypatch, cap
         world["windows"][0]["visible"] = False
     monkeypatch.setattr(capture, "grab_region", grab)
     assert cli.main(["shot", "--json"]) == exits.TARGET_NOT_VISIBLE
-    assert capsys.readouterr().out == ""
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["details"]["visibility"]["status"] == "not-visible"
     assert not list(frames.store_dir().glob("f*.json"))
 
 

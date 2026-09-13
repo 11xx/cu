@@ -378,11 +378,27 @@ and visibility around every probe without treating old reference age or an
 expected content change as a reason to suppress the wait.
 
 Observation also computes deterministic reachability for each window against
-the union of active output rectangles. It reports per-output intersections,
-outer edge excess, and bounded interior gaps without inferring stacking,
-parenthood, or transient ownership. Aimed input refuses a point outside that
-union with `UNREACHABLE_AIM` (34), while a point in a reachable portion remains
-usable even if another portion of the window is clipped.
+the union of active output rectangles. The per-output records retain their
+logical geometry and scale, while the union calculation preserves holes and
+overlaps rather than treating the desktop's outer bounding box as reachable.
+Each window also carries an outer-bounds extent record: its clipped rectangle
+and edge excess describe clipping only, while reachability reports the active
+output area and bounded interior gaps. These are separate facts, so a window
+can be partly outside the outer bounds, partly unreachable in an output gap,
+and still have an individually reachable aim. Aimed input refuses a point
+outside the active union with `UNREACHABLE_AIM` (34) before any pointer or
+device event.
+
+Window-capture refusals carry a bounded diagnostic. Each other-window entry
+names class, title and address, gives the requested-capture intersection and
+the full observed window rectangle, and reports geometric containment without
+turning it into parenthood. A transient owner is reported only when an explicit
+compositor client field supplies one; otherwise its state is `unsupported`.
+Focus history and geometry do not establish stacking, and layer geometry does
+not establish event routing or input authority. JSON refusals include the
+diagnostic and its counts, limits and truncation flags; text refusals render the
+same bounded entries and states. Missing compositor facts are reported as
+unsupported rather than as an empty successful observation.
 
 An output or region capture may carry `--target-window SELECTOR`. The selector
 resolves to one exact observed address at capture time and is stored as

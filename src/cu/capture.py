@@ -186,6 +186,14 @@ class CaptureBudgetError(CaptureError):
     pass
 
 
+# These are deliberately small because a refusal is consumed by a caller that
+# needs a decision, not by a window inventory tool. Counts retain completeness
+# without placing an unbounded compositor list in stdout or stderr.
+MAX_WINDOW_DETAILS = 8
+MAX_LAYER_DETAILS = 8
+MAX_DETAIL_TEXT = 160
+
+
 def require_budget(path: Path, profile: dict[str, Any]) -> None:
     size = path.stat().st_size
     if size > profile["max_bytes"]:
@@ -203,50 +211,214 @@ def require_visible(window: dict[str, Any], rect: dict[str, float], snap: dict[s
     """
     live = next((w for w in snap["windows"] if w["address"] == window["address"]), None)
     if live is None or not live.get("visible", True) or live.get("hidden", False):
-        raise CaptureVisibilityError("the requested window is not on a visible workspace")
+        details = _visibility_details(window, rect, snap, [], [])
+        details["visibility"] = {
+            "status": "gone" if live is None else "not-visible",
+            "reason": "the requested window is not on a visible workspace",
+        }
+        raise CaptureVisibilityError(
+            "the requested window is not on a visible workspace", details=details
+        )
+    target = live
     overlaps = []
     for other in snap["windows"]:
         if (
-            other["address"] != window["address"] and other.get("visible", True)
+            other["address"] != target["address"] and other.get("visible", True)
             and not other.get("hidden", False)
             and intersects(rect, other["logical_rect"])
         ):
-            overlaps.append(
-                {
-                    "class": other.get("class"),
-                    "title": other.get("title"),
-                    "address": other.get("address"),
-                    "logical_rect": _intersection(rect, other["logical_rect"]),
-                }
+            overlap = _intersection(rect, other["logical_rect"])
+            overlaps.append(_window_detail(target, other, overlap))
+    layers = []
+    for surface in snap.get("layer_surfaces", []):
+        if (
+            surface.get("level", 0) >= 2
+            and intersects(rect, surface["logical_rect"])
+        ):
+            overlap = _intersection(rect, surface["logical_rect"])
+            layers.append(_layer_detail(surface, overlap))
+    if overlaps or layers:
+        details = _visibility_details(target, rect, snap, overlaps, layers)
+        messages = []
+        if extent_message := _extent_message(details):
+            messages.append(extent_message)
+        shown_windows = details["windows"]
+        if shown_windows:
+            names = ", ".join(
+                _window_message(item) for item in shown_windows
             )
-    if overlaps:
-        shown = overlaps[:8]
-        names = ", ".join(
-            f"{item['class']} ({item['address']}) at {item['logical_rect']}"
-            for item in shown
-        )
-        suffix = f"; {len(overlaps) - len(shown)} more" if len(overlaps) > len(shown) else ""
-        raise CaptureVisibilityError(
-            f"another window overlaps the requested capture: {names}{suffix}",
-            details={"windows": overlaps, "truncated": len(overlaps) > len(shown)},
-        )
-    layers = [
-        {
-            "namespace": surface.get("namespace"),
-            "address": surface.get("address"),
-            "level": surface.get("level"),
-            "logical_rect": _intersection(rect, surface["logical_rect"]),
+            suffix = _more_suffix(details["window_count"], len(shown_windows))
+            messages.append(f"another window overlaps the requested capture: {names}{suffix}")
+        shown_layers = details["layers"]
+        if shown_layers:
+            names = ", ".join(_layer_message(item) for item in shown_layers)
+            suffix = _more_suffix(details["layer_count"], len(shown_layers))
+            messages.append(f"top or overlay layers overlap the requested capture: {names}{suffix}")
+        messages.append("stacking unsupported")
+        raise CaptureVisibilityError("; ".join(messages), details=details)
+
+
+def _bounded_text(value: Any) -> Any:
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    text = str(value)
+    if len(text) <= MAX_DETAIL_TEXT:
+        return text
+    return text[: MAX_DETAIL_TEXT - 1] + "…"
+
+
+def _contains_rect(container: dict[str, float], inner: dict[str, float]) -> bool:
+    return (
+        container["x"] <= inner["x"]
+        and container["y"] <= inner["y"]
+        and container["x"] + container["w"] >= inner["x"] + inner["w"]
+        and container["y"] + container["h"] >= inner["y"] + inner["h"]
+    )
+
+
+def _containment(target: dict[str, float], other: dict[str, float]) -> str:
+    if _contains_rect(other, target):
+        return "other-contains-target"
+    if _contains_rect(target, other):
+        return "target-contains-other"
+    return "overlap-only"
+
+
+def _transient_relation(
+    target: dict[str, Any], other: dict[str, Any]
+) -> dict[str, Any]:
+    """Report ownership only when the observed client data says it exists."""
+    owner = target.get("transient_owner")
+    if not isinstance(owner, dict):
+        return {
+            "status": "unsupported",
+            "reason": "the compositor client data did not expose transient ownership",
         }
-        for surface in snap.get("layer_surfaces", [])
-        if surface["level"] >= 2 and intersects(rect, surface["logical_rect"])
-    ]
-    if layers:
-        layer = layers[0]
-        raise CaptureVisibilityError(
-            f"top or overlay layer {layer['namespace'] or layer['address']} overlaps "
-            f"the requested capture at {layer['logical_rect']}",
-            details={"layers": layers, "truncated": False},
+    result = dict(owner)
+    if owner.get("status") == "known":
+        result["relation"] = (
+            "target-transient-owner"
+            if owner.get("address") == other.get("address")
+            else "different-transient-owner"
         )
+    return result
+
+
+def _window_detail(
+    target: dict[str, Any], other: dict[str, Any], overlap: dict[str, float]
+) -> dict[str, Any]:
+    target_rect = target["logical_rect"]
+    other_rect = other["logical_rect"]
+    return {
+        "class": _bounded_text(other.get("class")),
+        "title": _bounded_text(other.get("title")),
+        "address": _bounded_text(other.get("address")),
+        # logical_rect remains the established overlap field. The full window
+        # and the explicit intersection are separate so containment cannot be
+        # mistaken for the pixels that caused the refusal.
+        "logical_rect": overlap,
+        "window_rect": dict(other_rect),
+        "intersection": overlap,
+        "containment": _containment(target_rect, other_rect),
+        "transient_owner": _transient_relation(target, other),
+    }
+
+
+def _layer_detail(surface: dict[str, Any], overlap: dict[str, float]) -> dict[str, Any]:
+    return {
+        "namespace": _bounded_text(surface.get("namespace")),
+        "address": _bounded_text(surface.get("address")),
+        "level": surface.get("level"),
+        "logical_rect": overlap,
+        "surface_rect": dict(surface["logical_rect"]),
+        "intersection": overlap,
+        "input_authority": {
+            "status": "unknown",
+            "reason": "layer geometry does not establish event routing",
+        },
+    }
+
+
+def _visibility_details(
+    window: dict[str, Any],
+    rect: dict[str, float],
+    snap: dict[str, Any],
+    overlaps: list[dict[str, Any]],
+    layers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    shown_windows = overlaps[:MAX_WINDOW_DETAILS]
+    shown_layers = layers[:MAX_LAYER_DETAILS]
+    window_truncated = len(overlaps) > len(shown_windows)
+    layer_truncated = len(layers) > len(shown_layers)
+    # Import lazily so capture remains usable as the low-level primitive while
+    # sharing the observer's explicit outer-bounds versus union distinction.
+    from . import observe
+
+    target_rect = window.get("logical_rect", rect)
+    target_extent = observe.extent(target_rect, snap.get("monitors", []))
+    return {
+        "target": {
+            "address": _bounded_text(window.get("address")),
+            "class": _bounded_text(window.get("class")),
+            "title": _bounded_text(window.get("title")),
+            "logical_rect": dict(target_rect),
+            "extent": target_extent,
+            "reachability": observe.reachability(target_rect, snap.get("monitors", [])),
+        },
+        "windows": shown_windows,
+        "window_count": len(overlaps),
+        "window_limit": MAX_WINDOW_DETAILS,
+        "windows_truncated": window_truncated,
+        "layers": shown_layers,
+        "layer_count": len(layers),
+        "layer_limit": MAX_LAYER_DETAILS,
+        "layers_truncated": layer_truncated,
+        "truncated": window_truncated or layer_truncated,
+        "stacking": {
+            "status": "unsupported",
+            "reason": "focus history and geometry do not establish pixel stacking",
+        },
+    }
+
+
+def _more_suffix(total: int, shown: int) -> str:
+    remaining = total - shown
+    return f"; {remaining} more" if remaining else ""
+
+
+def _window_message(item: dict[str, Any]) -> str:
+    relation = item["containment"]
+    owner = item["transient_owner"]
+    ownership = owner.get("status", "unknown")
+    return (
+        f"{item['class']} {item['title']!r} ({item['address']}) at "
+        f"{item['intersection']} (window {item['window_rect']}) "
+        f"[{relation}; transient ownership {ownership}]"
+    )
+
+
+def _extent_message(details: dict[str, Any]) -> str | None:
+    target = details.get("target", {})
+    extent = target.get("extent", {})
+    if extent.get("status") in {None, "inside"}:
+        return None
+    edges = extent.get("edge_excess") or {}
+    edge_text = ", ".join(
+        f"{name} {edges[name]:g}"
+        for name in ("left", "right", "top", "bottom")
+        if edges.get(name, 0)
+    ) or "none"
+    reachability = target.get("reachability", {})
+    status = reachability.get("status", "unknown")
+    return f"target extent {extent.get('status')} ({edge_text}); reachability {status}"
+
+
+def _layer_message(item: dict[str, Any]) -> str:
+    name = item["namespace"] or item["address"] or "unknown"
+    return (
+        f"{name} (level {item['level']}) at {item['intersection']} "
+        f"(surface {item['surface_rect']}; input authority unknown)"
+    )
 
 
 def _run(args: list[str]) -> None:

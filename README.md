@@ -156,10 +156,15 @@ Input refuses with exit 31 when a top or overlay layer or ambiguous overlap
 prevents establishing that recipient. Unbound frames and their action receipts state that
 no recipient assertion exists.
 
-`cu observe` reports each window's intersections with active output rectangles,
-edge excess, and bounded interior gaps. A point in a monitor gap is outside the
-active output union and aimed input refuses with exit 34 before moving the
-pointer or creating a device.
+`cu observe` reports each window's outer-bounds extent separately from its
+active-output reachability. Reachability includes per-output intersections and
+scale, reachable/unreachable area, and bounded interior gaps; a point in a
+monitor gap is outside the active output union and aimed input refuses with exit
+34 before moving the pointer or creating a device. Window-capture exit 27
+refusals expose the same bounded obstruction facts in JSON and text: class,
+title, address, intersection, containment, and an explicit transient-ownership
+state. Geometry does not establish stacking, parenthood, layer event routing,
+or input authority; unsupported compositor facts remain marked unsupported.
 
 `shot` writes a PNG plus a **frame descriptor** recording the logical rectangle
 the image depicts, its pixel size, and what it costs the consumer it was
