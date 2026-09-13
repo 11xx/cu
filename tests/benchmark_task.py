@@ -18,6 +18,12 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from routine_checkpoint import CheckpointError, verify_artifact
+from routine_checkpoint import create as create_context
+from routine_checkpoint import read as read_context
+from routine_checkpoint import resume as resume_context
+from routine_checkpoint import write as write_context
+
 FIXTURE_VERSION = "cu-task-fixture/1"
 PRESERVED_RELATIVE = Path("pre-existing") / "README.md"
 PRESERVED_CONTENT = "pre-existing fixture data; keep this file unchanged\n"
@@ -70,6 +76,26 @@ def _write_item(root: Path, item: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(item["content"])
     return path
+
+
+def _routine_receipts(
+    root: Path, items: list[dict[str, Any]], attempt_id: str
+) -> list[dict[str, Any]]:
+    """Keep only receipts whose expected path and bytes still verify."""
+    receipts = []
+    for item in items:
+        receipt = {
+            "artifact_id": item["id"],
+            "path": str(_relative_artifact(item)),
+            "sha256": item["sha256"],
+            "size": item["size"],
+            "status": "verified",
+            "source_name": item["basename"],
+            "attempt_id": attempt_id,
+        }
+        if verify_artifact(root, receipt)["status"] == "verified":
+            receipts.append(receipt)
+    return receipts
 
 
 def _relative_artifact(item: dict[str, Any]) -> Path:
@@ -322,6 +348,82 @@ def run_trial(
             },
         }
     )
+    routine_task = {
+        "task_id": task_version,
+        "intent": "complete deterministic artifact fixture",
+        "destination": "artifacts",
+        "revision": task_version,
+        "document": f"fixture-document-{seed}",
+        "scope": "artifact-tree",
+        "parameters": {
+            "mode": mode,
+            "seed": str(seed),
+            "failure_ids": ",".join(sorted(fail_ids)),
+        },
+    }
+    routine_pending = [
+        {
+            "artifact_id": failure["id"],
+            "kind": "failed",
+            "status": "unresolved",
+            "stage": failure["stage"],
+        }
+        for failure in failures
+    ]
+    if interrupted_at is not None:
+        routine_pending.append(
+            {
+                "artifact_id": interrupted_at,
+                "kind": "interrupted",
+                "status": "uncertain",
+            }
+        )
+    routine_context = create_context(
+        task_id=routine_task["task_id"],
+        intent=routine_task["intent"],
+        destination=routine_task["destination"],
+        revision=routine_task["revision"],
+        document=routine_task["document"],
+        scope=routine_task["scope"],
+        parameters=routine_task["parameters"],
+        affordances=[{"kind": "artifact-tree", "status": "observed"}],
+        completed=_routine_receipts(output, items, f"{trial_id}:attempt-1"),
+        pending=routine_pending,
+        frame_bindings=[],
+        context_id=context_id,
+        shape=shape,
+        attempt_id=f"{trial_id}:attempt-1",
+        status=initial_status,
+        outcome=initial_outcome,
+        failures=failures,
+        evidence={
+            "freshness": "stale",
+            "sources": [f"{FIXTURE_VERSION}:{seed}"],
+        },
+    )
+    if shape == "cold-resume":
+        context_path = root / "routine-context.json"
+        write_context(context_path, routine_context)
+        routine_context = read_context(context_path)
+    try:
+        routine_resume = resume_context(
+            routine_context,
+            routine_task,
+            artifact_root=output,
+            aborted=interrupted_at is not None,
+        )
+    except CheckpointError as exc:
+        routine_resume = {
+            "context_id": context_id,
+            "status": "refused",
+            "reason": "aborted" if interrupted_at is not None else "invalid-context",
+            "detail": str(exc),
+            "skip_completed": [],
+            "reconsider": [],
+            "pending_exceptions": routine_pending,
+            "rebound_frames": [],
+            "rebound_leases": [],
+        }
     if recover and failures and interrupted_at is None:
         retry_started = time.perf_counter()
         retry_application_started = time.perf_counter()
@@ -375,6 +477,11 @@ def run_trial(
     if attempts[-1]["status"] == "completed" and not preservation["ok"]:
         attempts[-1]["fixture_outcome"] = "incomplete"
         attempts[-1]["operator_intent_satisfied"] = False
+    outcome = (
+        "aborted"
+        if interrupted_at is not None
+        else "completed" if verification["ok"] and preservation["ok"] else "incomplete"
+    )
     envelope = {
         "schema": "cu-task-benchmark/1",
         "fixture": {
@@ -395,11 +502,7 @@ def run_trial(
             "model": os.environ.get("CU_MODEL"),
             "effort": os.environ.get("CU_EFFORT"),
         },
-        "outcome": (
-            "aborted"
-            if interrupted_at is not None
-            else "completed" if verification["ok"] and preservation["ok"] else "incomplete"
-        ),
+        "outcome": outcome,
         "verification": verification,
         "preservation": {"policy": "outside-artifacts-root", "receipts": [preservation]},
         "receipts": receipts,
@@ -407,6 +510,23 @@ def run_trial(
         "recovery": {
             "attempted": recover and interrupted_at is None,
             "ids": recovery,
+            "routine_context_id": context_id,
+            "verified_prefix": routine_resume.get("skip_completed", []),
+            "reconsidered": [
+                item["artifact_id"] for item in routine_resume.get("reconsider", [])
+            ],
+        },
+        "routine": {
+            "context": routine_context,
+            "resume": routine_resume,
+            "eventual": {
+                "first_attempt_id": attempts[0]["attempt_id"],
+                "first_attempt_outcome": attempts[0]["fixture_outcome"],
+                "eventual_attempt_id": attempts[-1]["attempt_id"],
+                "eventual_outcome": outcome,
+                "recovery_attempted": recover and interrupted_at is None,
+                "recovery_ids": recovery,
+            },
         },
         "attempts": attempts,
         "unexpected_dialog": (

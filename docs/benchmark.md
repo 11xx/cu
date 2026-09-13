@@ -15,11 +15,13 @@ uv run python tests/benchmark_task.py --mode batch --seed 1 --delay 0.1
 
 The envelope records the fixture revision and seed, mode, round shape, runtime
 identity, item receipts, every attempt, failures, recovery IDs, verifier
-counts, and separate application/CU/harness/model timing fields. The allowed
-round shapes are `full-start`, `prepared-page`, `warm-follow-up`, and
-`cold-resume`. A failed attempt remains present when recovery creates a new
-retry attempt. `--interrupted` records an aborted partial run and never performs
-automatic recovery.
+counts, and separate application/CU/harness/model timing fields. It also
+contains the caller-managed routine context and the resume decision that joins
+the verified prefix to the P08 attempt receipts. The allowed round shapes are
+`full-start`, `prepared-page`, `warm-follow-up`, and `cold-resume`. A failed
+attempt remains present when recovery creates a new retry attempt.
+`--interrupted` records an aborted partial run and the context refuses resume;
+the fixture does not turn an abort into automatic recovery.
 
 The independent verifier maps each artifact id to its exact
 `<artifact-id>/<basename>` path and declared format, then checks that path's
@@ -31,6 +33,18 @@ also records a receipt for differing pre-existing data kept outside the
 artifact tree and requires that data to remain unchanged. A complete outcome
 requires all 16 expected paths and digests. `--no-recovery` deliberately leaves
 the failed item missing so the envelope reports an incomplete outcome.
+
+The routine context contains only relative artifact receipts with expected size
+and SHA-256 digest. Its resume decision rechecks those files and reports
+missing or changed entries for caller judgment; only still-verified entries
+are marked `skip_completed`. The context stores pending exceptions and
+historical runtime bindings but never reuses a frame or lease identifier. The
+fixture's explicit recovery loop handles its failed item after that decision,
+so the first-attempt and eventual outcomes remain separate. This synthetic
+context evidence does not measure a controller saving or justify a cost claim.
+The `cold-resume` fixture shape round-trips the context through its
+caller-selected fixture root before making the resume decision; warm shapes
+keep the same contract in memory.
 
 `individual`, `batch`, and `combined` are fixture execution shapes with the same
 expected output; they do not simulate CU subprocesses or a model. A comparative

@@ -181,6 +181,18 @@ def test_recovery_guidance_covers_current_action_boundaries():
     assert "outcome is uncertain" in RECOVERY
 
 
+def test_recovery_guidance_names_task_context_boundaries():
+    recovery = " ".join(RECOVERY.split())
+    for phrase in (
+        "caller-managed context",
+        "relative artifact path, size, and digest",
+        "Old frame and lease identifiers are historical evidence only",
+        "No context operation retries or replays an action",
+        "not a recipe, `cu know` entry",
+    ):
+        assert phrase in recovery
+
+
 @pytest.mark.parametrize(
     "argv",
     [
