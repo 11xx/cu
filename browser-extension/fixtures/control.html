@@ -23,6 +23,18 @@
     padding: 12px;
     margin: 12px 0;
   }
+  .collection-card {
+    border: 1px solid #9ab;
+    display: inline-block;
+    margin: 4px;
+    padding: 8px;
+  }
+  .collection-card .item-actions {
+    display: none;
+  }
+  .collection-card:hover .item-actions {
+    display: inline-flex;
+  }
   #pane {
     height: 130px;
     overflow: auto;
@@ -80,6 +92,18 @@
   <!-- Result templates may contain comment nodes. -->
   <article class="result-card"><a href="/short">Short performance</a> <span>5:44</span></article>
   <article class="result-card"><a href="/long">Long performance</a> <span>13:44</span></article>
+  <section id="collection" aria-label="Disposable collection">
+    <label><input id="select-all" type="checkbox" /> Select visible items</label>
+    <div class="collection-card" data-item="item-1"><span>Item 1</span><span class="item-actions"><input class="item-select" type="checkbox" aria-label="Select item 1" /></span></div>
+    <div class="collection-card" data-item="item-2"><span>Item 2</span><span class="item-actions"><input class="item-select" type="checkbox" aria-label="Select item 2" /></span></div>
+    <div class="collection-card" data-item="item-3"><span>Item 3</span><span class="item-actions"><input class="item-select" type="checkbox" aria-label="Select item 3" /></span></div>
+    <div class="collection-card" data-item="item-4"><span>Item 4</span><span class="item-actions"><input class="item-select" type="checkbox" aria-label="Select item 4" /></span></div>
+    <button id="bulk-download">Download selected</button>
+    <output id="bulk-state">selected=0; requested=0; completed=0; failed=0</output>
+  </section>
+  <section id="single-only" aria-label="Collection without bulk support">
+    <article class="single-card">Single item only</article>
+  </section>
   <div id="pane">
     <div>Scrollable fixture area</div>
     <button id="bottom">Bottom target</button>
@@ -138,6 +162,27 @@
   document.querySelector("#hover-action").onclick = () => {
     state.applications++;
     showState();
+  };
+  const selectAll = document.querySelector("#select-all");
+  const itemChecks = [...document.querySelectorAll(".item-select")];
+  const bulkState = document.querySelector("#bulk-state");
+  function selectedItems() {
+    return itemChecks.filter((check) => check.checked);
+  }
+  function showBulkState(values = {}) {
+    const selected = selectedItems().length;
+    const state = { selected, requested: 0, completed: 0, failed: 0, ...values };
+    bulkState.textContent = Object.entries(state).map(([key, value]) => `${key}=${value}`).join("; ");
+  }
+  selectAll.addEventListener("change", () => {
+    itemChecks.forEach((check) => { check.checked = selectAll.checked; });
+    showBulkState();
+  });
+  itemChecks.forEach((check) => check.addEventListener("change", showBulkState));
+  document.querySelector("#bulk-download").onclick = () => {
+    const requested = selectedItems().length;
+    const failed = selectedItems().filter((check) => check.closest(".collection-card").dataset.item === "item-3").length;
+    showBulkState({ requested, completed: requested - failed, failed });
   };
   document.querySelector("#mutate").onclick = () => {
     entry.value = "script-change";
