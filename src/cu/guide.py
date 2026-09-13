@@ -183,8 +183,10 @@ ACT THROUGH THE FRAME YOU READ
   is already done for you.
 
   Keyboard commands require a focused window and recheck its live denylist
-  state before sending keys. Pointer events recheck frame geometry after
-  device settlement. Safety timing and drift limits must be finite and nonnegative.
+  state before sending keys. Aimed pointer events recheck frame geometry,
+  monitor scale, recipient and covering layers after device settlement; aimed
+  typing repeats that recipient check before each chord. Safety timing and
+  drift limits must be finite and nonnegative.
 
   `focus` redirects keyboard actions without moving the pointer. `warp` places
   the compositor pointer exactly; it emits no native movement. `move` sends

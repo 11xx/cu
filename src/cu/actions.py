@@ -189,6 +189,10 @@ def warp_to(
     )
     point = aimed["logical"]
     landed = warp(cfg, point["x"], point["y"], dry_run=dry_run)
+    if not dry_run:
+        _under, landed = _live_pointer_target(
+            cfg, target["frame"], point, target["snapshot"]["monitors"]
+        )
     result = {
         "action": "warp",
         "movement": "warp",
@@ -308,10 +312,10 @@ def _motion_live_world(
     frame: dict[str, Any],
     monitors: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    # A window-bound frame already has its window geometry checked below. Its
-    # output list is static for the route; client and layer stacks are the
-    # recipients that can change under the pointer while we inject.
-    live_monitors = monitors if frame.get("window") is not None else _motion_monitors()
+    # Output scale and geometry can change without moving a client. Refresh
+    # them at the same live boundary as the client and layer stacks so the
+    # frame transform is never carried across a monitor reconfiguration.
+    live_monitors = _motion_monitors() if frame.get("monitor") is not None else monitors
     live_windows = _motion_windows(live_monitors)
     live_layers = _motion_layers()
     return live_monitors, live_windows, live_layers
@@ -1149,7 +1153,7 @@ def _type_into_focus(
                 cfg,
                 [select, chord] if select else [chord],
                 backend,
-                before_send=lambda: _recheck_keyboard(cfg, window),
+                before_send=lambda: _recheck_keyboard(cfg, window, pointer=pointer),
             )
             _mark_injected(injected)
             # The paste has to be consumed before the clipboard reverts;
@@ -1177,7 +1181,7 @@ def _type_into_focus(
                 for name, shifted in (uinput.char_to_key(c) for c in text)
             ],
             backend,
-            before_send=lambda: _recheck_keyboard(cfg, window),
+            before_send=lambda: _recheck_keyboard(cfg, window, pointer=pointer),
         )
         _mark_injected(injected)
         if verify:
@@ -1418,13 +1422,15 @@ def _live_pointer_target(
     cursor = observe.cursor()
     if expected is not None:
         safety.confirm_pointer(cfg, (expected["x"], expected["y"]), cursor)
-    if frame is not None and frame.get("window") is None:
+    if frame is not None and (frame.get("window") is None or frame.get("monitor") is not None):
         monitors = observe.monitors()
     windows = observe.windows(monitors)
     covering = observe.windows_at(cursor["x"], cursor["y"], windows)
     under = min(covering, key=lambda window: window["focus_order"], default=None)
     layer_surface = None
-    if frame is not None and frame.get("target_window") is not None:
+    if frame is not None and (
+        frame.get("window") is not None or frame.get("target_window") is not None
+    ):
         layer_surface = observe.layer_surface_at(
             cursor["x"], cursor["y"], observe.layer_surfaces()
         )
@@ -1449,11 +1455,32 @@ def _live_pointer_target(
     return under, cursor
 
 
-def _recheck_keyboard(cfg: dict[str, Any], window: dict[str, Any] | None) -> None:
-    """Reassert focus after device settlement, immediately before a chord."""
+def _recheck_aimed_target(cfg: dict[str, Any], pointer: dict[str, Any]) -> None:
+    """Reassert an aimed frame at the keyboard event boundary."""
+    frame = pointer["_frame"]
+    snap = observe.snapshot()
+    safety.check_frame(cfg, frame, snap["windows"], snap["monitors"])
+    point = pointer["logical"]
+    covering = observe.windows_at(point["x"], point["y"], snap["windows"])
+    under = min(covering, key=lambda item: item["focus_order"], default=None)
+    layer_surface = observe.layer_surface_at(
+        point["x"], point["y"], snap.get("layer_surfaces", [])
+    )
+    safety.check_denylist(cfg, under)
+    safety.check_target(
+        frame, under, covering=covering, layer_surface=layer_surface
+    )
+
+
+def _recheck_keyboard(
+    cfg: dict[str, Any], window: dict[str, Any] | None, *, pointer: dict[str, Any] | None = None
+) -> None:
+    """Reassert focus and any aimed frame immediately before a chord."""
     live = observe.focused()
     safety.preflight_keyboard(cfg, live, live)
     safety.check_focus(cfg, window, live)
+    if pointer is not None:
+        _recheck_aimed_target(cfg, pointer)
 
 
 def _describe(window: dict[str, Any] | None) -> dict[str, Any] | None:
