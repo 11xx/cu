@@ -64,11 +64,13 @@ caller that reaches straight for `cu click` can still find out what it owes.
 ## Playground
 
 Run `cu playground` and open its printed loopback URL in your browser. It is a
-ten-task native suite with explicit Start/retry/reset controls, immutable terminal
-attempt receipts and visible PASS/FAIL/ABORTED results; no extension is
-required. Ctrl-C stops the explicitly launched foreground server. See
-[the playground workflow](docs/playground.md) for bounded controller trials and
-separate token/cost, speed and outcome measurements.
+ten-task native suite—two baseline tasks and eight named synthetic fixtures—with
+explicit Start/retry/reset controls, immutable terminal attempt receipts and
+visible PASS/FAIL/ABORTED results; no extension is required. Ctrl-C stops the
+explicitly launched foreground server. See [the playground workflow](docs/playground.md)
+for experimental, separately orchestrated controller/worker trials and separate
+token/cost, speed and outcome measurements; `cu` never selects or launches a
+worker, and trial evidence is not a product claim.
 
 ## Usage
 
@@ -277,10 +279,11 @@ design rests on.
 
 ## Development
 
-The two gates. Both tools and the rules they enforce are pinned in
-`pyproject.toml`, so they report the same thing on any host.
+`make check` runs the complete local gate: Python tests, native-playground Node
+tests, adapter/extension Node tests, Ruff, and the package build. The tool
+and development requirements are declared in `pyproject.toml`; `uv.lock` and
+`package-lock.json` pin the resolved Python and JavaScript dependencies.
 
 ```sh
-uv run pytest
-uv run ruff check .
+make check
 ```

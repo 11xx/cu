@@ -100,6 +100,14 @@ def test_the_guide_points_at_per_command_help():
     assert "cu <command> --help" in guide.GUIDE
 
 
+def test_practice_guidance_labels_worker_comparisons_as_experimental():
+    practice = _section("EXPLICIT PRACTICE AND BENCHMARKS").lower()
+    assert "eight" in practice
+    assert "launches a worker" in practice
+    assert "experimental" in practice
+    assert "not a cu product capability" in practice
+
+
 # --- the auto-hidden-UI tactic -------------------------------------------
 
 def _section(title):

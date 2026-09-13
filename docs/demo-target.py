@@ -14,6 +14,10 @@ from gi.repository import Gtk  # noqa: E402, I001
 RESULT = Path(os.environ["CU_DEMO_RESULT"])
 
 
+def write_result(clicked: bool) -> None:
+    RESULT.write_text(json.dumps({"clicked": clicked}) + "\n", encoding="utf-8")
+
+
 class Demo(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.cu.PublicationDemo")
@@ -33,7 +37,7 @@ class Demo(Gtk.Application):
 
         def clicked(_button):
             state.set_label("State: verified")
-            RESULT.write_text(json.dumps({"clicked": True}) + "\n")
+            write_result(True)
 
         button.connect("clicked", clicked)
         box.append(heading)
@@ -43,4 +47,5 @@ class Demo(Gtk.Application):
         window.present()
 
 
+write_result(False)
 Demo().run(None)
