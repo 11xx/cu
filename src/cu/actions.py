@@ -93,6 +93,12 @@ def aim(frame: dict[str, Any], x: float, y: float, snap: dict[str, Any]) -> dict
             exits.UNREACHABLE_AIM,
             f"frame {frame['id']} maps ({x:g},{y:g}) to ({lx:g},{ly:g}) outside "
             "the union of active outputs",
+            details={
+                "point": {"x": lx, "y": ly, "reachable": False},
+                "reachability": observe.reachability(
+                    frame["logical_rect"], snap["monitors"]
+                ),
+            },
         )
     declared = frame.get("window")
     covering = observe.windows_at(lx, ly, snap["windows"])

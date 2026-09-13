@@ -213,6 +213,61 @@ def cmd_profiles(args: argparse.Namespace) -> int:
 def cmd_observe(args: argparse.Namespace) -> int:
     snap = observe.snapshot()
 
+    def render_window_diagnostics(window: dict[str, Any]) -> None:
+        extent = window.get("extent")
+        if extent and extent.get("status") != "inside":
+            edges = extent.get("edge_excess") or {}
+            edge_text = " ".join(
+                f"{name} {_num(edges.get(name, 0))}"
+                for name in ("left", "right", "top", "bottom")
+                if edges.get(name, 0)
+            ) or "none"
+            print(
+                f"    extent {extent.get('status', 'unknown')} "
+                f"outer edge excess {edge_text}"
+            )
+
+        reachability = window.get("reachability")
+        if reachability:
+            outputs = []
+            for item in reachability.get("intersections", []):
+                scale = (
+                    f" scale {_num(item['scale'])}"
+                    if item.get("scale") is not None
+                    else ""
+                )
+                outputs.append(
+                    f"{item['output']}{scale} {fmt_rect(item['logical_rect'])}"
+                )
+            output_text = ", ".join(outputs) or "none"
+            gap_text = str(reachability.get("gap_count", 0))
+            if reachability.get("gaps"):
+                gap_text += " (" + ", ".join(
+                    fmt_rect(gap) for gap in reachability["gaps"]
+                ) + ")"
+            if reachability.get("truncated"):
+                gap_text += "; details truncated"
+            print(
+                f"    reachability {reachability['status']} "
+                f"reachable area {reachability.get('reachable_area', 0):g}; "
+                f"unreachable area {reachability.get('unreachable_area', 0):g}; "
+                f"outputs {output_text}; gaps {gap_text}"
+            )
+
+        owner = window.get("transient_owner")
+        if owner and owner.get("status") != "none":
+            detail = owner.get("reason")
+            if owner.get("address"):
+                detail = (
+                    f"{detail}; address {owner['address']}"
+                    if detail
+                    else owner["address"]
+                )
+            print(
+                f"    transient ownership {owner.get('status', 'unknown')}: "
+                f"{detail or 'none'}"
+            )
+
     def render(s: Any) -> None:
         for m in s["monitors"]:
             focus = " *" if m["focused"] else "  "
@@ -238,13 +293,7 @@ def cmd_observe(args: argparse.Namespace) -> int:
                 f"{focus}{w['class']:<18} {fmt_rect(w['logical_rect']):<22} "
                 f"ws {w['workspace']:<4} {xw:<9} {w['title'][:44]}"
             )
-            reachability = w.get("reachability")
-            if reachability and reachability["status"] != "fully-reachable":
-                print(
-                    f"    reachability {reachability['status']} "
-                    f"unreachable area {reachability['unreachable_area']:g}; "
-                    f"gaps {reachability['gap_count']}"
-                )
+            render_window_diagnostics(w)
         for surface in s["layer_surfaces"]:
             print(
                 f"  layer {surface['namespace']:<18} "
@@ -2081,7 +2130,7 @@ def cmd_batch(args: argparse.Namespace) -> int:
             contextlib.redirect_stdout(output),
             contextlib.redirect_stderr(errors),
         ):
-            code = _safe_call(invoke)
+            code = _safe_call(invoke, as_json=True)
         result = json.loads(output.getvalue()) if output.getvalue().strip() else None
         if (code == exits.OK and isinstance(result, dict)
                 and result.get("verified", {}).get("status") == "unverified"):
@@ -2663,7 +2712,10 @@ def main(argv: list[str] | None = None) -> int:
         with metrics.collecting(measurement):
             if args.command not in NON_PUBLISHING_COMMANDS:
                 status.publish(args.command, detail=why, session=session)
-            code = _safe_call(lambda: _dispatch(args, why, session))
+            code = _safe_call(
+                lambda: _dispatch(args, why, session),
+                as_json=bool(getattr(args, "json", False)),
+            )
         if measurement is not None:
             print("cu metrics: " + json.dumps(measurement.report(code)), file=sys.stderr)
         return code
@@ -2687,12 +2739,40 @@ def _dispatch(args: argparse.Namespace, why: str, session: str | None) -> int:
     return args.run(args)
 
 
-def _safe_call(call) -> int:
+def _emit_error(
+    code: int,
+    message: str,
+    *,
+    details: dict[str, Any] | None = None,
+    as_json: bool,
+) -> None:
+    """Publish one machine-readable refusal without changing its exit code."""
+    if not as_json:
+        return
+    json.dump(
+        {
+            "status": "error",
+            "code": code,
+            "name": exits.name(code),
+            "message": message,
+            "response": exits.RESPONSE[code],
+            "details": details or {},
+        },
+        sys.stdout,
+        indent=2,
+    )
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+def _safe_call(call, *, as_json: bool = False) -> int:
     try:
         return call()
     except Refused as exc:
         # An interlock, not a fault. The code is what the caller acts on, so
         # the response the taxonomy prescribes is printed alongside it.
+        if exc.details:
+            _emit_error(exc.code, exc.reason, details=exc.details, as_json=as_json)
         print(f"cu: refused: {exc.reason}", file=sys.stderr)
         print(f"cu: {exits.RESPONSE[exc.code]}", file=sys.stderr)
         return exc.code
@@ -2731,6 +2811,12 @@ def _safe_call(call) -> int:
         print(f"cu: {exits.RESPONSE[exits.CAPTURE_BUDGET_EXCEEDED]}", file=sys.stderr)
         return exits.CAPTURE_BUDGET_EXCEEDED
     except capture.CaptureVisibilityError as exc:
+        _emit_error(
+            exits.TARGET_NOT_VISIBLE,
+            str(exc),
+            details=exc.details,
+            as_json=as_json,
+        )
         print(f"cu: {exc}", file=sys.stderr)
         print(f"cu: {exits.RESPONSE[exits.TARGET_NOT_VISIBLE]}", file=sys.stderr)
         return exits.TARGET_NOT_VISIBLE

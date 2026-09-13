@@ -97,9 +97,20 @@ CAPTURE ONLY WHAT YOU NEED TO READ
 
   A region is desktop-absolute by itself. With --output, its x,y are relative
   to that output; the returned logical_rect is always desktop-absolute.
-  `cu observe` also reports each window's intersections with active outputs,
-  edge excess beyond their outer bounds, and bounded interior gaps. A desktop
+  `cu observe` reports each window's outer-bounds extent separately from active
+  output reachability. Reachability includes per-output scale/intersections,
+  reachable and unreachable area, and bounded interior gaps; a desktop
   bounding rectangle includes monitor gaps, so a point in one is not reachable.
+  The extent record reports clipping and edge excess without turning the outer
+  box into a reachability claim. Window-capture exit 27 exposes bounded other-
+  window/layer details in JSON and text, including intersection, containment,
+  and transient ownership when the compositor supplies it; unsupported facts
+  stay explicitly unsupported.
+
+  A JSON refusal keeps its exit code, response and message alongside the
+  bounded diagnostic. Text refusals render the same entries and truncation
+  counts. Geometry does not establish stacking, parenthood, layer event
+  routing, or input authority.
 
   A capture prints a frame id and a path. Read the PNG at that path, along
   with what the image will cost whoever reads it. --if-changed prints the id it

@@ -7,6 +7,7 @@ fixture would pass while the transform was wrong.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -226,6 +227,208 @@ def test_reachability_ignores_disabled_outputs_and_bounds_gap_details():
     assert result["gap_count"] > 0
     assert result["gaps"] == []
     assert result["truncated"] is True
+
+
+def test_extent_is_outer_clipping_separate_from_union_reachability():
+    outputs = [
+        {
+            "name": "LEFT",
+            "scale": 1.0,
+            "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+        },
+        {
+            "name": "RIGHT",
+            "scale": 2.0,
+            "logical_rect": {"x": 130, "y": 0, "w": 40, "h": 50},
+        },
+    ]
+    rect = {"x": -10, "y": 10, "w": 180, "h": 40}
+
+    extent = observe.extent(rect, outputs)
+    reachability = observe.reachability(rect, outputs)
+
+    assert extent["status"] == "partially-outside"
+    assert extent["edge_excess"] == {"left": 10, "right": 0.0, "top": 0.0, "bottom": 0.0}
+    assert extent["clipped_to_outer_bounds"] == {"x": 0, "y": 10, "w": 170, "h": 40}
+    assert reachability["extent"] == extent
+    assert reachability["status"] == "partially-reachable"
+    assert reachability["intersections"][1]["scale"] == 2.0
+    assert reachability["gaps"] == [{"x": 100, "y": 10, "w": 30, "h": 40}]
+    assert reachability["unreachable_area"] == 1600.0
+
+
+def test_reachability_bounds_output_and_gap_details_independently():
+    outputs = [
+        {
+            "name": f"OUT-{index}",
+            "logical_rect": {"x": 0, "y": 0, "w": 10, "h": 10},
+        }
+        for index in range(observe.MAX_OUTPUT_DETAILS + 4)
+    ]
+    output_result = observe.reachability({"x": 0, "y": 0, "w": 10, "h": 10}, outputs)
+    assert len(output_result["intersections"]) == observe.MAX_OUTPUT_DETAILS
+    assert output_result["intersection_count"] == observe.MAX_OUTPUT_DETAILS + 4
+    assert output_result["intersections_truncated"] is True
+    assert output_result["truncated"] is True
+
+    sparse_outputs = [
+        {
+            "name": f"POINT-{index}",
+            "logical_rect": {"x": index * 10, "y": index * 10, "w": 1, "h": 1},
+        }
+        for index in range(9)
+    ]
+    gap_result = observe.reachability(
+        {"x": 0, "y": 0, "w": 100, "h": 100}, sparse_outputs, max_gaps=2
+    )
+    assert len(gap_result["gaps"]) == 2
+    assert gap_result["gap_limit"] == 2
+    assert gap_result["gap_count"] > 2
+    assert gap_result["truncated"] is True
+
+
+def test_windows_report_extent_and_unsupported_transient_ownership(monkeypatch):
+    monitors = [
+        {
+            "id": 0,
+            "name": "OUT",
+            "scale": 1.0,
+            "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+            "focused": True,
+            "active_workspace": "1",
+            "special_workspace": "",
+            "disabled": False,
+        }
+    ]
+    client = {
+        "address": "0xchild",
+        "class": "same-class",
+        "title": "child",
+        "pid": 42,
+        "monitor": 0,
+        "workspace": {"name": "1"},
+        "at": [-10, 10],
+        "size": [120, 40],
+        "visible": True,
+        "floating": True,
+        "xwayland": False,
+    }
+    monkeypatch.setattr(observe.hypr, "query", lambda what: [client])
+
+    result = observe.windows(monitors)[0]
+
+    assert result["transient_owner"]["status"] == "unsupported"
+    assert "did not expose" in result["transient_owner"]["reason"]
+    assert result["extent"]["status"] == "partially-outside"
+    assert result["extent"]["edge_excess"]["left"] == 10
+    assert result["reachability"]["status"] == "partially-reachable"
+
+
+def test_transient_ownership_uses_only_an_explicit_compositor_field(monkeypatch):
+    monitors = [
+        {
+            "id": 0,
+            "name": "OUT",
+            "scale": 1.0,
+            "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+            "focused": True,
+            "active_workspace": "1",
+            "special_workspace": "",
+            "disabled": False,
+        }
+    ]
+    parent = {
+        "address": "0xparent",
+        "class": "same-class",
+        "title": "parent",
+        "pid": 7,
+        "monitor": 0,
+        "workspace": {"name": "1"},
+        "at": [0, 0],
+        "size": [100, 100],
+        "visible": True,
+        "floating": True,
+        "xwayland": False,
+    }
+    child = {
+        **parent,
+        "address": "0xchild",
+        "title": "child",
+        "at": [10, 10],
+        "size": [40, 40],
+        "parent": "0xparent",
+    }
+    monkeypatch.setattr(observe.hypr, "query", lambda what: [parent, child])
+
+    result = observe.windows(monitors)
+
+    parent_result = next(w for w in result if w["address"] == "0xparent")
+    assert parent_result["transient_owner"]["status"] == "unsupported"
+    assert next(w for w in result if w["address"] == "0xchild")["transient_owner"] == {
+        "status": "known",
+        "source": "parent",
+        "address": "0xparent",
+    }
+
+
+def test_observe_text_exposes_the_same_extent_union_and_ownership_facts(monkeypatch, capsys):
+    monitor = {
+        "name": "LEFT",
+        "id": 0,
+        "scale": 1.0,
+        "physical": {"w": 100, "h": 100},
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "reserved": {"left": 0, "top": 0, "right": 0, "bottom": 0},
+        "focused": True,
+        "active_workspace": "1",
+        "special_workspace": "",
+        "disabled": False,
+    }
+    second = {
+        **monitor,
+        "name": "RIGHT",
+        "id": 1,
+        "scale": 2.0,
+        "physical": {"w": 80, "h": 100},
+        "logical_rect": {"x": 130, "y": 0, "w": 40, "h": 50},
+        "focused": False,
+    }
+    rect = {"x": -10, "y": 10, "w": 180, "h": 40}
+    window = {
+        "address": "0xwindow",
+        "class": "same-class",
+        "title": "partly off output",
+        "logical_rect": rect,
+        "focused": True,
+        "workspace": "1",
+        "xwayland": False,
+        "extent": observe.extent(rect, [monitor, second]),
+        "reachability": observe.reachability(rect, [monitor, second]),
+        "transient_owner": {
+            "status": "unsupported",
+            "reason": "the compositor client data did not expose transient ownership",
+        },
+    }
+    snap = {
+        "monitors": [monitor, second],
+        "desktop_logical_bounds": observe.desktop_bounds([monitor, second]),
+        "windows": [window],
+        "layer_surfaces": [],
+        "focused": window,
+        "cursor_logical": {"x": 5, "y": 5},
+    }
+    monkeypatch.setattr(observe, "snapshot", lambda: snap)
+    assert cli.main(["observe", "--json"]) == exits.OK
+    payload = json.loads(capsys.readouterr().out)
+
+    assert cli.main(["observe"]) == exits.OK
+    text = capsys.readouterr().out
+    assert payload["windows"][0]["extent"]["edge_excess"]["left"] == 10
+    assert "extent partially-outside" in text
+    assert "edge excess left 10" in text
+    assert "RIGHT scale 2" in text
+    assert "gaps 1 (30x40+100+10)" in text
+    assert "transient ownership unsupported" in text
 
 
 def test_every_exit_code_documents_a_response():

@@ -561,7 +561,7 @@ def test_target_window_refuses_an_ambiguous_overlap():
     assert caught.value.code == exits.TARGET_AMBIGUOUS
 
 
-def test_aim_outside_active_output_union_refuses_before_warp(monkeypatch):
+def test_aim_outside_active_output_union_refuses_before_warp(monkeypatch, capsys):
     monitors = [
         {"name": "LEFT", "logical_rect": {"x": 0, "y": 0, "w": 10, "h": 10}},
         {"name": "RIGHT", "logical_rect": {"x": 20, "y": 0, "w": 10, "h": 10}},
@@ -585,7 +585,13 @@ def test_aim_outside_active_output_union_refuses_before_warp(monkeypatch):
     monkeypatch.setattr(observe, "snapshot", lambda: snapshot)
     monkeypatch.setattr(actions.hypr, "move_cursor", lambda *args: warps.append(args))
     monkeypatch.setattr(checks, "_processes", lambda **_kwargs: [])
-    assert cli.main(["warp", "--frame", "f1", "--at", "15,1"]) == exits.UNREACHABLE_AIM
+    assert cli.main(["warp", "--frame", "f1", "--at", "15,1", "--json"]) == exits.UNREACHABLE_AIM
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["code"] == exits.UNREACHABLE_AIM
+    assert payload["details"]["point"] == {"x": 15.0, "y": 1.0, "reachable": False}
+    assert payload["details"]["reachability"]["gaps"] == [
+        {"x": 10, "y": 0.0, "w": 10, "h": 10}
+    ]
     assert warps == []
 
 
