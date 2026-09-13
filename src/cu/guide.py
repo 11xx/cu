@@ -148,8 +148,9 @@ ACT THROUGH THE FRAME YOU READ
   the compositor pointer exactly; it emits no native movement. `move` sends
   bounded native relative samples over a finite duration, with feedback toward
   the endpoint and no hidden final warp. Its starting pointer and every sampled
-  point must stay inside the inspected frame; use --duration, --hz, and
-  --timeout to state the finite motion bound. `scroll` may aim through a frame
+  point must stay inside the inspected frame; each submitted event gets a
+  bounded delivery-settle read before another correction. Use --duration, --hz,
+  and --timeout to state the finite motion bound. `scroll` may aim through a frame
   first, or omit --frame and --at to send wheel events where the pointer already
   sits.
 

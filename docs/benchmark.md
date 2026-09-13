@@ -21,9 +21,10 @@ percentage is converted into a price or speed claim. `CU_INVOCATION_ID` and
 `CU_HARNESS_SESSION` are copied only when a caller supplies them.
 
 The independent verifier maps each artifact id to its exact
-`<artifact-id>/<basename>` path and declared format, then checks file stability
-and SHA-256 content. It rejects zero-byte, changing, missing, unexpected-name,
-format-mismatch, wrong-content, and duplicate-count-only results. Duplicate
+`<artifact-id>/<basename>` path and declared format, then checks that path's
+size and SHA-256 content while reading it for stability. It rejects zero-byte,
+changing, missing, unexpected-name, format-mismatch, per-artifact mismatch,
+wrong-content, and duplicate-count-only results. Duplicate
 basenames are valid only in their separate artifact-id directories. Each trial
 also records a receipt for differing pre-existing data kept outside the
 artifact tree and requires that data to remain unchanged. A complete outcome

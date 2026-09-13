@@ -160,7 +160,22 @@ def verify(root: Path, items: list[dict[str, Any]] | None = None) -> dict[str, A
         if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
             failures.append({"kind": "changing", "path": str(path.relative_to(root))})
             continue
-        actual[hashlib.sha256(data).hexdigest()] += 1
+        digest = hashlib.sha256(data).hexdigest()
+        if item is not None and (
+            before.st_size != item["size"] or digest != item["sha256"]
+        ):
+            failures.append(
+                {
+                    "kind": "artifact-mismatch",
+                    "path": str(relative),
+                    "id": item["id"],
+                    "expected_size": item["size"],
+                    "actual_size": before.st_size,
+                    "expected_sha256": item["sha256"],
+                    "actual_sha256": digest,
+                }
+            )
+        actual[digest] += 1
     for relative in sorted(set(expected_by_path) - {path.relative_to(root) for path in files}):
         failures.append(
             {

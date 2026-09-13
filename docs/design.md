@@ -152,7 +152,9 @@ inspected frame before every sample; abort, stale target, a pointer outside the
 route, device failure, deadline, or non-convergence stops the operation. It
 never finishes with a hidden warp. A pointer displacement between native
 samples is treated as user intervention and yields with `HUMAN_ACTIVE` instead
-of being corrected as acceleration. A click remains: warp through IPC, assert
+of being corrected as acceleration. A submitted event gets a bounded delivery
+settle read before another correction; an event that never becomes visible
+yields with `MOTION_NOT_CONVERGED`. A click remains: warp through IPC, assert
 the expected window is still under the point, then press and release through
 uinput.
 
