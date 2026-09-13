@@ -6,6 +6,8 @@ permission, TCP listener, or persistent page archive.
 
 The supported and unsupported slices, their source/test evidence, and bounded
 successor contracts are maintained in the [Firefox capability matrix](../docs/browser-capabilities.md).
+Browser CSS rectangles remain unprojectable into CU frames; the association
+probe and invalidation contract are in [browser-frame-association.md](../docs/browser-frame-association.md).
 
 ## Enable a tab
 
