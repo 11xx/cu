@@ -25,8 +25,19 @@ EXPLICIT PRACTICE AND BENCHMARKS
   cu playground --port 8765      Choose a loopback port; Ctrl-C stops serving.
 
   Open the URL in your chosen browser. No extension is required. The native
-  suite has explicit Start, retry, task-reset and run-reset controls, visible
-  PASS/FAIL/ABORTED outcomes, per-attempt receipts and a readiness/scroll task.
+  suite has six independent task definitions with explicit Start, retry,
+  task-reset and run-reset controls, visible PASS/FAIL/ABORTED outcomes,
+  per-attempt receipts and seed-varied synthetic fixtures. The original form
+  and readiness/scroll tasks remain available alongside Dispatch desk, Delayed
+  parcel, Archive elevator and Gallery crew.
+  Dispatch desk requires the visible destination, quantity and notes plus one
+  dispatch receipt; typing alone remains pending. Delayed parcel requires one
+  visible job start, the Ready state and acknowledgement of that job's receipt;
+  observe Ready rather than prescribing a sleep. Archive elevator has a nearby
+  outer scroll area and a separately scrollable INNER pane; target identity and
+  its reached receipt, not a numeric offset, authorize Bottom. Gallery crew
+  requires a representative card's native CSS hover controls, the exact visible
+  subset, one group action and recovery of only its simulated failed item.
   Practice only when explicitly requested; nothing launches a browser, grants a
   page or calls a model automatically. For a cheaper-controller trial,
   explicitly choose a controller or worker interface with follow-up support.

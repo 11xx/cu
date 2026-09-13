@@ -6,13 +6,13 @@
 <main>
   <h1>CU native playground</h1>
   <p>
-    A disposable, extension-free practice suite. Start a task explicitly; changing fields or
-    selecting a task never starts its timer.
+    A disposable, extension-free practice suite with six independently scored tasks. Start a task
+    explicitly; changing fields or selecting a task never starts its timer.
   </p>
 
   <section class="task-summary" aria-label="Task summary">
     <h2>Task status</h2>
-    <output id="suite-progress">Suite progress: 0/2 PASS</output>
+    <output id="suite-progress">Suite progress: 0/6 PASS</output>
     <output id="run-meta">Run: not started</output>
     <div id="task-list"></div>
     <div>
@@ -47,6 +47,54 @@
         <button id="bottom" type="button">Bottom target</button>
       </div>
       <output id="scroll-state">scroll=0</output>
+    </div>
+
+    <div id="dispatch-controls" hidden>
+      <h3>Dispatch form</h3>
+      <p id="dispatch-brief"></p>
+      <label>Destination <input id="dispatch-destination" /></label>
+      <label>Quantity <input id="dispatch-quantity" type="number" min="1" /></label>
+      <label>Notes <textarea id="dispatch-notes"></textarea></label>
+      <button id="dispatch-submit" type="button">Submit dispatch once</button>
+      <output id="dispatch-receipt-status" aria-live="polite"></output>
+    </div>
+
+    <div id="parcel-controls" hidden>
+      <h3>Parcel handoff</h3>
+      <p id="parcel-brief"></p>
+      <button id="parcel-start-job" type="button">Start job once</button>
+      <output id="parcel-ready" aria-live="polite"></output>
+      <label>Receipt job ID <input id="parcel-receipt-id" /></label>
+      <button id="parcel-ack" type="button">Acknowledge matching receipt</button>
+      <output id="parcel-receipt-status" aria-live="polite"></output>
+    </div>
+
+    <div id="elevator-controls" hidden>
+      <h3>Archive elevator</h3>
+      <p id="elevator-brief"></p>
+      <div id="elevator-outer" aria-label="Scrollable outer archive context">
+        <div id="elevator-outer-content">
+          <p>Outer archive context — nearby scrolling is allowed but is not the INNER target.</p>
+          <div id="archive-inner" aria-label="INNER archive pane">
+            <div id="archive-inner-content">
+              <p>INNER archive records</p>
+              <button id="archive-bottom" type="button">Bottom target</button>
+            </div>
+          </div>
+          <p>Outer archive context continues below the INNER pane.</p>
+        </div>
+      </div>
+      <output id="elevator-progress" aria-live="polite"></output>
+      <output id="elevator-target-status" aria-live="polite"></output>
+    </div>
+
+    <div id="gallery-controls" hidden>
+      <h3>Gallery crew</h3>
+      <p id="gallery-brief"></p>
+      <output id="gallery-selection" aria-live="polite"></output>
+      <div id="gallery-items"></div>
+      <button id="gallery-group-action" type="button"></button>
+      <output id="gallery-action-status" aria-live="polite"></output>
     </div>
   </section>
 
