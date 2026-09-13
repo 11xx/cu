@@ -43,6 +43,7 @@ cu shot                          # capture the focused window
 cu shot --output <name>          # a whole monitor; `cu observe` names them
 cu shot --region '100,100 400x200'         # desktop-absolute
 cu shot --output <name> --region '0,0 900x26'  # relative to that output
+cu shot --output <name> --target-window <selector> # bind aimed input to one window
 cu shot --if-changed             # reuse the last frame if nothing moved
 cu shot --after f3 --watch '0,0 200x26' # recapture once pixels change and settle
 cu shot --for openai             # capture at another consumer's budget
@@ -97,7 +98,13 @@ guess. `cu profiles` shows what each resolves to; `--for` overrides per command.
 
 Window/landmark capture refuses hidden or geometrically obstructed targets
 with exit 27; it never silently focuses or switches workspaces. Explicit output
-or region capture remains available without asserting window identity.
+or region capture remains available without asserting window identity. Add
+`--target-window <selector>` to an output or region capture when later aimed
+input must be bound to that exact window; the frame keeps `window: null` and
+retains a separate target descriptor so an obstructed dialog can be observed.
+Input refuses with exit 31 when a covering layer or ambiguous overlap prevents
+establishing that recipient. Unbound frames and their action receipts state that
+no recipient assertion exists.
 
 `shot` writes a PNG plus a **frame descriptor** recording the logical rectangle
 the image depicts, its pixel size, and what it costs the consumer it was

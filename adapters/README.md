@@ -61,9 +61,12 @@ Never retry the action prefix merely because the final image was unavailable.
 ## Bounds and context
 
 Actions use CU's 32-step/64-KiB batch limit. `shot` accepts up to eight flag/value
-pairs: `--window`, `--output`, `--region`, `--landmark`, `--context`, `--for`,
-`--after`, `--watch`. CU validates their meaning. Capture syntax/target failures
-can occur after actions complete. There is no arbitrary-command or shell escape.
+pairs: `--window`, `--output`, `--region`, `--target-window`, `--landmark`,
+`--context`, `--for`, `--after`, `--watch`. CU validates their meaning.
+`--target-window` binds aimed input to an exact window while retaining the
+output or region as the captured source; omit it for observation-only frames.
+Capture syntax/target failures can occur after actions complete. There is no
+arbitrary-command or shell escape.
 
 The default capture is the active window. Select a landmark or an explicitly
 known region for a small control; request `--window`, then `--output`, when

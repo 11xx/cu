@@ -179,8 +179,28 @@ def content_identity(frame: dict[str, Any]) -> str | None:
     they meant. The title is the identity every window has; an adapter with a
     better one — a tab URL — records it here instead.
     """
-    window = frame.get("window") or {}
+    window = frame.get("window") or frame.get("target_window") or {}
     return window.get("content_id") or window.get("title")
+
+
+def _window_staleness(
+    label: str, expected: dict[str, Any], windows: list[dict[str, Any]]
+) -> str | None:
+    """Check one recorded window identity and geometry against live clients."""
+    live = next((w for w in windows if w.get("address") == expected.get("address")), None)
+    if live is None:
+        return (
+            f"{label} {expected.get('class', '<unknown>')} "
+            f"({expected.get('address', '<unknown>')}) is gone"
+        )
+    if expected.get("class") and "class" in live and live.get("class") != expected["class"]:
+        return (
+            f"{label} identity changed from {expected['class']} "
+            f"({expected.get('address', '<unknown>')}) to {live.get('class', '<unknown>')}"
+        )
+    if live.get("logical_rect") != expected.get("logical_rect"):
+        return f"{label} {expected.get('class', '<unknown>')} moved or resized since capture"
+    return None
 
 
 def staleness(
@@ -202,6 +222,7 @@ def staleness(
     if age(frame) > max_age:
         return f"frame is {age(frame):.0f}s old (limit {max_age:.0f}s)"
     window = frame.get("window")
+    target_window = frame.get("target_window") if window is None else None
     if window is None:
         monitor = frame.get("monitor") or {}
         captured = monitor.get("logical_rect")
@@ -212,13 +233,10 @@ def staleness(
             return f"output {monitor.get('name', '<unknown>')} is gone"
         if live["logical_rect"] != captured:
             return f"output {monitor['name']} moved or changed size since capture"
+        if target_window is not None:
+            return _window_staleness("target window", target_window, windows)
         return None
-    live = next((w for w in windows if w["address"] == window["address"]), None)
-    if live is None:
-        return f"window {window['class']} ({window['address']}) is gone"
-    if live["logical_rect"] != window["logical_rect"]:
-        return f"window {window['class']} moved or resized since capture"
-    return None
+    return _window_staleness("window", window, windows)
 
 
 def content_drift(
@@ -243,11 +261,11 @@ def content_drift(
     still bound to a moment and why `content_id` exists for an adapter that
     can name the document itself.
     """
-    window = frame.get("window")
+    window = frame.get("window") or frame.get("target_window")
     captured = content_identity(frame)
     if window is None or captured is None:
         return None
-    live = next((w for w in windows if w["address"] == window["address"]), None)
+    live = next((w for w in windows if w.get("address") == window.get("address")), None)
     if live is None:
         return None  # the window is gone, which `staleness` already reports
     current = live.get("content_id") or live.get("title")
@@ -261,8 +279,9 @@ def content_drift(
         return None
     # Both identities, because the caller has to be able to tell a page that
     # navigated from a title that merely ticked over.
+    label = "window" if frame.get("window") is not None else "target window"
     return (
-        f"window {window['class']} showed {captured!r} when frame {frame['id']} "
+        f"{label} {window['class']} showed {captured!r} when frame {frame['id']} "
         f"was captured and shows {current!r} now"
     )
 

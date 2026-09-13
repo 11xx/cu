@@ -119,6 +119,46 @@ def test_vanished_output_makes_a_frame_stale():
     assert "gone" in frames.staleness(output_frame(), [], [MONITORS[0]])
 
 
+def test_target_window_geometry_is_checked_even_for_an_output_frame():
+    target = {
+        "address": "0xdead",
+        "class": "zen",
+        "title": "a page",
+        "logical_rect": {"x": 10, "y": 10, "w": 400, "h": 300},
+    }
+    f = frame(
+        MONITORS[1]["logical_rect"],
+        {"w": 1, "h": 1},
+        window=None,
+        target_window=target,
+        monitor={"name": "DP-2", "logical_rect": MONITORS[1]["logical_rect"]},
+    )
+    moved = [
+        {"address": "0xdead", "class": "zen", "logical_rect": {**target["logical_rect"], "x": 20}}
+    ]
+    live = [{"address": "0xdead", "class": "zen", "logical_rect": target["logical_rect"]}]
+    assert frames.staleness(f, live, MONITORS) is None
+    assert "moved" in frames.staleness(f, moved, MONITORS)
+
+
+def test_target_window_content_drift_is_reported():
+    target = {
+        "address": "0xdead",
+        "class": "zen",
+        "title": "page A",
+        "logical_rect": {"x": 10, "y": 10, "w": 400, "h": 300},
+    }
+    f = frame(
+        MONITORS[1],
+        {"w": 1, "h": 1},
+        window=None,
+        target_window=target,
+        monitor={"name": "DP-2", "logical_rect": MONITORS[1]},
+    )
+    live = [{**target, "title": "page B"}]
+    assert "page A" in frames.content_drift(f, live)
+
+
 def test_ids_are_monotonic_and_never_reused():
     seen = [frames._next_id() for _ in range(3)]
     assert seen == ["f1", "f2", "f3"]
@@ -261,7 +301,42 @@ def test_shot_regions_keep_absolute_frame_rects(monkeypatch, capsys, argv, expec
     assert frame["source"] == source
     captured_monitor = next(m for m in MONITORS if m["name"] == source["name"])
     assert frame["monitor"]["logical_rect"] == captured_monitor["logical_rect"]
+    assert frame["target_window"] is None
     assert grabbed == [expected]
+
+
+def test_output_region_can_bind_an_intended_window_without_window_capture(
+    monkeypatch, capsys
+):
+    cli, _ = _region_shot_world(monkeypatch)
+    target = {
+        "address": "0x1",
+        "class": "zen",
+        "title": "dialog",
+        "logical_rect": {"x": 0, "y": 0, "w": 900, "h": 500},
+        "visible": True,
+        "hidden": False,
+    }
+    snap = {
+        "monitors": [{**MONITORS[1], "scale": 1.0}],
+        "windows": [target],
+        "focused": target,
+        "cursor_logical": {"x": 0, "y": 0},
+        "desktop_logical_bounds": MONITORS[1]["logical_rect"],
+        "layer_surfaces": [],
+    }
+    monkeypatch.setattr(cli.observe, "snapshot", lambda: snap)
+    monkeypatch.setattr(cli.observe, "windows", lambda _monitors: [target])
+
+    assert cli.main([
+        "shot", "--json", "--output", "DP-2", "--region", "0,0 900x26",
+        "--target-window", "0x1",
+    ]) == exits.OK
+    frame = json.loads(capsys.readouterr().out)
+    assert frame["window"] is None
+    assert frame["target_window"]["address"] == "0x1"
+    assert frame["target_window"]["class"] == "zen"
+    assert frame["target_window"]["logical_rect"] == target["logical_rect"]
 
 
 def test_an_output_relative_region_clamps_to_its_named_output(monkeypatch, capsys):

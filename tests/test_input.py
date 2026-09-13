@@ -263,6 +263,76 @@ def test_output_frame_preflight_uses_snapshot_monitors_without_another_query(
     assert resolved["aimed"]["logical"] == {"x": 10, "y": 10}
 
 
+def test_target_window_refuses_replacement_before_the_button_event(monkeypatch):
+    """A target assertion prevents a delayed replacement from receiving input."""
+    monitor = {
+        "name": "DP-1",
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+    }
+    target = at(0, 0, 100, 100, address="0x1", cls="first")
+    replacement = {**target, "address": "0x2", "class": "second"}
+    frame = {
+        "id": "f1",
+        "captured_at": __import__("time").time(),
+        "logical_rect": monitor["logical_rect"],
+        "image_size": {"w": 100, "h": 100},
+        "window": None,
+        "target_window": {
+            key: target[key] for key in ("address", "class", "title", "logical_rect")
+        },
+        "monitor": monitor,
+    }
+    current = [target]
+    snapshot = {
+        "monitors": [monitor],
+        "windows": current,
+        "cursor_logical": {"x": 10, "y": 10},
+        "layer_surfaces": [],
+    }
+    clicked = []
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            current[:] = [replacement]
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def click(self, *args):
+            clicked.append(args)
+
+    monkeypatch.setattr(actions.frames, "load", lambda _frame_id: frame)
+    monkeypatch.setattr(observe, "snapshot", lambda: snapshot)
+    monkeypatch.setattr(observe, "monitors", lambda: [monitor])
+    monkeypatch.setattr(observe, "windows", lambda _monitors: current)
+    monkeypatch.setattr(observe, "cursor", lambda: {"x": 50, "y": 50})
+    monkeypatch.setattr(observe, "layer_surfaces", lambda: [])
+    monkeypatch.setattr(actions.hypr, "move_cursor", lambda *_args: None)
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    monkeypatch.setattr(checks, "_processes", lambda **_kwargs: [])
+
+    assert cli.main(["click", "--frame", "f1", "--at", "50,50"]) == exits.FOCUS_CHANGED
+    assert clicked == []
+
+
+def test_target_window_refuses_an_ambiguous_overlap():
+    target = {
+        "address": "0x1",
+        "class": "first",
+        "title": "first",
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+    }
+    other = {**target, "address": "0x2", "class": "second", "focus_order": 1}
+    frame = {"id": "f1", "target_window": target}
+    with pytest.raises(Refused) as caught:
+        safety.check_target(frame, target, covering=[target, other])
+    assert caught.value.code == exits.TARGET_AMBIGUOUS
+
+
 def test_a_field_cu_cannot_select_reports_unverified(monkeypatch):
     """No select-all means no read-back, which is not the same as a mismatch:
     reporting failure would send an agent to retype text that did arrive.

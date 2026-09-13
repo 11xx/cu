@@ -344,6 +344,21 @@ def _current_window(
     return refreshed
 
 
+def _window_descriptor(window: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Keep only the stable identity a frame can recheck later."""
+    if window is None:
+        return None
+    descriptor = {
+        "address": window["address"],
+        "class": window["class"],
+        "title": window["title"],
+        "logical_rect": dict(window["logical_rect"]),
+    }
+    if window.get("content_id"):
+        descriptor["content_id"] = window["content_id"]
+    return descriptor
+
+
 def _frame_capture_scale(frame: dict[str, Any]) -> float:
     if "capture_scale" in frame:
         return float(frame["capture_scale"])
@@ -399,6 +414,7 @@ def _validate_after_args(args: argparse.Namespace) -> None:
             ("--output", args.output),
             ("--region", args.region),
             ("--landmark", args.landmark),
+            ("--target-window", getattr(args, "target_window", None)),
         )
         if value
     ]
@@ -528,6 +544,9 @@ def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, A
                     window=_current_window(
                         reference.get("window"), captured_snap["windows"]
                     ),
+                    target_window=_current_window(
+                        reference.get("target_window"), captured_snap["windows"]
+                    ),
                     wait={
                         "after": reference["id"],
                         "watch": watch,
@@ -568,6 +587,11 @@ def cmd_shot(args: argparse.Namespace) -> int:
     _validate_after_args(args)
     if args.window and (args.output or args.region):
         raise ValueError("--window cannot combine with --output or --region")
+    target_selector = getattr(args, "target_window", None)
+    if target_selector and not (args.output or args.region):
+        raise ValueError("--target-window requires --output or --region")
+    if target_selector and (args.window or args.landmark):
+        raise ValueError("--target-window cannot combine with --window or --landmark")
 
     cfg = config.load()
     snap = observe.snapshot()
@@ -577,6 +601,7 @@ def cmd_shot(args: argparse.Namespace) -> int:
     monitors = snap["monitors"]
     source: dict[str, Any]
     window = None
+    intended_window = None
 
     if args.landmark and (args.output or args.region):
         raise ValueError(
@@ -649,6 +674,18 @@ def cmd_shot(args: argparse.Namespace) -> int:
         rect = capture.clamp(rect, monitor["logical_rect"])
         source = {"type": "window", "name": window["class"]}
 
+    if target_selector:
+        intended_window = _resolve_window(target_selector, snap)
+        if not intended_window.get("visible", True) or intended_window.get("hidden", False):
+            raise capture.CaptureVisibilityError(
+                "the intended target window is not on a visible workspace"
+            )
+        if not capture.intersects(intended_window["logical_rect"], rect):
+            raise CaptureAimError(
+                f"target window {intended_window['class']} "
+                f"({intended_window['address']}) does not intersect the capture region"
+            )
+
     frames.collect()
     name = args.profile or capture.default_name(cfg)
     profile = capture.resolve(name, cfg)
@@ -665,6 +702,8 @@ def cmd_shot(args: argparse.Namespace) -> int:
         if window is not None:
             _confirm_captured_window(window, monitors)
             capture.require_visible(window, rect, observe.snapshot())
+        if intended_window is not None:
+            _confirm_captured_window(intended_window, monitors)
 
         capture.require_budget(scratch, profile)
         digest = capture.digest(scratch)
@@ -678,6 +717,8 @@ def cmd_shot(args: argparse.Namespace) -> int:
                 == (window or {}).get("address")
                 and previous.get("profile") == name
                 and previous.get("capture_scale") == scale
+                and (previous.get("target_window") or {}).get("address")
+                == (intended_window or {}).get("address")
             ):
                 # The pixels were just re-read and match, which is the evidence
                 # staleness is a proxy for. Keeping the original timestamp would
@@ -689,6 +730,9 @@ def cmd_shot(args: argparse.Namespace) -> int:
                 # would refuse a frame just re-proven against the screen.
                 previous["window"] = _current_window(
                     previous.get("window"), observe.windows(snap["monitors"])
+                )
+                previous["target_window"] = _current_window(
+                    previous.get("target_window"), observe.windows(snap["monitors"])
                 )
                 frames.save(previous)
                 payload = {**previous, "changed": False}
@@ -715,24 +759,8 @@ def cmd_shot(args: argparse.Namespace) -> int:
                 image_size["w"], image_size["h"], profile
             ),
             cursor_logical=snap["cursor_logical"],
-            window=(
-                {
-                    "address": window["address"],
-                    "class": window["class"],
-                    "title": window["title"],
-                    "logical_rect": window["logical_rect"],
-                    # Carried when the observer can name the document itself,
-                    # so the frame is checked by the stronger of the two
-                    # identities for the rest of its life.
-                    **(
-                        {"content_id": window["content_id"]}
-                        if window.get("content_id")
-                        else {}
-                    ),
-                }
-                if window
-                else None
-            ),
+            window=_window_descriptor(window),
+            target_window=_window_descriptor(intended_window),
         )
     frame["changed"] = True
 
@@ -898,6 +926,7 @@ def cmd_magnify(args: argparse.Namespace) -> int:
             captured_at=captured_at,
             derived_from=source["id"],
             window=source.get("window"),
+            target_window=source.get("target_window"),
             monitor=source.get("monitor"),
             profile=profile_name,
             estimator=capture.estimator(profile),
@@ -1868,6 +1897,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "An arbitrary strip; with --output, x,y are output-relative and "
             "logical_rect is absolute"
+        ),
+    )
+    shot.add_argument(
+        "--target-window",
+        metavar="SELECTOR",
+        help=(
+            "Assert an output or region point belongs to this exact window; "
+            "the window may be obstructed at capture time"
         ),
     )
     # --landmark is deliberately outside target selection: it names

@@ -61,7 +61,9 @@ def aim(frame: dict[str, Any], x: float, y: float, snap: dict[str, Any]) -> dict
     """
     lx, ly = frames.to_logical(frame, x, y)
     declared = frame.get("window")
-    under = observe.window_at(lx, ly, snap["windows"])
+    covering = observe.windows_at(lx, ly, snap["windows"])
+    under = min(covering, key=lambda window: window["focus_order"], default=None)
+    layer_surface = observe.layer_surface_at(lx, ly, snap.get("layer_surfaces", []))
     return {
         "logical": {"x": lx, "y": ly},
         # Where the point sits inside its window, as a fraction. Absolute
@@ -79,11 +81,9 @@ def aim(frame: dict[str, Any], x: float, y: float, snap: dict[str, Any]) -> dict
             else under
         ),
         "window_under_point": under,
-        "layer_surface": (
-            observe.layer_surface_at(lx, ly, snap.get("layer_surfaces", []))
-            if under is None
-            else None
-        ),
+        "covering_windows": covering,
+        "layer_surface": layer_surface,
+        "target_window": frame.get("target_window"),
     }
 
 
@@ -145,7 +145,13 @@ def move(
 ) -> dict[str, Any]:
     target = resolve_target(frame_id, at, cfg)
     aimed = target["aimed"]
-    safety.preflight_pointer(cfg, aimed["window_under_point"], target["frame"])
+    safety.preflight_pointer(
+        cfg,
+        aimed["window_under_point"],
+        target["frame"],
+        covering=aimed["covering_windows"],
+        layer_surface=aimed["layer_surface"],
+    )
     point = aimed["logical"]
     landed = warp(cfg, point["x"], point["y"], dry_run=dry_run)
     result = {
@@ -156,6 +162,8 @@ def move(
         "cursor": landed,
         "relative": aimed["relative"],
         "window": _describe(aimed["window_under_point"]),
+        "target_window": _describe(aimed["target_window"]),
+        "target_assertion": "bound" if aimed["target_window"] is not None else "unbound",
         "dry_run": dry_run,
     }
     safety.record(cfg, result)
@@ -207,7 +215,13 @@ def _aimed_click(
     aimed = target["aimed"]
     under = aimed["window_under_point"]
     layer_surface = aimed["layer_surface"]
-    safety.preflight_pointer(cfg, under, target["frame"])
+    safety.preflight_pointer(
+        cfg,
+        under,
+        target["frame"],
+        covering=aimed["covering_windows"],
+        layer_surface=aimed["layer_surface"],
+    )
     point = aimed["logical"]
     landed = warp(cfg, point["x"], point["y"], dry_run=dry_run)
 
@@ -237,6 +251,8 @@ def _aimed_click(
         "button": button,
         "count": count,
         "window": _describe(under),
+        "target_window": _describe(aimed["target_window"]),
+        "target_assertion": "bound" if aimed["target_window"] is not None else "unbound",
         "window_size": (
             {axis: under["logical_rect"][axis] for axis in ("w", "h")}
             if under and under.get("logical_rect")
@@ -271,7 +287,13 @@ def scroll(
         target["snapshot"]["cursor_logical"]["y"],
         target["snapshot"]["windows"],
     )
-    safety.preflight_pointer(cfg, under, target["frame"])
+    safety.preflight_pointer(
+        cfg,
+        under,
+        target["frame"],
+        covering=aimed["covering_windows"] if aimed else None,
+        layer_surface=aimed["layer_surface"] if aimed else None,
+    )
     landed = target["snapshot"]["cursor_logical"]
     if aimed:
         landed = warp(cfg, aimed["logical"]["x"], aimed["logical"]["y"], dry_run=dry_run)
@@ -290,6 +312,10 @@ def scroll(
         "relative": _relative_to(under, landed["x"], landed["y"]) if aimed else None,
         "cursor": landed,
         "window": _describe(under),
+        "target_window": _describe(aimed["target_window"]) if aimed else None,
+        "target_assertion": (
+            "bound" if aimed and aimed["target_window"] is not None else "unbound"
+        ),
         "dry_run": dry_run,
     }
     safety.record(cfg, result)
@@ -508,6 +534,10 @@ def _type_into_focus(
         "chord": chord,
         "backend": backend,
         "window": _describe(window),
+        "target_window": pointer.get("target_window") if pointer is not None else None,
+        "target_assertion": (
+            pointer.get("target_assertion", "unbound") if pointer is not None else "unbound"
+        ),
         "dry_run": dry_run,
     }
     if pointer is not None:
@@ -522,6 +552,8 @@ def _type_into_focus(
             "count": pointer["count"],
             "window": pointer["window"],
             "window_size": pointer["window_size"],
+            "target_window": pointer.get("target_window"),
+            "target_assertion": pointer.get("target_assertion", "unbound"),
         }
 
     if dry_run:
@@ -806,8 +838,20 @@ def _live_pointer_target(
     if frame is not None and frame.get("window") is None:
         monitors = observe.monitors()
     windows = observe.windows(monitors)
-    under = observe.window_at(cursor["x"], cursor["y"], windows)
-    safety.preflight_pointer(cfg, under, frame)
+    covering = observe.windows_at(cursor["x"], cursor["y"], windows)
+    under = min(covering, key=lambda window: window["focus_order"], default=None)
+    layer_surface = None
+    if frame is not None and frame.get("target_window") is not None:
+        layer_surface = observe.layer_surface_at(
+            cursor["x"], cursor["y"], observe.layer_surfaces()
+        )
+    safety.preflight_pointer(
+        cfg,
+        under,
+        frame,
+        covering=covering,
+        layer_surface=layer_surface,
+    )
     if frame is not None:
         safety.check_frame(cfg, frame, windows, monitors)
     return under, cursor

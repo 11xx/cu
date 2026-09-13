@@ -36,6 +36,8 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   cu shot --output OUTPUT-A      A whole monitor.
   cu shot --region '100,100 400x200'
   cu shot --output OUTPUT-A --region '0,0 900x26'
+  cu shot --output OUTPUT-A --target-window SELECTOR
+                                 Bind later aimed input to one exact window.
   cu shot --if-changed           Reuse the last frame when the pixels match.
   cu shot --timings --json       Cost/timing report on stderr; descriptor on stdout.
   cu shot --after f3 --watch '0,0 200x26'
@@ -46,6 +48,13 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   history cannot prove stacking, so even a possibly-behind window is ambiguous.
   Capture never focuses or switches workspaces. Explicitly arrange the target,
   or use --output/--region for pixels that assert no particular window identity.
+  An output or region can carry an explicit recipient assertion with
+  --target-window SELECTOR. The selector resolves to one address at capture
+  time while the frame keeps `window: null`, so an obstructed dialog can remain
+  observable. A later aimed move, click, scroll, or type refuses if another
+  window, a covering layer, or ambiguous overlap covers the point. Omit the
+  option when the capture is observation only; its descriptor and action
+  receipt say that no recipient was asserted.
 
   A region is desktop-absolute by itself. With --output, its x,y are relative
   to that output; the returned logical_rect is always desktop-absolute.
@@ -155,6 +164,7 @@ EXIT CODES ARE THE CONTRACT
   28  Batch read-back unavailable       Inspect before continuing; never replay the prefix
   29  Encoded image exceeds budget      Capture a smaller region or lower-resolution profile
   30  Denylist, lock, unreviewed recipe Do not retry; tell the user
+  31  Intended recipient is ambiguous   Re-observe and arrange the target or choose another point
   40  The user aborted                  Stop. Do not retry. Do not clear it.
   41  The user is moving the mouse      Yield; wait before retrying
   42  Another agent is driving          Wait for it to finish, then retry

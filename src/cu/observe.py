@@ -116,17 +116,23 @@ def contains(rect: dict[str, float], x: float, y: float) -> bool:
     return rect["x"] <= x < rect["x"] + rect["w"] and rect["y"] <= y < rect["y"] + rect["h"]
 
 
+def windows_at(x: float, y: float, wins: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Visible windows whose reported geometry covers a logical point."""
+    return [
+        w for w in wins
+        if w["visible"] and not w["hidden"] and contains(w["logical_rect"], x, y)
+    ]
+
+
 def window_at(x: float, y: float, wins: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The window a click at this logical point would land in.
+    """The heuristic window a click at this logical point would land in.
 
     Only visible windows are considered, and ties go to the most recently
     focused, which is the best available stand-in for what is actually on top.
     An answer here is what lets the denylist apply to a point on a full-output
     frame rather than only to a window the caller named.
     """
-    covering = [
-        w for w in wins if w["visible"] and not w["hidden"] and contains(w["logical_rect"], x, y)
-    ]
+    covering = windows_at(x, y, wins)
     if not covering:
         return None
     return min(covering, key=lambda w: w["focus_order"])

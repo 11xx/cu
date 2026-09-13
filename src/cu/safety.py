@@ -116,7 +116,13 @@ def confirm_focus(expected: dict[str, Any], live_focus: dict[str, Any] | None) -
         )
 
 
-def check_target(frame: dict[str, Any], under: dict[str, Any] | None) -> None:
+def check_target(
+    frame: dict[str, Any],
+    under: dict[str, Any] | None,
+    *,
+    covering: list[dict[str, Any]] | None = None,
+    layer_surface: dict[str, Any] | None = None,
+) -> None:
     """Assert the point is still on the window the frame said was there.
 
     Focus is the wrong question for a pointer: clicking an unfocused window is
@@ -125,13 +131,33 @@ def check_target(frame: dict[str, Any], under: dict[str, Any] | None) -> None:
     after the capture is exactly the "acted on a screenshot of a screen that
     has since changed" failure the frame contract exists to refuse.
 
-    A frame depicting no particular window — a whole output, or a region —
-    asserts nothing here. Its output geometry is checked by `check_frame`, and
-    the denylist still applies to whatever is under the aimed point.
+    A frame depicting no particular window — a whole output, or an unbound
+    region — asserts nothing here. Its output geometry is checked by
+    `check_frame`, and the denylist still applies to whatever is under the
+    aimed point. An output or region carrying `target_window` is different: it
+    asserts that the point belongs to that exact window, while retaining the
+    output pixels and geometry as their own frame facts.
     """
-    declared = frame.get("window")
+    declared = frame.get("window") or frame.get("target_window")
     if declared is None:
         return
+    if covering is not None and len(covering) > 1:
+        names = ", ".join(
+            f"{window.get('class', '<unknown>')} ({window.get('address', '<unknown>')})"
+            for window in covering
+        )
+        raise Refused(
+            exits.TARGET_AMBIGUOUS,
+            f"frame {frame['id']} intends {declared['class']}, but the aimed point "
+            f"is covered by several windows: {names}; refusing input",
+        )
+    if layer_surface is not None:
+        surface = layer_surface.get("namespace") or layer_surface.get("address", "layer")
+        raise Refused(
+            exits.TARGET_AMBIGUOUS,
+            f"frame {frame['id']} intends {declared['class']}, but layer surface "
+            f"{surface!r} covers the aimed point; refusing input",
+        )
     if under is None or under["address"] != declared["address"]:
         got = under["class"] if under else "nothing"
         raise Refused(
@@ -229,6 +255,9 @@ def preflight_pointer(
     cfg: dict[str, Any],
     under: dict[str, Any] | None,
     frame: dict[str, Any] | None = None,
+    *,
+    covering: list[dict[str, Any]] | None = None,
+    layer_surface: dict[str, Any] | None = None,
 ) -> None:
     """Guards for a command aimed by coordinates.
 
@@ -238,7 +267,10 @@ def preflight_pointer(
     """
     _common(cfg, under)
     if frame is not None:
-        check_target(frame, under)
+        declared = frame.get("window") or frame.get("target_window")
+        if declared is not None:
+            check_denylist(cfg, declared)
+        check_target(frame, under, covering=covering, layer_surface=layer_surface)
 
 
 def preflight_keyboard(
