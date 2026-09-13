@@ -20,11 +20,15 @@ visual-token cost, quota use, and monetary billing remain `null`; no allowance
 percentage is converted into a price or speed claim. `CU_INVOCATION_ID` and
 `CU_HARNESS_SESSION` are copied only when a caller supplies them.
 
-The independent verifier compares the multiset of SHA-256 digests, checks file
-stability during the read, and rejects zero-byte, changing, missing,
-wrong-content, and duplicate-count-only results. A complete outcome requires
-all 16 expected digests. `--no-recovery` deliberately leaves the failed item
-missing so the envelope reports an incomplete outcome.
+The independent verifier maps each artifact id to its exact
+`<artifact-id>/<basename>` path and declared format, then checks file stability
+and SHA-256 content. It rejects zero-byte, changing, missing, unexpected-name,
+format-mismatch, wrong-content, and duplicate-count-only results. Duplicate
+basenames are valid only in their separate artifact-id directories. Each trial
+also records a receipt for differing pre-existing data kept outside the
+artifact tree and requires that data to remain unchanged. A complete outcome
+requires all 16 expected paths and digests. `--no-recovery` deliberately leaves
+the failed item missing so the envelope reports an incomplete outcome.
 
 `individual`, `batch`, and `combined` are fixture execution shapes with the same
 expected output; they do not simulate CU subprocesses or a model. A comparative
