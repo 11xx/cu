@@ -75,6 +75,19 @@ def test_duplicate_basenames_are_scoped_by_artifact_id(tmp_path):
     assert (output / "item-02" / "README.md").exists()
 
 
+def test_verifier_rejects_swapped_contents_at_correct_paths(tmp_path):
+    run_trial(tmp_path)
+    output = tmp_path / "artifacts"
+    first = output / "item-01" / "README.md"
+    second = output / "item-02" / "README.md"
+    first_bytes, second_bytes = first.read_bytes(), second.read_bytes()
+    first.write_bytes(second_bytes)
+    second.write_bytes(first_bytes)
+    result = verify(output)
+    assert result["ok"] is False
+    assert {failure["kind"] for failure in result["failures"]} >= {"artifact-mismatch"}
+
+
 def test_modes_emit_same_fixture_contract_and_unknown_external_costs(tmp_path):
     envelopes = [
         run_trial(tmp_path / mode, mode=mode, seed=9)

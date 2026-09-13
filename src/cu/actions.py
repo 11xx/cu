@@ -36,6 +36,8 @@ MAX_MOVE_HZ = 120.0
 MAX_MOVE_TIMEOUT = 15.0
 MAX_NATIVE_DELTA = 12
 MOTION_TOLERANCE = 2.0
+NATIVE_SETTLE_TIMEOUT = 0.1
+NATIVE_SETTLE_POLL_SECONDS = 0.005
 DEFAULT_HOVER_DWELL = 0.2
 MAX_HOVER_DWELL = 10.0
 DWELL_POLL_SECONDS = 0.05
@@ -283,6 +285,49 @@ def _confirm_motion_cursor(
         )
 
 
+def _confirm_native_delivery(
+    origin: dict[str, float],
+    current: dict[str, float],
+    waypoint: dict[str, float],
+    frame: dict[str, Any],
+) -> None:
+    """Accept a delayed own event only when it made bounded route progress."""
+    if not _inside(frame["logical_rect"], current):
+        raise Refused(
+            exits.HUMAN_ACTIVE,
+            "pointer moved outside the inspected native movement region; yielding to the user",
+        )
+    before = math.hypot(waypoint["x"] - origin["x"], waypoint["y"] - origin["y"])
+    after = math.hypot(waypoint["x"] - current["x"], waypoint["y"] - current["y"])
+    if after >= before:
+        raise Refused(
+            exits.HUMAN_ACTIVE,
+            "pointer movement did not make progress toward the native waypoint; yielding",
+        )
+
+
+def _settle_native_delivery(
+    origin: dict[str, float],
+    waypoint: dict[str, float],
+    frame: dict[str, Any],
+    deadline: float,
+) -> dict[str, float]:
+    """Wait briefly for a submitted event to become visible to cursor reads."""
+    settle_deadline = min(deadline, time.monotonic() + NATIVE_SETTLE_TIMEOUT)
+    while True:
+        current = observe.cursor()
+        if current != origin:
+            _confirm_native_delivery(origin, current, waypoint, frame)
+            return current
+        remaining = settle_deadline - time.monotonic()
+        if remaining <= 0:
+            raise Refused(
+                exits.MOTION_NOT_CONVERGED,
+                "native pointer event was not visible before its bounded delivery wait expired",
+            )
+        time.sleep(min(NATIVE_SETTLE_POLL_SECONDS, remaining))
+
+
 def move(
     cfg: dict[str, Any],
     frame_id: str,
@@ -345,6 +390,7 @@ def move(
     deadline = started + timeout
     period = 1 / hz
     actual = start
+    pending_own: tuple[dict[str, float], dict[str, float]] | None = None
     with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
         settled = observe.cursor()
         safety.confirm_pointer(cfg, (start["x"], start["y"]), settled)
@@ -362,6 +408,11 @@ def move(
             live_layers = (
                 observe.layer_surfaces() if frame.get("target_window") is not None else layers
             )
+            if pending_own is not None:
+                origin, pending_waypoint = pending_own
+                actual = _settle_native_delivery(origin, pending_waypoint, frame, deadline)
+                last_own_cursor = actual
+                pending_own = None
             _motion_point_guard(
                 cfg, frame, actual, live_monitors, live_windows, live_layers, expected_focus
             )
@@ -381,16 +432,29 @@ def move(
             dx = max(-MAX_NATIVE_DELTA, min(MAX_NATIVE_DELTA, round(waypoint["x"] - current["x"])))
             dy = max(-MAX_NATIVE_DELTA, min(MAX_NATIVE_DELTA, round(waypoint["y"] - current["y"])))
             if dx or dy:
+                origin = dict(current)
                 device.move_relative(dx, dy)
                 result["delta_events"] += 1
+                delivered = observe.cursor()
+                if delivered == origin:
+                    pending_own = (origin, dict(waypoint))
+                else:
+                    _confirm_native_delivery(origin, delivered, waypoint, frame)
+                    last_own_cursor = delivered
             actual = observe.cursor()
-            last_own_cursor = actual
+            if pending_own is None:
+                last_own_cursor = actual
         while True:
             live_monitors = observe.monitors() if frame.get("window") is None else monitors
             live_windows = observe.windows(live_monitors)
             live_layers = (
                 observe.layer_surfaces() if frame.get("target_window") is not None else layers
             )
+            if pending_own is not None:
+                origin, pending_waypoint = pending_own
+                actual = _settle_native_delivery(origin, pending_waypoint, frame, deadline)
+                last_own_cursor = actual
+                pending_own = None
             actual = observe.cursor()
             _confirm_motion_cursor(last_own_cursor, actual, phase="convergence")
             _motion_point_guard(
@@ -408,9 +472,15 @@ def move(
             dx = max(-MAX_NATIVE_DELTA, min(MAX_NATIVE_DELTA, round(endpoint["x"] - actual["x"])))
             dy = max(-MAX_NATIVE_DELTA, min(MAX_NATIVE_DELTA, round(endpoint["y"] - actual["y"])))
             if dx or dy:
+                origin = dict(actual)
                 device.move_relative(dx, dy)
                 result["delta_events"] += 1
-                last_own_cursor = observe.cursor()
+                delivered = observe.cursor()
+                if delivered == origin:
+                    pending_own = (origin, dict(endpoint))
+                else:
+                    _confirm_native_delivery(origin, delivered, endpoint, frame)
+                    last_own_cursor = delivered
             time.sleep(period)
     result.update(
         {
