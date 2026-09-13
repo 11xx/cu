@@ -251,6 +251,12 @@ than literal:
 - `cu magnify --frame f3 --scale 3` nearest-neighbour upscales stored pixels
   into a derived frame. It spends no capture and gains no detail, but makes a
   small label legible without asking the model to inspect the original scale.
+- `cu export --frame f3` validates a stored PNG and returns a versioned evidence
+  envelope with source identity, exact coverage, coordinate spaces, digest,
+  runtime availability, and retention policy. `--retain PATH` makes an explicit
+  non-overwriting byte copy; `--compare FRAME` records a same-coverage SHA-256
+  change observation. Neither path grants action authority or invents a
+  collection timestamp for a missing runtime file.
 
 A profile describes a consumer by **capability rather than by one number**,
 because consumers do not share a unit. An image is billed in whole square
@@ -810,6 +816,7 @@ also take `--dry-run`.
 | `cu shot` | Capture; writes a PNG and a frame descriptor | no |
 | `cu pixel` | Read an exact or median colour from a stored frame | no |
 | `cu magnify` | Nearest-neighbour derived frame from stored pixels | no |
+| `cu export` | Opt-in validated evidence envelope from a stored frame | no |
 | `cu wait` | Block on a Hyprland event (`openwindow`, focus change, title match) | no |
 | `cu focus` | Give a window keyboard focus | no |
 | `cu warp` | Place the compositor pointer at a frame coordinate | no |

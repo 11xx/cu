@@ -60,6 +60,7 @@ cu shot --for openai             # capture at another consumer's budget
 cu shot --timings --json         # nonpersistent component/cost report on stderr
 cu pixel --frame f3 --at 412,300 # exact r,g,b,a and #RRGGBBAA from stored pixels
 cu magnify --frame f3 --scale 3  # nearest-neighbour derived frame; no recapture
+cu export --frame f3 --json      # bounded evidence envelope; read-only
 cu profiles                      # what a capture costs each consumer
 
 cu wait window-open --class zen  # block on a compositor event
@@ -144,6 +145,8 @@ evidence and keeps application meaning unknown until the caller inspects it.
 without producing another image. `magnify` makes a nearest-neighbour derived
 frame for reading small details; it preserves the source capture time and
 logical rectangle while recording its larger image size and token cost.
+`export` validates one frame and returns a versioned evidence envelope; it can
+compare equal-coverage pixels or retain a copy only at an explicit new path.
 
 `cu` publishes what it is doing to `$XDG_RUNTIME_DIR/cu/status.json` — one
 small object, replaced atomically, which `cu status --follow --json` turns into

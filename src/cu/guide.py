@@ -84,12 +84,19 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   cu pixel --frame f3 --at 412,300 --radius 2
                                           Median colour in the local box.
   cu magnify --frame f3 --scale 3         Nearest-neighbour derived frame.
+  cu export --frame f3 --json             Versioned evidence envelope, read-only.
 
   `pixel` reads image coordinates without producing an image. Its default is
   one exact pixel; --radius is an explicit hedge against antialiasing.
   `magnify` writes a new frame with more image pixels but the original capture
   time, monitor geometry, and logical rectangle. It makes small text readable without pretending
   the desktop was captured again, and reports the derived image's token cost.
+  `export` validates a stored frame's dimensions and digest, reports exact
+  coverage and runtime-byte availability, and does not take the desktop lock.
+  `--compare` adds a same-coverage SHA-256 pixel-change result; `--retain PATH`
+  copies bytes once to an explicitly new path. Missing runtime bytes are
+  unavailable, not proof of a collection time. An export is evidence and never
+  grants action authority.
 
   cu profiles                    What a capture costs each configured consumer.
 

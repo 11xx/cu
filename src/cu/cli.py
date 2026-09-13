@@ -28,6 +28,7 @@ from . import (
     config,
     context,
     desktop,
+    evidence,
     exits,
     frames,
     guide,
@@ -124,7 +125,7 @@ MAX_MAGNIFIED_LONG_EDGE = 8192
 
 # These commands do not make the desktop look agent-driven. Their parsers also
 # refuse the activity-only options whose values would otherwise be ignored.
-NON_PUBLISHING_COMMANDS = frozenset({"status", "session", "abort"})
+NON_PUBLISHING_COMMANDS = frozenset({"status", "session", "abort", "export"})
 
 
 def _num(value: float) -> str:
@@ -1917,6 +1918,26 @@ def cmd_abort(args: argparse.Namespace) -> int:
     return exits.OK
 
 
+def cmd_export(args: argparse.Namespace) -> int:
+    """Export validated frame evidence without touching the desktop."""
+    frame = frames.load(args.frame)
+    compare = frames.load(args.compare) if args.compare else None
+    envelope = evidence.export_frame(
+        frame,
+        compare=compare,
+        retain=Path(args.retain) if args.retain else None,
+    )
+
+    def render(value: Any) -> None:
+        print(f"evidence {value['status']}  frame {value['frame'].get('id')}")
+        print(f"  runtime bytes: {value['availability']['runtime']}")
+        for derived in value.get("derived", []):
+            print(f"  {derived['kind']}: {derived['status']}")
+
+    _emit(envelope, args.json, render)
+    return exits.OK if envelope["status"] == "ok" else exits.TARGET_NOT_FOUND
+
+
 def cmd_session(args: argparse.Namespace) -> int:
     """Bracket a stretch of work, so the indicator does not blink between steps.
 
@@ -2142,6 +2163,13 @@ def build_parser() -> argparse.ArgumentParser:
     add("doctor", "Verify every environment precondition", cmd_doctor)
     add("profiles", "What a capture costs each configured consumer", cmd_profiles)
     add("observe", "Monitors, windows, focus, cursor", cmd_observe)
+
+    export = add("export", "Export bounded evidence from a stored frame", cmd_export)
+    export.add_argument("--frame", metavar="ID", required=True, help="Frame to export")
+    export.add_argument(
+        "--compare", metavar="ID", help="Frame with matching coverage for pixel change"
+    )
+    export.add_argument("--retain", metavar="PATH", help="Copy validated PNG bytes to a new path")
 
     shot = add("shot", "Capture a frame", cmd_shot)
     shot.add_argument(
@@ -2643,6 +2671,9 @@ def _safe_call(call) -> int:
         print(f"cu: {exits.RESPONSE[exits.TARGET_NOT_VISIBLE]}", file=sys.stderr)
         return exits.TARGET_NOT_VISIBLE
     except CaptureError as exc:
+        print(f"cu: {exc}", file=sys.stderr)
+        return exits.PRECONDITION_FAILED
+    except evidence.ExportError as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.PRECONDITION_FAILED
     except wait.WaitTimeout as exc:
