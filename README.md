@@ -56,6 +56,7 @@ cu wait window-open --class zen  # block on a compositor event
 cu focus zen                     # give a window keyboard focus
 cu warp  --frame f3 --at 412,300 # place the compositor pointer exactly
 cu move  --frame f3 --at 412,300 # bounded native movement to a frame coordinate
+cu hover --frame f3 --at 412,300 --dwell 0.2 --watch full # enter, dwell, observe
 cu click --frame f3 --at 412,300 # warp, check the target, press and release
 cu scroll --dy -3                # wheel where the pointer already is
 cu type 'hello'                  # clipboard by default, --method keys to synthesize
@@ -115,6 +116,9 @@ captured for. Later commands take coordinates as
 uinput device and native relative samples; it requires the starting pointer and
 the complete segment to remain inside the inspected frame. Its receipt reports
 the requested duration, sampling rate, actual endpoint, and convergence status.
+`hover` composes that native entry with a finite dwell and a fresh observation.
+`--watch` waits for a bounded pixel box to change and settle; the result is pixel
+evidence and keeps application meaning unknown until the caller inspects it.
 `pixel` reads an exact stored pixel, or an explicitly requested median box,
 without producing another image. `magnify` makes a nearest-neighbour derived
 frame for reading small details; it preserves the source capture time and

@@ -153,6 +153,12 @@ route, device failure, deadline, or non-convergence stops the operation. It
 never finishes with a hidden warp. A click remains: warp through IPC, assert the
 expected window is still under the point, then press and release through uinput.
 
+`cu hover` composes one native entry with a stationary dwell. It can poll a
+watched image box for change and settle, then returns the final frame with pixel
+condition evidence. A changed frame and a dwell alone do not establish that a
+particular application control appeared; the caller reads the returned frame
+before selecting the next action.
+
 **A second keyboard path exists, for a sleeping desktop.** Genuine libinput
 events are what make uinput injection indistinguishable from a human, and are
 also why each one resets the idle timer and wakes every monitor. Hyprland's own
@@ -781,6 +787,7 @@ also take `--dry-run`.
 | `cu focus` | Give a window keyboard focus | no |
 | `cu warp` | Place the compositor pointer at a frame coordinate | no |
 | `cu move` | Bounded native movement to a frame coordinate | yes |
+| `cu hover` | Native entry, bounded dwell, and optional changed-pixel observation | yes |
 | `cu click` | Warp, assert focus, press/release | yes |
 | `cu scroll` | Wheel events at a frame coordinate | yes |
 | `cu type` | Text entry, clipboard by default | yes |

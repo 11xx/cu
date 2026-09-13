@@ -115,6 +115,7 @@ ACT THROUGH THE FRAME YOU READ
   cu focus zen
   cu warp --frame f3 --at 412,300
   cu move --frame f3 --at 412,300 --duration 0.25 --hz 60
+  cu hover --frame f3 --at 412,300 --dwell 0.2 --watch full
   cu click --frame f3 --at 412,300
   cu scroll --frame f3 --at 412,300 --dy -3
 
@@ -136,6 +137,12 @@ ACT THROUGH THE FRAME YOU READ
   --timeout to state the finite motion bound. `scroll` may aim through a frame
   first, or omit --frame and --at to send wheel events where the pointer already
   sits.
+
+  `hover` composes one native entry with a finite stationary dwell and a fresh
+  observation. Add --watch to wait for a watched image box to change and settle;
+  that reports pixel evidence only. A dwell-only result, or a changed-pixel
+  result, never claims that the application revealed a particular control. Read
+  the returned frame, then aim the first click or wheel through that frame.
 
   Native pointer, keyboard, and focus commands take --dry-run: each interlock
   runs and the log is written without emitting an event.
@@ -432,8 +439,8 @@ WHEN A CAPTURE SURPRISES YOU, WIDEN
 
 CONTROLS THAT HIDE UNTIL THE POINTER ARRIVES
   cu know show <app>             Whether a reveal edge was learned here.
-  cu move --frame f3 --at 640,2  Hover the learned edge, through the frame read.
-  cu shot --after f3 --watch '0,0 1280x40'
+  cu hover --frame f3 --at 640,2 --watch '0,0 1280x40'
+                                 Enter, dwell, and observe a possible reveal.
   cu know note <app> 'the toolbar reveals on the top edge'
 
   A capture can honestly show an application while omitting controls it hides
@@ -443,11 +450,12 @@ CONTROLS THAT HIDE UNTIL THE POINTER ARRIVES
 
   The revealing edge is learned state, not a default: which edge, and what sits
   behind it, are the user's configuration. Ask `cu know` first. If a placement
-  is recorded, hover it through the frame you read, wait for the reveal with
-  `cu shot --after` watching a narrow strip along that edge, and act only
-  through the fresh frame that comes back — the revealed control does not exist
-  in the frame you hovered from, and coordinates never cross frames. Record a
-  placement you verify, so the next run does not rediscover it.
+  is recorded, use `hover` through the frame you read and inspect the fresh frame
+  it returns. A watched pixel change is evidence that something repainted, not
+  proof of a particular control. The revealed control does not exist in the
+  frame you hovered from, and coordinates never cross frames. Record a placement
+  you verify, so the next run does not rediscover it. `cu shot --after` remains
+  available when a native entry is not needed and only a repaint must be awaited.
 
   If nothing is known, widen the capture rather than hovering each edge in
   turn. A probe per edge is four pointer moves on a live desktop to answer a
