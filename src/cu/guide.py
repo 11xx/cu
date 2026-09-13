@@ -113,7 +113,8 @@ CAPTURE ONLY WHAT YOU NEED TO READ
 
 ACT THROUGH THE FRAME YOU READ
   cu focus zen
-  cu move --frame f3 --at 412,300
+  cu warp --frame f3 --at 412,300
+  cu move --frame f3 --at 412,300 --duration 0.25 --hz 60
   cu click --frame f3 --at 412,300
   cu scroll --frame f3 --at 412,300 --dy -3
 
@@ -127,9 +128,14 @@ ACT THROUGH THE FRAME YOU READ
   state before sending keys. Pointer events recheck frame geometry after
   device settlement. Safety timing and drift limits must be finite and nonnegative.
 
-  `focus` redirects keyboard actions without moving the pointer. `move` aims the
-  pointer without pressing a button. `scroll` may aim through a frame first, or
-  omit --frame and --at to send wheel events where the pointer already sits.
+  `focus` redirects keyboard actions without moving the pointer. `warp` places
+  the compositor pointer exactly; it emits no native movement. `move` sends
+  bounded native relative samples over a finite duration, with feedback toward
+  the endpoint and no hidden final warp. Its starting pointer and every sampled
+  point must stay inside the inspected frame; use --duration, --hz, and
+  --timeout to state the finite motion bound. `scroll` may aim through a frame
+  first, or omit --frame and --at to send wheel events where the pointer already
+  sits.
 
   Native pointer, keyboard, and focus commands take --dry-run: each interlock
   runs and the log is written without emitting an event.
@@ -165,6 +171,8 @@ EXIT CODES ARE THE CONTRACT
   29  Encoded image exceeds budget      Capture a smaller region or lower-resolution profile
   30  Denylist, lock, unreviewed recipe Do not retry; tell the user
   31  Intended recipient is ambiguous   Re-observe and arrange the target or choose another point
+  32  Native movement did not converge  Inspect the pointer/device before trying again
+  33  Native route leaves safe frame    Capture wider or place the pointer inside first
   40  The user aborted                  Stop. Do not retry. Do not clear it.
   41  The user is moving the mouse      Yield; wait before retrying
   42  Another agent is driving          Wait for it to finish, then retry
@@ -292,7 +300,7 @@ SHORT, ALREADY-DECIDED ACTION BATCHES
   A batch file is a JSON array of argv arrays, without the leading cu:
   [["focus", "example-app"], ["type", "new value", "--replace", "--verify"]]
 
-  At most 32 actions and 64 KiB; commands are focus, move, click, scroll, type,
+  At most 32 actions and 64 KiB; commands are focus, warp, move, click, scroll, type,
   key and browser. No shell expansion, nested batch, recipe approval, abort
   mutation or stdin typing. Session, intent and dry-run belong to the outer
   command. All argument syntax is checked before the first action.

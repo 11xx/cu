@@ -19,12 +19,18 @@ one arrangement of one desktop at one moment; a fraction of the window survives
 that window being moved. It does not survive arbitrary resizing, so pointer
 steps also retain the measured window size and refuse when the current window
 has drifted beyond the tolerance they can justify.
+
+Native movement and compositor placement are separate recipe actions. A native
+step retains its transport and finite timing values; a warp step retains the
+compositor transport. Stored movement without one of these explicit transports
+is rejected rather than assigned a new meaning.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -33,7 +39,7 @@ from typing import Any
 
 #: Steps a recipe may contain. Anything else in the log — a refused command, a
 #: dry run — is history rather than procedure.
-REPLAYABLE = {"focus", "click", "move", "scroll", "type", "key", "browser", "wait"}
+REPLAYABLE = {"focus", "warp", "move", "click", "scroll", "type", "key", "browser", "wait"}
 
 WINDOW_SIZE_TOLERANCE = 0.02
 
@@ -108,7 +114,7 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
         return None
     window = entry.get("window") or {}
     step: dict[str, Any] = {"action": action}
-    if action in {"click", "move"}:
+    if action in {"click", "move", "warp"}:
         if not entry.get("relative") or not window.get("logical_rect"):
             return None  # nothing that would survive the window moving
         step["relative"] = entry["relative"]
@@ -119,6 +125,30 @@ def step_from_log(entry: dict[str, Any]) -> dict[str, Any] | None:
         if action == "click":
             step["button"] = entry.get("button", "left")
             step["count"] = entry.get("count", 1)
+        elif action == "warp":
+            if entry.get("transport") != "hyprland-compositor-v1":
+                raise RecipeError("warp step has no compositor transport; record it again")
+            step["transport"] = entry["transport"]
+        else:
+            if entry.get("transport") != "uinput-relative-v1":
+                raise RecipeError(
+                    "move step has no native transport; old movement semantics are unsupported"
+                )
+            timing = {
+                key: entry.get(key)
+                for key in ("duration_requested", "hz", "timeout")
+            }
+            if not all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                for value in timing.values()
+            ):
+                raise RecipeError("move step has incomplete native timing; record it again")
+            step["transport"] = entry["transport"]
+            step["duration"] = timing["duration_requested"]
+            step["hz"] = timing["hz"]
+            step["timeout"] = timing["timeout"]
     elif action == "scroll":
         step["dy"] = entry.get("dy", 0)
         step["dx"] = entry.get("dx", 0)
@@ -345,7 +375,7 @@ def replay(
             snap = observe.snapshot()
             window = _window_by_class(step["window_class"], snap)
             performed.append(actions.focus(cfg, window, dry_run=dry_run))
-        elif action in {"click", "move"}:
+        elif action in {"click", "move", "warp"}:
             snap = observe.snapshot()
             window = _window_by_class(step["window_class"], snap)
             frame = _capture_window(window, snap["monitors"], cfg, profile_name)
@@ -359,8 +389,24 @@ def replay(
                         dry_run=dry_run,
                     )
                 )
+            elif action == "warp":
+                performed.append(actions.warp_to(cfg, frame["id"], at, dry_run=dry_run))
             else:
-                performed.append(actions.move(cfg, frame["id"], at, dry_run=dry_run))
+                if step.get("transport") != "uinput-relative-v1":
+                    raise RecipeError(
+                        f"step {index} uses unsupported movement data; record and review it again"
+                    )
+                performed.append(
+                    actions.move(
+                        cfg,
+                        frame["id"],
+                        at,
+                        duration=step["duration"],
+                        hz=step["hz"],
+                        timeout=step["timeout"],
+                        dry_run=dry_run,
+                    )
+                )
         elif action == "scroll":
             frame_id = None
             at = None

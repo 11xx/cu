@@ -60,9 +60,9 @@ So a probe must move the cursor to a coordinate it is **not already at**.
 Verifying with the cursor's own current position cannot distinguish a working
 call from a no-op, and will report success for all five forms above.
 
-Measured with the correct form: movement is absolute (`move(700,400)` twice is
+Measured with the correct form: compositor movement is absolute (`cursor.move(700,400)` twice is
 idempotent), crosses output boundaries into the neighbouring monitor's logical
-range, and preserves fractional coordinates exactly — `move(1234.5, 678.25)`
+range, and preserves fractional coordinates exactly — `cursor.move(1234.5, 678.25)`
 reads back as `(1234.50, 678.25)`.
 
 The event stream lives at

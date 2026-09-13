@@ -121,10 +121,11 @@ command rather than a misdirected click.
 
 A hybrid, split along the line where each mechanism is exact.
 
-**Pointer position via Hyprland IPC.** `hl.dispatch(hl.dsp.cursor.move({x=…,
+**Exact pointer placement via Hyprland IPC.** `hl.dispatch(hl.dsp.cursor.move({x=…,
 y=…}))` is an absolute warp in logical coordinates, taking floats. It needs no
 calibration and no knowledge of output layout — Hyprland already owns that
-mapping.
+mapping. The public `cu warp` command exposes this placement directly and
+reports the compositor transport.
 
 The exact call shape matters more than usual here, because four plausible
 variants of it *silently do nothing while reporting success*
@@ -138,14 +139,19 @@ axis range onto a multi-output desktop with unequal scales. That mapping is
 compositor policy, not something we control, and it is exactly the fragile
 surface this design is trying to eliminate.
 
-**Buttons, scroll, and keys via `/dev/uinput`.** A virtual keyboard and pointer
-created directly by the process — no root and no resident input daemon. The
+**Native movement, buttons, scroll, and keys via `/dev/uinput`.** A virtual
+keyboard and pointer created directly by the process — no root and no resident input daemon. The
 current user must be able to open `/dev/uinput` for writing; `cu doctor` probes
 that precondition on the machine where it runs. Hyprland's key dispatchers are
 keybind-oriented and a poor fit for free text.
 
-So a click is: warp through IPC, assert the expected window is still under the
-point, then press and release through uinput.
+`cu move` uses relative `REL_X`/`REL_Y` samples from one bounded device. It
+feeds back through cursor observation because libinput acceleration means an
+event delta is not a logical-pixel distance. The route is checked against the
+inspected frame before every sample; abort, stale target, a pointer outside the
+route, device failure, deadline, or non-convergence stops the operation. It
+never finishes with a hidden warp. A click remains: warp through IPC, assert the
+expected window is still under the point, then press and release through uinput.
 
 **A second keyboard path exists, for a sleeping desktop.** Genuine libinput
 events are what make uinput injection indistinguishable from a human, and are
@@ -773,7 +779,8 @@ also take `--dry-run`.
 | `cu magnify` | Nearest-neighbour derived frame from stored pixels | no |
 | `cu wait` | Block on a Hyprland event (`openwindow`, focus change, title match) | no |
 | `cu focus` | Give a window keyboard focus | no |
-| `cu move` | Warp the pointer to a frame coordinate | no |
+| `cu warp` | Place the compositor pointer at a frame coordinate | no |
+| `cu move` | Bounded native movement to a frame coordinate | yes |
 | `cu click` | Warp, assert focus, press/release | yes |
 | `cu scroll` | Wheel events at a frame coordinate | yes |
 | `cu type` | Text entry, clipboard by default | yes |

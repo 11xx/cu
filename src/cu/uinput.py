@@ -6,10 +6,10 @@ at the kernel level, which makes even a crash safe — but the release is also
 written explicitly, because relying on a side effect for a safety property is
 how a stuck modifier ends up rewriting someone's session.
 
-Positioning is not done here. A relative pointer travels through libinput's
-acceleration curve, so ten units of movement are not ten logical pixels; the
-compositor's absolute warp is the only exact way to place a cursor. This device
-supplies what the warp cannot: buttons, wheels, and keys.
+Relative movement travels through libinput's acceleration curve, so ten units
+are not ten logical pixels; callers that need exact placement use the
+compositor's absolute warp. This device supplies bounded native movement as
+well as buttons, wheels, and keys.
 """
 
 from __future__ import annotations
@@ -53,6 +53,7 @@ UI_SET_RELBIT = _ioc(1, "U", 102, 4)
 
 EV_SYN, EV_KEY, EV_REL = 0x00, 0x01, 0x02
 SYN_REPORT = 0
+REL_X, REL_Y = 0x00, 0x01
 REL_WHEEL, REL_HWHEEL = 0x08, 0x06
 REL_WHEEL_HI_RES, REL_HWHEEL_HI_RES = 0x0B, 0x0C
 
@@ -197,7 +198,14 @@ class Device:
             fcntl.ioctl(fd, UI_SET_EVBIT, EV_REL)
             for code in set(KEYS.values()) | set(BUTTONS.values()):
                 fcntl.ioctl(fd, UI_SET_KEYBIT, code)
-            for code in (REL_WHEEL, REL_HWHEEL, REL_WHEEL_HI_RES, REL_HWHEEL_HI_RES):
+            for code in (
+                REL_X,
+                REL_Y,
+                REL_WHEEL,
+                REL_HWHEEL,
+                REL_WHEEL_HI_RES,
+                REL_HWHEEL_HI_RES,
+            ):
                 fcntl.ioctl(fd, UI_SET_RELBIT, code)
             setup = struct.pack(
                 "<HHHH80sI", 0x03, 0x1D1E, 0x0001, 1, self.name.encode()[:79], 0
@@ -305,6 +313,22 @@ class Device:
             self.key_down(code)
             time.sleep(press_ms / 1000)
             self.key_up(code)
+
+    def move_relative(self, dx: int, dy: int) -> None:
+        """Emit one native relative-pointer sample and synchronize it."""
+        if (
+            not isinstance(dx, int)
+            or isinstance(dx, bool)
+            or not isinstance(dy, int)
+            or isinstance(dy, bool)
+        ):
+            raise UinputError("relative movement deltas must be integers")
+        if dx:
+            self._write(EV_REL, REL_X, dx)
+        if dy:
+            self._write(EV_REL, REL_Y, dy)
+        if dx or dy:
+            self._sync()
 
     def scroll(self, dy: int = 0, dx: int = 0) -> None:
         """Wheel detents. Hi-res axes are emitted alongside because clients that
