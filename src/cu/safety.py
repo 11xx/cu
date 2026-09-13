@@ -17,7 +17,7 @@ import os
 import time
 from typing import Any
 
-from . import checks, config, exits, frames
+from . import checks, config, context, exits, frames
 
 
 class Refused(RuntimeError):
@@ -229,7 +229,9 @@ def record(cfg: dict[str, Any], entry: dict[str, Any]) -> None:
     an action that already happened.
     """
     path = config.log_path(cfg)
-    line = json.dumps({"ts": time.time(), "pid": os.getpid(), **entry})
+    line = json.dumps(
+        {"ts": time.time(), "pid": os.getpid(), **entry, **context.metadata()}
+    )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as handle:

@@ -279,7 +279,7 @@ provider-agnostic image channel — `cu` never talks to a model API.
 
 ### Observation timing and resource accounting
 
-`shot --timings` emits a bounded `cu-metrics/1` JSON report on stderr after
+`shot --timings` emits a bounded `cu-metrics/2` JSON report on stderr after
 normal output, including dispatch timeout/refusal paths. Monotonic total time
 starts after argument parsing and includes status publication and stdout flush.
 Component timings separate acquisition, baseline/probe decode, crop/compare,
@@ -287,6 +287,15 @@ intentional waits, descriptor publication and output publication; remaining work
 is `other_seconds`. Process startup, metrics emission, harness transport and
 model inference are explicitly excluded. `wait.elapsed_seconds` continues to
 start after baseline decoding, so it is not total command latency.
+The report carries the current invocation ID and any explicitly supplied CU or
+harness session fields; it never derives identifiers from process ancestry.
+
+The same correlation envelope is copied into fresh frame descriptors, command
+receipts, action logs, and batch-step results. A batch keeps one invocation ID
+and adds its parent ID plus a one-based step number, so a completed prefix and
+its refusal can be joined without timestamp-window counting. Reusing a frame
+does not rewrite the descriptor's original acquisition metadata; only the
+current receipt carries the reuse invocation.
 
 Frame summaries expose dimensions, encoded bytes, estimated visual tokens and
 `cu-patches-v1` parameters. No pixels, window titles, document IDs or typed text

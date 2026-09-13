@@ -26,6 +26,7 @@ from . import (
     capture,
     checks,
     config,
+    context,
     desktop,
     exits,
     frames,
@@ -137,6 +138,8 @@ def fmt_rect(r: dict[str, float]) -> str:
 
 @metrics.timed("output_publication")
 def _emit(data: Any, as_json: bool, render) -> None:
+    if isinstance(data, dict) and context.should_correlate(data):
+        data = {**data, **context.metadata()}
     metrics.frame(data)
     if as_json:
         json.dump(data, sys.stdout, indent=2)
@@ -2002,7 +2005,11 @@ def cmd_batch(args: argparse.Namespace) -> int:
                     "id": "batch-context", "captured_at": time.time(), "window": expected,
                 }, current["windows"], current["monitors"])
             return step.run(step)
-        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+        with (
+            context.batch_step(index),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
             code = _safe_call(invoke)
         result = json.loads(output.getvalue()) if output.getvalue().strip() else None
         if (code == exits.OK and isinstance(result, dict)
@@ -2556,17 +2563,18 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"cu {args.command} does not accept --why")
     why = getattr(args, "why", "") or ""
     session = getattr(args, "session", None)
-    # Published before the command runs rather than after, because the point is
-    # to say what is happening while it happens. Non-publishing commands are
-    # readers or user-owned controls, not agents driving the desktop.
-    measurement = metrics.Measurement() if getattr(args, "timings", False) else None
-    with metrics.collecting(measurement):
-        if args.command not in NON_PUBLISHING_COMMANDS:
-            status.publish(args.command, detail=why, session=session)
-        code = _safe_call(lambda: _dispatch(args, why, session))
-    if measurement is not None:
-        print("cu metrics: " + json.dumps(measurement.report(code)), file=sys.stderr)
-    return code
+    with context.active(session):
+        # Published before the command runs rather than after, because the point is
+        # to say what is happening while it happens. Non-publishing commands are
+        # readers or user-owned controls, not agents driving the desktop.
+        measurement = metrics.Measurement() if getattr(args, "timings", False) else None
+        with metrics.collecting(measurement):
+            if args.command not in NON_PUBLISHING_COMMANDS:
+                status.publish(args.command, detail=why, session=session)
+            code = _safe_call(lambda: _dispatch(args, why, session))
+        if measurement is not None:
+            print("cu metrics: " + json.dumps(measurement.report(code)), file=sys.stderr)
+        return code
 
 
 def _dispatch(args: argparse.Namespace, why: str, session: str | None) -> int:

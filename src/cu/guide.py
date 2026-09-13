@@ -113,6 +113,11 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   observe succeed. Check DPMS state; waking a display or choosing a headless
   sandbox is explicit, never a capture fallback.
   Pixel-wait timing arguments must be finite; the quiet interval is not shortened.
+  Each command receipt, action log entry, fresh capture, and opt-in timing report
+  carries a generated invocation_id. An explicit `--session` wins over
+  `CU_SESSION`; optional `CU_HARNESS` and `CU_HARNESS_SESSION` values are copied
+  as opaque join keys. Batch children carry the parent invocation_id and their
+  one-based batch_step. No identifier is inferred from process ancestry.
 
 ACT THROUGH THE FRAME YOU READ
   cu focus zen

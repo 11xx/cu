@@ -97,7 +97,7 @@ async function imageFor(frame) {
 
 // The result's text is the portable contract; image bytes are a sibling block.
 export async function observeTogether(request, options = {}) {
-  const report = { schema: "cu-observation/1", ok: false, actions: { status: "not-started" }, observation: null };
+  const report = { schema: "cu-observation/2", ok: false, actions: { status: "not-started" }, observation: null };
   let phase = "request";
   try {
     const { actions, shot } = validate(request);
@@ -108,8 +108,12 @@ export async function observeTogether(request, options = {}) {
       phase = "actions";
       report.actions = { status: "unknown", may_have_acted: true };
       const result = await runCu(["batch", "-", ...common], JSON.stringify(actions), options);
+      const actionResult = result.stdout.trim() ? JSON.parse(result.stdout) : null;
       report.actions = { status: result.code === 0 ? "completed" : "refused", code: result.code,
-        result: result.stdout.trim() ? JSON.parse(result.stdout) : null, detail: result.stderr };
+        result: actionResult, detail: result.stderr };
+      if (actionResult?.invocation_id) {
+        report.correlation = { actions_invocation_id: actionResult.invocation_id };
+      }
       if (result.code !== 0) return textResult(report);
     } else report.actions = { status: "not-requested" };
     phase = "capture";
@@ -123,6 +127,10 @@ export async function observeTogether(request, options = {}) {
     const image = await imageFor(frame);
     options.signal?.throwIfAborted();
     report.observation = frame;
+    report.correlation = {
+      ...(report.correlation ?? {}),
+      ...(frame.invocation_id ? { observation_invocation_id: frame.invocation_id } : {}),
+    };
     report.ok = true;
     return { ...textResult(report), content: [{ type: "text", text: JSON.stringify(report) }, image] };
   } catch (error) {

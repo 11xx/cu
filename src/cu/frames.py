@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from . import metrics
+from . import context, metrics
 
 #: A frame older than this no longer describes the screen with any confidence.
 DEFAULT_MAX_AGE = 60.0
@@ -144,6 +144,7 @@ def new(
             "path": str(final),
             "encoded_bytes": final.stat().st_size,
             "captured_at": time.time(),
+            **context.metadata(),
             **extra,
         }
     )

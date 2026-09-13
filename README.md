@@ -83,6 +83,12 @@ cu session end
 Every injecting command takes `--dry-run`, which runs every interlock and
 writes the same log entry without emitting a single event.
 
+Receipts and opt-in metrics carry a generated `invocation_id`, the explicit CU
+session when named, and optional `CU_HARNESS`/`CU_HARNESS_SESSION` join keys.
+Batch children add their parent invocation and step number. These fields are
+correlation metadata only; they do not include page content, typed values, URLs,
+or window titles.
+
 `cu` acts on the **visible desktop** by default — a bare `cu shot` captures the
 focused window on a real monitor, and nothing selects a headless output on its
 own. Being watchable is a safety property: `cu sandbox` exists so that working

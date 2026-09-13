@@ -9,6 +9,8 @@ from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
+from . import context
+
 _current: ContextVar[Measurement | None] = ContextVar("cu_metrics", default=None)
 COMPONENTS = (
     "acquisition", "reference_decode", "probe_decode", "crop_compare",
@@ -26,7 +28,8 @@ class Measurement:
     def report(self, code: int) -> dict[str, Any]:
         total = time.monotonic() - self.started
         return {
-            "schema": "cu-metrics/1", "code": code, "total_seconds": total,
+            "schema": "cu-metrics/2", **context.metadata(), "code": code,
+            "total_seconds": total,
             "seconds": self.seconds, "operations": dict(self.operations),
             "other_seconds": max(0, total - sum(self.seconds.values())),
             "frames": self.frames,
