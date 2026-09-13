@@ -61,6 +61,14 @@ is the per-command reference and points back at it. There is no skill or prompt
 fragment to install alongside — the CLI is the only workflow surface, so a
 caller that reaches straight for `cu click` can still find out what it owes.
 
+## Playground
+
+Run `cu playground` and open its printed loopback URL in your browser. It is a
+resettable native-interaction fixture with visible task results; no extension
+is required. Ctrl-C stops the explicitly launched foreground server. See
+[the playground workflow](docs/playground.md) for bounded controller trials and
+separate token/cost, speed and outcome measurements.
+
 ## Usage
 
 ```sh

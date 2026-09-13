@@ -20,6 +20,20 @@ than a limitation: the user can watch what you do and stop you.
 There is no state to hold between calls except frame ids and, if you open one,
 a session id — both live on disk. Every command takes --json.
 
+EXPLICIT PRACTICE AND BENCHMARKS
+  cu playground                 Serve a disposable local page; print its URL.
+  cu playground --port 8765      Choose a loopback port; Ctrl-C stops serving.
+
+  Open the URL in your chosen browser. No extension is required. The page has
+  resettable native tasks, visible outcomes, hover/scroll controls and synthetic
+  receipts. Practice only when explicitly requested; nothing launches a browser,
+  grants a page or calls a model automatically. For a cheaper-controller trial,
+  explicitly choose a controller or worker interface with follow-up support.
+  Hand over intent, exact window, fresh context and postconditions.
+  Compare verified outcomes, total tokens/cost, speed and recovery; the page
+  timer is not controller usage or billing. All CU capabilities remain available
+  regardless of the chosen model. See docs/playground.md for the trial contract.
+
 OBSERVE BEFORE YOU LOOK
   cu observe --json              Monitors, windows, layer surfaces, geometry, focus, cursor.
 

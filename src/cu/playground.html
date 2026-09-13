@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>CU Browser control fixture</title>
+<title>CU playground</title>
 <style>
   body {
     font: 18px sans-serif;
@@ -8,9 +8,13 @@
     background: #f6f8fb;
     color: #15253c;
   }
-  main {
-    max-width: 1000px;
-  }
+  main { max-width: 1100px; margin: auto; }
+  .task-panel { padding: 16px; background: #e3ebf8; border: 2px solid #467; }
+  #score { display: block; padding: 12px; font-weight: bold; background: white; }
+  #receipt { white-space: pre-wrap; font-size: 14px; }
+  label { display: inline-block; }
+  #state { display: block; font-size: 14px; }
+  .tools { margin: 12px 0; }
   button,
   input,
   textarea {
@@ -69,8 +73,17 @@
   }
 </style>
 <main>
-  <h1>CU Browser control fixture</h1>
-  <p>All values and actions on this page are disposable test data.</p>
+  <h1>CU playground</h1>
+  <p>Disposable tasks for native browser interaction. No extension, login, or external service is required.</p>
+  <section class="task-panel" aria-label="Benchmark tasks">
+    <h2>1 · Native basics</h2>
+    <p>Replace Ordinary value with <strong>4242</strong>, replace Notes with <strong>Luna was here</strong>, then press Apply once exactly once.</p>
+    <h2>2 · Follow-up</h2>
+    <p>Keep the first task complete. Schedule readiness, wait for Ready, then scroll the fixture pane and press Bottom target once.</p>
+    <output id="score">Native basics: pending · Follow-up: pending</output>
+    <div class="tools"><button id="reset">Reset trial</button><button id="save-receipt">Download trial receipt</button></div>
+    <details><summary>Fixture receipt (task state, not controller billing)</summary><pre id="receipt"></pre></details>
+  </section>
   <label>Ordinary value <input id="entry" value="8080" /></label>
   <label>Notes <textarea id="notes">Original notes</textarea></label>
   <label>Security code <input id="sensitive" value="fixture-only-code" /></label>
@@ -109,18 +122,42 @@
     <button id="bottom">Bottom target</button>
   </div>
   <output id="scroll-state">scroll=0</output>
-  <button id="play">Play muted fixture media</button>
+  <button id="play">Play generated fixture media</button>
   <button id="pause">Pause fixture media</button>
-  <video id="media" src="media.webm" controls muted loop preload="auto"></video>
+  <video id="media" controls muted loop preload="auto"></video>
 </main>
 <script>
   const entry = document.querySelector("#entry");
-  const state = { applications: 0, input: 0, change: 0, hover: 0, pointerenter: 0, mousemove: 0, revealed: 0 };
+  const started = performance.now();
+  const trialId = crypto.randomUUID();
+  const state = { applied_entry: null, applied_notes: null, ready: false, bottom: 0, applications: 0, input: 0, change: 0, hover: 0, pointerenter: 0, mousemove: 0, revealed: 0 };
   function showState() {
     document.querySelector("#state").textContent = Object.entries(state)
       .map(([key, value]) => `${key}=${value}`)
       .join("; ");
+    const basics = entry.value === "4242" && document.querySelector("#notes").value === "Luna was here" && state.applied_entry === "4242" && state.applied_notes === "Luna was here" && state.applications === 1;
+    const followup = basics && state.ready && state.bottom === 1;
+    document.querySelector("#score").textContent = `Native basics: ${basics ? "PASS" : "pending"} · Follow-up: ${followup ? "PASS" : "pending"}`;
+    document.querySelector("#receipt").textContent = JSON.stringify({
+      schema: "cu-playground/1", trial_id: trialId,
+      elapsed_ms: Math.round(performance.now() - started),
+      tasks: { basics, followup }, state,
+      values: { entry: entry.value, notes: document.querySelector("#notes").value },
+      timing_scope: "page initialization to latest fixture event; not controller time or cost"
+    }, null, 2);
   }
+  document.querySelector("#notes").addEventListener("input", showState);
+  document.querySelector("#reset").onclick = () => location.reload();
+  document.querySelector("#save-receipt").onclick = () => {
+    showState();
+    const url = URL.createObjectURL(new Blob([document.querySelector("#receipt").textContent], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `cu-playground-${trialId}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  document.querySelector("#bottom").onclick = () => { state.bottom++; showState(); };
   entry.addEventListener("input", () => {
     state.input++;
     showState();
@@ -130,6 +167,8 @@
     showState();
   });
   document.querySelector("#apply").onclick = () => {
+    state.applied_entry = entry.value;
+    state.applied_notes = document.querySelector("#notes").value;
     state.applications++;
     showState();
   };
@@ -186,14 +225,19 @@
   };
   document.querySelector("#mutate").onclick = () => {
     entry.value = "script-change";
+    showState();
   };
   document.querySelector("#delay").onclick = () => {
+    state.ready = false;
+    showState();
     document.querySelector("#delayed").replaceChildren();
     setTimeout(() => {
       const ready = document.createElement("p");
       ready.id = "ready";
       ready.textContent = "Ready";
       document.querySelector("#delayed").append(ready);
+      state.ready = true;
+      showState();
     }, 350);
   };
   document.querySelector("#replace").onclick = () => {
@@ -205,6 +249,23 @@
   document.querySelector("#pane").onscroll = (event) => {
     document.querySelector("#scroll-state").textContent = `scroll=${event.target.scrollTop}`;
   };
-  document.querySelector("#play").onclick = () => document.querySelector("#media").play();
-  document.querySelector("#pause").onclick = () => document.querySelector("#media").pause();
+  const canvas = document.createElement("canvas");
+  canvas.width = 320; canvas.height = 180;
+  const ctx = canvas.getContext("2d");
+  let mediaTimer;
+  document.querySelector("#play").onclick = () => {
+    const media = document.querySelector("#media");
+    if (!media.srcObject) media.srcObject = canvas.captureStream(10);
+    clearInterval(mediaTimer);
+    mediaTimer = setInterval(() => {
+      ctx.fillStyle = "#285b89"; ctx.fillRect(0, 0, 320, 180);
+      ctx.fillStyle = "white"; ctx.font = "20px sans-serif";
+      ctx.fillText(`Fixture ${Math.round(performance.now() / 100)}`, 20, 90);
+    }, 100);
+    media.play();
+  };
+  document.querySelector("#pause").onclick = () => {
+    document.querySelector("#media").pause(); clearInterval(mediaTimer);
+  };
+  showState();
 </script>
