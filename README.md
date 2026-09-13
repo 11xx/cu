@@ -17,6 +17,10 @@ The complete-task fixture and verifier are documented in
 [docs/benchmark.md](docs/benchmark.md). It is a local synthetic task and does
 not establish controller speed, model cost, or native chooser behavior.
 
+The disposable headless-output interaction demo is documented in
+[docs/publication-demo.md](docs/publication-demo.md); its GIF is local evidence,
+not a hosted product claim.
+
 The caller-managed checkpoint prototype is described in [docs/routines.md](docs/routines.md).
 
 The conditional executor decision and future trial contract are in
@@ -29,6 +33,20 @@ means the checkout has to stay put. Run `make install` when declared dependencie
 change; editable source tracking does not refresh the installed environment.
 Without installing, `bin/cu` is the same
 command and needs no knowledge of `uv`; every example below works either way.
+
+## Prerequisites
+
+Run `bin/cu doctor --json` from the checkout before installing, or `cu doctor`
+after `make install`. A usable session provides `hyprctl` inside a running
+Hyprland session, the Lua functions `hl.dispatch` and
+`hl.dsp.cursor.move`, `XDG_RUNTIME_DIR`, writable `/dev/uinput`, and the
+required `grim` capture binary. The doctor also checks the optional clipboard
+and region-selection binaries (`wl-copy`, `wl-paste`, and `slurp`).
+
+Input commands refuse while a lock screen is running, while an unfiltered
+`xremap` process could rewrite events, or while the user's abort flag is set.
+Those are live safety checks rather than installation steps. The doctor reports
+each check as `ok`, `warn`, or `fail`, with the remedy attached to the result.
 
 ## Orientation
 
