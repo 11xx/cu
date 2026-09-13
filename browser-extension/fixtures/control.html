@@ -41,6 +41,15 @@
     background: #3458;
     z-index: 10;
   }
+  #hover-controls {
+    display: none;
+    border: 1px solid #765;
+    padding: 4px;
+    background: #ffe9b8;
+  }
+  #hover-target:hover #hover-controls {
+    display: inline-block;
+  }
   video {
     display: block;
     width: 320px;
@@ -60,10 +69,13 @@
   <button id="victim">Original target</button>
   <button id="disabled" disabled>Disabled control</button>
   <button id="hidden" style="display: none">Hidden control</button>
+  <span id="hover-target" tabindex="0">Hover target
+    <span id="hover-controls"><button id="hover-action">Revealed action</button></span>
+  </span>
   <span class="covered"
     ><button id="blocked">Covered control</button><span class="cover"></span
   ></span>
-  <output id="state">applications=0; input=0; change=0; hover=0</output>
+  <output id="state">applications=0; input=0; change=0; hover=0; pointerenter=0; mousemove=0; revealed=0</output>
   <section id="delayed"></section>
   <!-- Result templates may contain comment nodes. -->
   <article class="result-card"><a href="/short">Short performance</a> <span>5:44</span></article>
@@ -79,7 +91,7 @@
 </main>
 <script>
   const entry = document.querySelector("#entry");
-  const state = { applications: 0, input: 0, change: 0, hover: 0 };
+  const state = { applications: 0, input: 0, change: 0, hover: 0, pointerenter: 0, mousemove: 0, revealed: 0 };
   function showState() {
     document.querySelector("#state").textContent = Object.entries(state)
       .map(([key, value]) => `${key}=${value}`)
@@ -101,6 +113,20 @@
     state.hover++;
     showState();
   });
+  const hoverTarget = document.querySelector("#hover-target");
+  hoverTarget.addEventListener("pointerenter", () => {
+    state.pointerenter++;
+    state.revealed++;
+    showState();
+  });
+  hoverTarget.addEventListener("mousemove", () => {
+    state.mousemove++;
+    showState();
+  });
+  document.querySelector("#hover-action").onclick = () => {
+    state.applications++;
+    showState();
+  };
   document.querySelector("#mutate").onclick = () => {
     entry.value = "script-change";
   };

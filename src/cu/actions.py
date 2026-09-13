@@ -36,6 +36,9 @@ MAX_MOVE_HZ = 120.0
 MAX_MOVE_TIMEOUT = 15.0
 MAX_NATIVE_DELTA = 12
 MOTION_TOLERANCE = 2.0
+DEFAULT_HOVER_DWELL = 0.2
+MAX_HOVER_DWELL = 10.0
+DWELL_POLL_SECONDS = 0.05
 
 
 def send_chords(
@@ -382,6 +385,75 @@ def move(
             "status": "converged",
         }
     )
+    safety.record(cfg, result)
+    return result
+
+
+def hover(
+    cfg: dict[str, Any],
+    frame_id: str,
+    at: tuple[float, float],
+    *,
+    duration: float = DEFAULT_MOVE_DURATION,
+    hz: float = DEFAULT_MOVE_HZ,
+    move_timeout: float = DEFAULT_MOVE_TIMEOUT,
+    dwell: float = DEFAULT_HOVER_DWELL,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Enter a frame target natively and hold it for a bounded dwell."""
+    if not math.isfinite(dwell) or not 0 <= dwell <= MAX_HOVER_DWELL:
+        raise ValueError(f"--dwell must be finite and between 0 and {MAX_HOVER_DWELL:g}")
+    initial = observe.snapshot()
+    entry = move(
+        cfg,
+        frame_id,
+        at,
+        duration=duration,
+        hz=hz,
+        timeout=move_timeout,
+        dry_run=dry_run,
+    )
+    started = time.monotonic()
+    deadline = started + dwell
+    if not dry_run:
+        while True:
+            snap = observe.snapshot()
+            frame = frames.load(frame_id)
+            live_monitors = snap["monitors"]
+            live_windows = snap["windows"]
+            live_layers = snap.get("layer_surfaces", [])
+            safety.confirm_pointer(
+                cfg,
+                (entry["cursor"]["x"], entry["cursor"]["y"]),
+                snap["cursor_logical"],
+            )
+            _motion_point_guard(
+                cfg,
+                frame,
+                snap["cursor_logical"],
+                live_monitors,
+                live_windows,
+                live_layers,
+                initial.get("focused"),
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(DWELL_POLL_SECONDS, remaining))
+    result = {
+        "action": "hover",
+        "transport": MOTION_TRANSPORT,
+        "frame": frame_id,
+        "at": {"x": at[0], "y": at[1]},
+        "entry": {key: value for key, value in entry.items() if not key.startswith("_")},
+        "dwell_requested": dwell,
+        "dwell_elapsed": 0.0 if dry_run else time.monotonic() - started,
+        "status": "dry-run" if dry_run else "dwelled",
+        "condition": {"status": "not-requested"},
+        "reveal": {"status": "unknown", "meaning": "application state was not asserted"},
+        "observation": None,
+        "dry_run": dry_run,
+    }
     safety.record(cfg, result)
     return result
 

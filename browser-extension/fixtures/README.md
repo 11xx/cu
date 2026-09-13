@@ -1,9 +1,10 @@
 # Browser interaction fixture
 
 `control.html` contains disposable controls, sensitive-field labels, delayed DOM
-readiness, replacement targets, application/event counters, duration-labelled
-result cards, a scroll pane, and muted media controls. Its values are synthetic.
-It does not submit data or contact external services.
+readiness, replacement targets, application/event counters, a CSS hover target
+whose controls begin hidden, duration-labelled result cards, a scroll pane, and
+muted media controls. Its values are synthetic. It does not submit data or
+contact external services.
 
 Run from the repository root. Generate the optional four-second media clip in a
 private runtime directory; do not commit generated media:
@@ -21,8 +22,10 @@ and explicitly select the required CU Browser grant mode. Read-only grants must
 refuse actions. Stop before choosing interaction mode.
 
 Use current document, generation, and element refs. Fill a value different from
-its initial value, then read it back. Verify clicks and synthetic hover through
-the counters rather than their delivery receipts. Programmatic field changes
+its initial value, then read it back. Verify clicks, native pointer entry, and
+synthetic hover through the counters rather than their delivery receipts. A
+`cu hover` pixel change shows that the page repainted; inspect the returned frame
+before calling the control revealed. Programmatic field changes
 and replacement targets must invalidate previously observed refs; sensitive,
 disabled, hidden, and covered controls must refuse interaction. Wait for delayed
 readiness and advancing media time instead of sleeping. Candidate labels on the

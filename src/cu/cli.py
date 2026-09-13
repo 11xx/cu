@@ -583,6 +583,223 @@ def _shot_after(args: argparse.Namespace, snap: dict[str, Any], cfg: dict[str, A
             time.sleep(min(poll_seconds, remaining))
 
 
+def _hover_frame_from_probe(
+    reference: dict[str, Any],
+    cfg: dict[str, Any],
+    scratch: Path,
+    captured_snap: dict[str, Any],
+    image_size: dict[str, int],
+) -> dict[str, Any]:
+    expected_size = reference["image_size"]
+    if image_size != expected_size:
+        raise FrameError(
+            f"hover capture is {image_size['w']}x{image_size['h']}, but reference "
+            f"{reference['id']} is {expected_size['w']}x{expected_size['h']}; "
+            "capture conditions changed"
+        )
+    profile_name = reference.get("profile") or capture.default_name(cfg)
+    profile = capture.resolve(profile_name, cfg)
+    capture.require_budget(scratch, profile)
+    return frames.new(
+        source=reference["source"],
+        logical_rect=reference["logical_rect"],
+        image_size=image_size,
+        scratch=scratch,
+        native_size=reference.get("native_size"),
+        digest_native=capture.digest(scratch),
+        monitor=reference.get("monitor"),
+        profile=profile_name,
+        capture_scale=_frame_capture_scale(reference),
+        estimator=capture.estimator(profile),
+        visual_tokens=capture.visual_tokens(image_size["w"], image_size["h"], profile),
+        cursor_logical=observe.cursor(),
+        window=_current_window(reference.get("window"), captured_snap["windows"]),
+        target_window=_current_window(
+            reference.get("target_window"), captured_snap["windows"]
+        ),
+    )
+
+
+def _hover_observe(
+    reference: dict[str, Any],
+    cfg: dict[str, Any],
+    watch: dict[str, int],
+    *,
+    timeout: float,
+    poll_ms: float,
+    quiet_ms: float,
+) -> dict[str, Any]:
+    try:
+        width, height, baseline_rgba = png.decode(Path(reference["path"]).read_bytes())
+    except (OSError, ValueError, KeyError) as exc:
+        raise FrameError(f"cannot read frame {reference['id']}: {exc}") from exc
+    expected_size = reference["image_size"]
+    if {"w": width, "h": height} != expected_size:
+        raise FrameError(f"frame {reference['id']} PNG does not match its descriptor")
+    baseline = _watched_pixels(baseline_rgba, width, watch)
+    previous = baseline
+    changed = False
+    quiet_since = 0.0
+    probes = 0
+    started = time.monotonic()
+    deadline = started + timeout
+    poll_seconds = poll_ms / 1000
+    quiet_seconds = quiet_ms / 1000
+    scale = _frame_capture_scale(reference)
+
+    while True:
+        if probes and time.monotonic() >= deadline:
+            return {
+                "status": "timed-out",
+                "watch": watch,
+                "probes": probes,
+                "elapsed_seconds": time.monotonic() - started,
+                "frame": None,
+            }
+        _check_recapture(reference, observe.snapshot())
+        with frames.capture_scratch() as scratch:
+            _grab_shot(reference["source"], reference["logical_rect"], scratch, scale)
+            captured_snap = observe.snapshot()
+            _check_recapture(reference, captured_snap)
+            probes += 1
+            try:
+                probe_width, probe_height, probe_rgba = png.decode(scratch.read_bytes())
+            except (OSError, ValueError) as exc:
+                raise FrameError(f"cannot compare hover probe {probes}: {exc}") from exc
+            if {"w": probe_width, "h": probe_height} != expected_size:
+                raise FrameError("hover capture conditions changed")
+            now = time.monotonic()
+            current = _watched_pixels(probe_rgba, probe_width, watch)
+            if not changed:
+                if current != baseline:
+                    changed = True
+                    quiet_since = now
+            elif current != previous:
+                quiet_since = now
+            previous = current
+            if changed and now - quiet_since >= quiet_seconds:
+                frame = _hover_frame_from_probe(
+                    reference,
+                    cfg,
+                    scratch,
+                    captured_snap,
+                    {"w": probe_width, "h": probe_height},
+                )
+                frame["changed"] = True
+                frame["hover_watch"] = {
+                    "watch": watch,
+                    "probes": probes,
+                    "elapsed_seconds": now - started,
+                    "poll_ms": poll_ms,
+                    "quiet_ms": quiet_ms,
+                    "timeout_seconds": timeout,
+                }
+                return {
+                    "status": "changed",
+                    "watch": watch,
+                    "probes": probes,
+                    "elapsed_seconds": now - started,
+                    "frame": frame,
+                }
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(poll_seconds, remaining))
+
+
+def _validate_hover_wait(args: argparse.Namespace) -> None:
+    if not all(math.isfinite(value) for value in (args.poll_ms, args.quiet_ms, args.timeout)):
+        raise ValueError("hover wait timing values must be finite")
+    if args.poll_ms <= 0:
+        raise ValueError("--poll-ms must be positive")
+    if args.quiet_ms < 0:
+        raise ValueError("--quiet-ms cannot be negative")
+    if args.timeout <= 0:
+        raise ValueError("--timeout must be positive")
+
+
+def _render_hover(result: dict[str, Any]) -> None:
+    mark = "would " if result["dry_run"] else ""
+    condition = result["condition"]["status"]
+    frame = result.get("observation")
+    where = f"frame {frame['id']}" if frame else "no final frame"
+    print(
+        f"{mark}hovered at {result['at']['x']:g},{result['at']['y']:g}; "
+        f"dwell {result['dwell_elapsed']:.3f}s; condition {condition}; {where}"
+    )
+
+
+def cmd_hover(args: argparse.Namespace) -> int:
+    _validate_hover_wait(args)
+    cfg = config.load()
+    reference = frames.load(args.frame)
+    watch = _parse_watch(args.watch, reference["image_size"]) if args.watch else None
+    result = actions.hover(
+        cfg,
+        args.frame,
+        _parse_at(args.at),
+        duration=args.duration,
+        hz=args.hz,
+        move_timeout=args.move_timeout,
+        dwell=args.dwell,
+        dry_run=args.dry_run,
+    )
+    if result["dry_run"]:
+        _emit(result, args.json, _render_hover)
+        return exits.OK
+
+    if watch is None:
+        with frames.capture_scratch() as scratch:
+            _grab_shot(
+                reference["source"],
+                reference["logical_rect"],
+                scratch,
+                _frame_capture_scale(reference),
+            )
+            captured_snap = observe.snapshot()
+            _check_recapture(reference, captured_snap)
+            frame = _hover_frame_from_probe(
+                reference,
+                cfg,
+                scratch,
+                captured_snap,
+                capture.size_of(scratch),
+            )
+        result["observation"] = frame
+        result["status"] = "observed"
+    else:
+        condition = _hover_observe(
+            reference,
+            cfg,
+            watch,
+            timeout=args.timeout,
+            poll_ms=args.poll_ms,
+            quiet_ms=args.quiet_ms,
+        )
+        result["condition"] = {
+            "kind": "pixels",
+            "status": condition["status"],
+            "watch": watch,
+            "probes": condition["probes"],
+            "elapsed_seconds": condition["elapsed_seconds"],
+        }
+        result["observation"] = condition["frame"]
+        result["status"] = "observed" if condition["frame"] else "timed-out"
+    result["reveal"] = {
+        "status": "unknown",
+        "meaning": "a frame or pixel change does not establish application state",
+    }
+    safety.record(cfg, result)
+    _emit(result, args.json, _render_hover)
+    if result["status"] == "timed-out":
+        print(
+            f"cu: hover timed out after {result['condition']['elapsed_seconds']:.3f}s; "
+            "pixels did not change and settle",
+            file=sys.stderr,
+        )
+        return exits.TIMED_OUT
+    return exits.OK
+
+
 def cmd_shot(args: argparse.Namespace) -> int:
     _validate_after_args(args)
     if args.window and (args.output or args.region):
@@ -2138,6 +2355,43 @@ def build_parser() -> argparse.ArgumentParser:
         "warp", "Place the compositor pointer at a frame coordinate", cmd_warp
     )
     add_aim(warp, required=True)
+
+    hover = add_injecting(
+        "hover", "Enter a target natively, dwell, and return an observation", cmd_hover
+    )
+    add_aim(hover, required=True)
+    hover.add_argument(
+        "--duration", type=float, default=actions.DEFAULT_MOVE_DURATION,
+        help="Seconds for native entry (default: 0.25)",
+    )
+    hover.add_argument(
+        "--hz", type=float, default=actions.DEFAULT_MOVE_HZ,
+        help="Native entry samples per second (default: 60)",
+    )
+    hover.add_argument(
+        "--move-timeout", type=float, default=actions.DEFAULT_MOVE_TIMEOUT,
+        help="Maximum seconds for entry convergence (default: 2)",
+    )
+    hover.add_argument(
+        "--dwell", type=float, default=actions.DEFAULT_HOVER_DWELL,
+        help="Seconds to hold the endpoint before observing (default: 0.2)",
+    )
+    hover.add_argument(
+        "--watch", metavar="'x,y wxh'|full",
+        help="Wait for watched frame pixels to change and settle",
+    )
+    hover.add_argument(
+        "--poll-ms", type=float, default=100,
+        help="Milliseconds between watched probes (default: 100)",
+    )
+    hover.add_argument(
+        "--quiet-ms", type=float, default=200,
+        help="Unchanged milliseconds before a watched reveal settles (default: 200)",
+    )
+    hover.add_argument(
+        "--timeout", type=float, default=3.0,
+        help="Seconds to wait for watched pixels (default: 3)",
+    )
 
     click = add_injecting("click", "Warp, assert focus, press and release", cmd_click)
     add_aim(click, required=True)
