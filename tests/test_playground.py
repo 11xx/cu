@@ -1,40 +1,57 @@
-"""The public launcher serves only its packaged fixture on loopback."""
+"""The public launcher serves only its declared packaged native assets."""
 
 import json
-import signal
-import subprocess
-import sys
-from urllib.error import HTTPError
-from urllib.request import urlopen
+from unittest.mock import patch
 
 import pytest
 
 from cu import cli
+from cu.native_playground import server
 
 
-def test_playground_launches_outside_the_checkout_and_stops(tmp_path):
-    process = subprocess.Popen(
-        [sys.executable, "-m", "cu.cli", "playground", "--json"],
-        cwd=tmp_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-    )
-    try:
-        announcement = json.loads(process.stdout.readline())
-        assert announcement["extension_required"] is False
-        assert announcement["url"].startswith("http://127.0.0.1:")
-        with urlopen(announcement["url"], timeout=3) as response:
-            page = response.read().decode()
-            assert response.headers["Cache-Control"] == "no-store"
-        assert "Native basics" in page and "Schedule readiness" in page
-        for path in ("AGENTS.md", "../pyproject.toml", "media.webm"):
-            with pytest.raises(HTTPError) as caught:
-                urlopen(announcement["url"] + path, timeout=3)
-            assert caught.value.code == 404
-        process.send_signal(signal.SIGINT)
-        assert process.wait(timeout=3) == 0
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=3)
+def test_packaged_assets_are_available_outside_the_checkout(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for path in ("/", "/app.js?cache=ignored", "/state.js", "/style.css"):
+        served = server.asset(path)
+        assert served is not None
+        content_type, body = served
+        assert content_type
+        assert body
+    assert server.asset("/index.html") is None
+    assert server.asset("/../pyproject.toml") is None
+    assert b"hover-action" not in server.asset("/")[1]
+
+
+def test_launcher_emits_explicit_foreground_contract(capsys):
+    class FakeServer:
+        server_port = 43127
+
+        def __init__(self, address, handler):
+            self.address = address
+            self.handler = handler
+            self.timeout = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def handle_request(self):
+            raise KeyboardInterrupt
+
+    with patch.object(server, "HTTPServer", FakeServer):
+        server.serve(0, as_json=True)
+
+    announcement = json.loads(capsys.readouterr().out)
+    assert announcement == {
+        "url": "http://127.0.0.1:43127/",
+        "suite": "native",
+        "fixture": "cu-native-playground/1",
+        "assets": ["/", "/app.js", "/state.js", "/style.css"],
+        "extension_required": False,
+        "lifecycle": "foreground-until-interrupted",
+    }
 
 
 @pytest.mark.parametrize("port", ["-1", "65536"])

@@ -34,8 +34,8 @@ from . import (
     guide,
     knowledge,
     metrics,
+    native_playground,
     observe,
-    playground,
     png,
     recipes,
     safety,
@@ -1962,7 +1962,7 @@ def cmd_abort(args: argparse.Namespace) -> int:
 
 
 def cmd_playground(args: argparse.Namespace) -> int:
-    playground.serve(args.port, as_json=args.json)
+    native_playground.serve(args.port, as_json=args.json)
     return exits.OK
 
 
@@ -2209,7 +2209,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     lab = add(
-        "playground", "Serve a disposable browser playground without an extension", cmd_playground
+        "playground", "Serve the packaged native playground without an extension", cmd_playground
     )
     lab.add_argument("--port", type=int, default=0,
                      help="Loopback port; 0 selects a free port (default)")

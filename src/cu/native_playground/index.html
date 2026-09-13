@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CU native playground</title>
+<link rel="stylesheet" href="/style.css" />
+<main>
+  <h1>CU native playground</h1>
+  <p>
+    A disposable, extension-free practice suite. Start a task explicitly; changing fields or
+    selecting a task never starts its timer.
+  </p>
+
+  <section class="task-summary" aria-label="Task summary">
+    <h2>Task status</h2>
+    <output id="suite-progress">Suite progress: 0/2 PASS</output>
+    <output id="run-meta">Run: not started</output>
+    <div id="task-list"></div>
+    <div>
+      <button id="reset-run" type="button">Reset run</button>
+      <button id="save-receipt" type="button">Download run receipt</button>
+    </div>
+    <details>
+      <summary>Capability availability</summary>
+      <div id="capabilities">
+        <ul id="capability-list"></ul>
+        <p>Unavailable capabilities are reported here and never counted as task scores.</p>
+      </div>
+    </details>
+  </section>
+
+  <section class="interaction" aria-label="Native task interaction">
+    <h2>Selected task interaction</h2>
+    <output id="selected-objective">Select a task above.</output>
+    <output id="interaction-status">No attempt is running.</output>
+
+    <div id="basics-controls">
+      <label>Ordinary value <input id="entry" value="8080" /></label>
+      <label>Notes <textarea id="notes">Original notes</textarea></label>
+      <button id="apply" type="button">Apply once</button>
+    </div>
+
+    <div id="followup-controls">
+      <button id="delay" type="button">Schedule readiness</button>
+      <output id="delayed" aria-live="polite"></output>
+      <div id="pane" aria-label="Scrollable fixture pane">
+        <div>Scrollable fixture area</div>
+        <button id="bottom" type="button">Bottom target</button>
+      </div>
+      <output id="scroll-state">scroll=0</output>
+    </div>
+  </section>
+
+  <details>
+    <summary>Latest immutable receipt</summary>
+    <pre id="receipt">No terminal attempt yet.</pre>
+  </details>
+</main>
+<script src="/state.js"></script>
+<script src="/app.js"></script>
