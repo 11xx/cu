@@ -511,7 +511,11 @@ declared here.
 The resolved action is sent only after the named browser is confirmed to hold
 focus, except under `--dry-run`, which sends nothing and therefore answers
 about the browser rather than about what currently holds focus. It is logged by semantic name, so a recipe resolves the current mapping
-again instead of replaying a chord that may have changed.
+again instead of replaying a chord that may have changed. Its receipt separates
+the resolved binding and native dispatch from the browser effect, which remains
+`unknown` until a subsequent observation proves the exact tab or auxiliary
+window closed or changed. Same-class Library windows do not establish the main
+tab's shortcut context.
 
 ### Aimed typing is one action, not two
 

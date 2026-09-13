@@ -1662,6 +1662,11 @@ def cmd_browser(args: argparse.Namespace) -> int:
                     "browser": target["name"],
                     "chord": chord,
                     "resolved_from": source,
+                    "delivery": "not-dispatched",
+                    "effect": {
+                        "status": "unknown",
+                        "meaning": "no browser window held focus for this dry run",
+                    },
                     "dry_run": True,
                     "focused": False,
                 },
@@ -1687,7 +1692,8 @@ def cmd_browser(args: argparse.Namespace) -> int:
         args.json,
         lambda r: print(
             f"{'would send' if r['dry_run'] else 'sent'} {r['semantic']} → "
-            f"{r['chord']}  [{r['browser']}, via {r['resolved_from']}]"
+            f"{r['chord']}  [{r['browser']}, via {r['resolved_from']}; "
+            f"effect {r.get('effect', {}).get('status', 'unknown')}]"
         ),
     )
     return exits.OK

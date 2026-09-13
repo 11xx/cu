@@ -252,6 +252,8 @@ def test_a_dry_run_resolves_without_the_browser_holding_focus(monkeypatch, capsy
     assert cli.cmd_browser(args) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["chord"] == "ctrl+r" and payload["focused"] is False
+    assert payload["delivery"] == "not-dispatched"
+    assert payload["effect"]["status"] == "unknown"
 
 
 def test_a_focused_browser_with_no_actions_reports_why(monkeypatch, capsys):
