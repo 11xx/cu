@@ -1,0 +1,142 @@
+:root {
+  color: #15253c;
+  background: #f6f8fb;
+  font: 17px/1.45 sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+}
+
+main {
+  max-width: 1060px;
+  margin: auto;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.2;
+}
+
+.task-summary {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding: 16px;
+  background: #e3ebf8;
+  border: 2px solid #467;
+  box-shadow: 0 3px 12px #15253c2b;
+}
+
+#suite-progress,
+#interaction-status,
+#capabilities {
+  display: block;
+  padding: 8px;
+  margin: 8px 0;
+  background: #fff;
+}
+
+#task-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.task-card {
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #9ab;
+}
+
+.task-card.selected {
+  outline: 3px solid #467;
+}
+
+.task-card[data-status="PASS"] {
+  border-color: #287a42;
+}
+
+.task-card[data-status="FAIL"],
+.task-card[data-status="ABORTED"] {
+  border-color: #a43b3b;
+}
+
+.task-meta,
+.attempt-history,
+#capability-list {
+  font-size: 14px;
+}
+
+.attempt-history {
+  max-height: 180px;
+  overflow: auto;
+  padding-left: 24px;
+}
+
+.attempt-history pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.interaction {
+  margin: 16px 0;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #9ab;
+}
+
+label {
+  display: inline-block;
+  vertical-align: top;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  margin: 8px;
+  padding: 10px;
+}
+
+textarea {
+  min-width: 260px;
+  min-height: 60px;
+}
+
+button:disabled,
+input:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+#pane {
+  height: 130px;
+  overflow: auto;
+  border: 2px solid #456;
+}
+
+#pane > div {
+  height: 1800px;
+}
+
+#receipt {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

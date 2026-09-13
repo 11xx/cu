@@ -24,10 +24,11 @@ EXPLICIT PRACTICE AND BENCHMARKS
   cu playground                 Serve a disposable local page; print its URL.
   cu playground --port 8765      Choose a loopback port; Ctrl-C stops serving.
 
-  Open the URL in your chosen browser. No extension is required. The page has
-  resettable native tasks, visible outcomes, hover/scroll controls and synthetic
-  receipts. Practice only when explicitly requested; nothing launches a browser,
-  grants a page or calls a model automatically. For a cheaper-controller trial,
+  Open the URL in your chosen browser. No extension is required. The native
+  suite has explicit Start, retry, task-reset and run-reset controls, visible
+  PASS/FAIL/ABORTED outcomes, per-attempt receipts and a readiness/scroll task.
+  Practice only when explicitly requested; nothing launches a browser, grants a
+  page or calls a model automatically. For a cheaper-controller trial,
   explicitly choose a controller or worker interface with follow-up support.
   Hand over intent, exact window, fresh context and postconditions.
   Compare verified outcomes, total tokens/cost, speed and recovery; the page
