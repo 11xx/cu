@@ -37,6 +37,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import exits
+from .safety import Refused
+
 #: Steps a recipe may contain. Anything else in the log — a refused command, a
 #: dry run — is history rather than procedure.
 REPLAYABLE = {"focus", "warp", "move", "click", "scroll", "type", "key", "browser", "wait"}
@@ -437,15 +440,20 @@ def replay(
                 frame = _capture_window(window, snap["monitors"], cfg, profile_name)
                 frame_id = frame["id"]
                 at = _point_in_frame(step, window, frame)
-            performed.append(
-                actions.type_text(
-                    cfg, params[param], method=step.get("method", "clipboard"),
-                    replace=step.get("replace", False), verify=step.get("verify", False),
-                    frame_id=frame_id, at=at,
-                    button=step.get("button", "left"), count=step.get("count", 1),
-                    dry_run=dry_run,
-                )
+            result = actions.type_text(
+                cfg, params[param], method=step.get("method", "clipboard"),
+                replace=step.get("replace", False), verify=step.get("verify", False),
+                frame_id=frame_id, at=at,
+                button=step.get("button", "left"), count=step.get("count", 1),
+                dry_run=dry_run,
             )
+            performed.append(result)
+            if not dry_run and result.get("verified", {}).get("status") == "unverified":
+                raise Refused(
+                    exits.VERIFY_UNAVAILABLE,
+                    f"recipe step {index} could not read the field back; "
+                    "inspect it before continuing",
+                )
         elif action == "key":
             performed.append(
                 actions.key(

@@ -145,6 +145,52 @@ def test_the_tactic_prefers_widening_to_guessing_an_edge():
 POSTCONDITION = _section("CHOOSE THE POSTCONDITION BEFORE INPUT")
 
 
+RECOVERY = _section("RECOVER AT THE FIRST UNCERTAIN STEP")
+
+
+def test_recovery_guidance_preserves_batch_failure_evidence():
+    for field in ("completed", "failed.step", "failed.code", "failed.may_have_acted"):
+        assert field in RECOVERY
+    assert "never replay the whole prefix" in " ".join(RECOVERY.split())
+    assert "shell `;` chain is outside CU's guarantee" in RECOVERY
+    assert "cu batch` cannot wait" in RECOVERY
+
+
+def test_recovery_guidance_covers_current_action_boundaries():
+    for example in (
+        "cu status --json",
+        "cu session begin --exclusive --why",
+        "cu browser actions --browser NAME --json",
+        "cu browser focus-urlbar --browser NAME --dry-run --json",
+        "cu move --frame f3 --at 412,300 --duration 0.25 --hz 60 --timeout 2 --timings --json",
+        "cu observe --json",
+        "cu shot --window active --json",
+    ):
+        assert example in RECOVERY
+    assert "older context is not current authorization" in RECOVERY
+    assert "guessed `ctrl+l`" in RECOVERY
+    assert "exit 32" in RECOVERY
+    assert "outcome is uncertain" in RECOVERY
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["status", "--json"],
+        ["session", "begin", "--exclusive", "--why", "inspect"],
+        ["browser", "actions", "--browser", "NAME", "--dry-run", "--json"],
+        [
+            "move", "--frame", "f3", "--at", "412,300", "--duration", "0.25",
+            "--hz", "60", "--timeout", "2", "--timings", "--json",
+        ],
+        ["observe", "--json"],
+        ["shot", "--window", "active", "--json"],
+    ],
+)
+def test_recovery_examples_use_parser_contract(argv):
+    assert cli.build_parser().parse_args(argv).command == argv[0]
+
+
 def test_postcondition_guidance_names_the_four_evidence_channels():
     for channel in ("compositor event", "watched pixels", "granted `cu web wait`", "file count"):
         assert channel in POSTCONDITION

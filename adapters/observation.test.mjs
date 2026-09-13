@@ -28,6 +28,12 @@ else if (mode === 'huge') console.log('x'.repeat(70000));
 else if (args[0] === 'batch') {
   process.stdin.resume();
   process.stdin.on('end', () => {
+    if (mode === 'empty') return;
+    if (mode === 'malformed-refuse') {
+      console.log('not JSON');
+      process.exitCode = 32;
+      return;
+    }
     const code = mode === 'refuse' ? 40 : 0;
     console.log(JSON.stringify({code, completed: code ? [] : [{step: 1}], failed: code ? {step: 1, code} : null}));
     process.exitCode = code;
@@ -80,6 +86,31 @@ test("invalid capture options refuse before actions", async () => {
   const result = await observeTogether({ actions: [["key", "TAB"]], shot: ["--help", "yes"] }, { executable: "/nonexistent" });
   assert.equal(result.details.actions.status, "not-started");
   assert.equal(result.details.error.phase, "request");
+});
+
+test("missing batch receipt fails before capture", async t => {
+  const options = await fixture(t, "empty");
+  const result = await observeTogether({ actions: [["move", "--frame", "f999", "--at", "1,1"]] }, options);
+  assert.equal(result.details.ok, false);
+  assert.equal(result.details.actions.status, "unknown");
+  assert.equal(result.details.actions.code, 0);
+  assert.equal(result.details.actions.may_have_acted, true);
+  assert.equal(result.details.error.phase, "actions");
+  assert.match(result.details.error.detail, /no JSON result/);
+  assert.equal(result.content.length, 1);
+});
+
+test("a malformed refusal keeps the child exit code", async t => {
+  const options = await fixture(t, "malformed-refuse");
+  const result = await observeTogether({ actions: [["move", "--frame", "f999", "--at", "1,1"]] }, options);
+  assert.equal(result.details.ok, false);
+  assert.equal(result.details.actions.status, "unknown");
+  assert.equal(result.details.actions.code, 32);
+  assert.equal(result.details.actions.may_have_acted, true);
+  assert.equal(result.details.error.phase, "actions");
+  assert.equal(result.details.error.code, 32);
+  assert.match(result.details.error.detail, /invalid JSON/);
+  assert.equal(result.content.length, 1);
 });
 
 test("deadline terminates child and does not imply success", async t => {

@@ -61,8 +61,12 @@ The text block is JSON with schema `cu-observation/2`:
 
 A refusal stops the sequence. No capture follows a failed batch, no previous
 frame is reused, and a capture/image failure does not erase completed actions.
-The Pi wrapper throws the complete text report on failure to set the harness's
-error flag. Other wrappers must similarly mark `ok: false` as a failed tool call.
+An action call also requires a JSON-object batch receipt: an empty or malformed
+receipt is an `actions`-phase failure, keeps any child exit code that exists, and
+marks the action outcome as unknown and possibly partial. A zero exit without a
+receipt is not action success. The Pi wrapper throws the complete text report on
+failure to set the harness's error flag. Other wrappers must similarly mark
+`ok: false` as a failed tool call.
 Never retry the action prefix merely because the final image was unavailable.
 
 ## Bounds and context
