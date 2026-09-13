@@ -499,6 +499,11 @@ mode and requested read-back.
 A genuine disagreement is `VERIFY_FAILED`, which is deliberately
 *not* retryable: retyping blindly duplicates whatever did land.
 
+An unavailable requested read-back is `VERIFY_UNAVAILABLE`, and a recipe stops
+before any following key or submit step. The caller inspects the field and
+chooses the next action from fresh evidence; a replay does not assume that a
+missing read-back means the text failed to arrive.
+
 Verifying is not free of consequence: it leaves the field's contents selected,
 so the next keystroke replaces them rather than appending. `cu` does not
 collapse the selection afterwards, because the key that would do it means

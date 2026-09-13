@@ -67,6 +67,21 @@ function validate(request) {
   return { actions, shot };
 }
 
+function parseJsonObject(output, name) {
+  const text = output.trim();
+  if (!text) throw new Error(`${name} returned no JSON result`);
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${name} returned invalid JSON: ${error.message}`);
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${name} result must be a JSON object`);
+  }
+  return value;
+}
+
 async function imageFor(frame) {
   if (!/^f[1-9][0-9]*$/.test(frame.id) || typeof frame.path !== "string" ||
       !Number.isInteger(frame.encoded_bytes) || frame.encoded_bytes < 33 || frame.encoded_bytes > MAX_IMAGE) {
@@ -108,7 +123,24 @@ export async function observeTogether(request, options = {}) {
       phase = "actions";
       report.actions = { status: "unknown", may_have_acted: true };
       const result = await runCu(["batch", "-", ...common], JSON.stringify(actions), options);
-      const actionResult = result.stdout.trim() ? JSON.parse(result.stdout) : null;
+      let actionResult;
+      try {
+        actionResult = parseJsonObject(result.stdout, "cu batch");
+      } catch (error) {
+        report.actions = {
+          status: "unknown",
+          code: result.code,
+          result: null,
+          detail: result.stderr || error.message,
+          may_have_acted: true,
+        };
+        report.error = {
+          phase,
+          ...(result.code !== 0 ? { code: result.code } : {}),
+          detail: error.message,
+        };
+        return textResult(report);
+      }
       report.actions = { status: result.code === 0 ? "completed" : "refused", code: result.code,
         result: actionResult, detail: result.stderr };
       if (actionResult?.invocation_id) {

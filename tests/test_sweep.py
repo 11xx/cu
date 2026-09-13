@@ -7,7 +7,20 @@ import time
 
 import pytest
 
-from cu import actions, browser, capture, checks, cli, config, exits, frames, observe, png, recipes
+from cu import (
+    actions,
+    browser,
+    capture,
+    checks,
+    cli,
+    config,
+    exits,
+    frames,
+    observe,
+    png,
+    recipes,
+    safety,
+)
 
 
 @pytest.fixture
@@ -264,6 +277,20 @@ def test_explicit_replacement_selects_and_verifies_exactly(
     assert clipboard[0] == b"previous"
 
 
+def test_standalone_verify_unavailable_is_a_failure(world, monkeypatch, capsys):
+    monkeypatch.setattr(
+        actions,
+        "type_text",
+        lambda *args, **kwargs: {
+            "action": "type", "dry_run": False,
+            "verified": {"status": "unverified"},
+        },
+    )
+
+    assert cli.main(["type", "value", "--verify", "--json"]) == exits.VERIFY_UNAVAILABLE
+    assert json.loads(capsys.readouterr().out)["verified"]["status"] == "unverified"
+
+
 def test_replacement_stops_when_focus_moves_after_selection(world, monkeypatch):
     sent = []
     def send(cfg, chords, backend, *, before_send):
@@ -311,6 +338,31 @@ def test_batch_stops_before_type_when_focus_fails(world, tmp_path, monkeypatch, 
     assert result["rollback"] is False
     assert typed == []
     assert "secret marker" not in json.dumps(result)
+
+
+def test_batch_stops_before_scroll_and_type_when_move_fails(world, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "batch.json"
+    path.write_text(json.dumps([
+        ["move", "--frame", "f999", "--at", "1,1"],
+        ["scroll", "--dy", "-3"],
+        ["type", "never sent"],
+    ]))
+    later = []
+
+    def refuse_move(*args, **kwargs):
+        raise safety.Refused(exits.MOTION_NOT_CONVERGED, "native move did not converge")
+
+    monkeypatch.setattr(actions, "move", refuse_move)
+    monkeypatch.setattr(actions, "scroll", lambda *args, **kwargs: later.append("scroll"))
+    monkeypatch.setattr(actions, "type_text", lambda *args, **kwargs: later.append("type"))
+
+    assert cli.main(["batch", str(path), "--json"]) == exits.MOTION_NOT_CONVERGED
+    result = json.loads(capsys.readouterr().out)
+    assert result["completed"] == []
+    assert result["failed"]["step"] == 1
+    assert result["failed"]["code"] == exits.MOTION_NOT_CONVERGED
+    assert result["failed"]["may_have_acted"] is True
+    assert later == []
 
 
 @pytest.mark.parametrize("drift,code", [("abort", 40), ("geometry", 20), ("content", 26)])

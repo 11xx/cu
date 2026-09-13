@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from cu import capture, cli, config, exits, frames, observe, recipes, wait
+from cu import actions, capture, cli, config, exits, frames, observe, recipes, wait
 
 
 @pytest.fixture(autouse=True)
@@ -304,6 +304,36 @@ def test_a_replay_wait_timeout_maps_to_timed_out(monkeypatch, capsys):
 
     assert cli.main(["recipe", "replay", "demo"]) == exits.TIMED_OUT
     assert "step 1: late" in capsys.readouterr().err
+
+
+def test_unverified_type_stops_replay_before_following_key(monkeypatch, capsys):
+    recipe = build([
+        {"action": "type", "length": 5, "method": "clipboard", "verify": True, "window": {}},
+        {"action": "key", "chord": "enter", "semantic": None, "window": {}},
+    ])
+    recipes.save(recipe)
+    recipes.approve("demo")
+    submitted = []
+    monkeypatch.setattr(
+        actions,
+        "type_text",
+        lambda *_args, **_kwargs: {
+            "action": "type", "dry_run": False,
+            "verified": {"status": "unverified"},
+        },
+    )
+    monkeypatch.setattr(
+        actions,
+        "key",
+        lambda *_args, **_kwargs: submitted.append(True),
+    )
+
+    assert (
+        cli.main(["recipe", "replay", "demo", "--param", "text1=value"])
+        == exits.VERIFY_UNAVAILABLE
+    )
+    assert submitted == []
+    assert "step 1" in capsys.readouterr().err
 
 
 def test_a_genuine_recipe_policy_refusal_stays_denied(capsys):

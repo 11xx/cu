@@ -1887,6 +1887,8 @@ def cmd_type(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
     )
     _emit(result, args.json, _render_action)
+    if args.verify and result.get("verified", {}).get("status") == "unverified":
+        return exits.VERIFY_UNAVAILABLE
     return exits.OK
 
 
