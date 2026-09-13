@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from . import compositor, config, exits, frames, hypr, observe, safety, uinput
+from . import compositor, config, exits, frames, hypr, motion, observe, safety, uinput
 from .safety import Refused
 
 MOTION_TRANSPORT = "uinput-relative-v1"
@@ -214,13 +214,7 @@ def _motion_route(
     start: dict[str, float], target: dict[str, float], duration: float, hz: float
 ) -> list[dict[str, float]]:
     samples = max(1, math.ceil(duration * hz))
-    return [
-        {
-            "x": start["x"] + (target["x"] - start["x"]) * index / samples,
-            "y": start["y"] + (target["y"] - start["y"]) * index / samples,
-        }
-        for index in range(samples + 1)
-    ]
+    return motion.line((start["x"], start["y"]), (target["x"], target["y"]), samples)
 
 
 def _motion_point_guard(

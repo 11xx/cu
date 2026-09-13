@@ -1,8 +1,8 @@
 # Browser interaction fixture
 
 `control.html` contains disposable controls, sensitive-field labels, delayed DOM
-readiness, replacement targets, application/event counters, a CSS hover target
-whose controls begin hidden, duration-labelled result cards, a scroll pane, and
+readiness, replacement targets, application/event counters, a timer-reset hover
+target whose controls begin hidden, duration-labelled result cards, a scroll pane, and
 muted media controls. Its values are synthetic. It does not submit data or
 contact external services.
 
