@@ -47,7 +47,7 @@
     padding: 4px;
     background: #ffe9b8;
   }
-  #hover-target:hover #hover-controls {
+  #hover-target.native-revealed #hover-controls {
     display: inline-block;
   }
   video {
@@ -114,13 +114,25 @@
     showState();
   });
   const hoverTarget = document.querySelector("#hover-target");
+  let revealTimer;
+  function refreshHoverReveal() {
+    hoverTarget.classList.add("native-revealed");
+    state.revealed = 1;
+    clearTimeout(revealTimer);
+    revealTimer = setTimeout(() => {
+      hoverTarget.classList.remove("native-revealed");
+      state.revealed = 0;
+      showState();
+    }, 250);
+  }
   hoverTarget.addEventListener("pointerenter", () => {
     state.pointerenter++;
-    state.revealed++;
+    refreshHoverReveal();
     showState();
   });
   hoverTarget.addEventListener("mousemove", () => {
     state.mousemove++;
+    refreshHoverReveal();
     showState();
   });
   document.querySelector("#hover-action").onclick = () => {
