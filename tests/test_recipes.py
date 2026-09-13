@@ -72,6 +72,53 @@ def test_a_click_keeps_its_window_relative_position():
     assert step["count"] == 2
 
 
+def test_native_move_keeps_transport_and_timing():
+    entry = {
+        "action": "move",
+        "transport": "uinput-relative-v1",
+        "duration_requested": 0.25,
+        "hz": 60,
+        "timeout": 2,
+        "window": {
+            "class": "zen",
+            "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600},
+        },
+        "relative": {"x": 0.5, "y": 0.25},
+    }
+    step = recipes.step_from_log(entry)
+    assert step["transport"] == "uinput-relative-v1"
+    assert step["duration"] == 0.25
+    assert step["hz"] == 60
+
+
+def test_old_move_log_is_not_reinterpreted_as_native():
+    entry = {
+        "action": "move",
+        "window": {
+            "class": "zen",
+            "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600},
+        },
+        "relative": {"x": 0.5, "y": 0.25},
+    }
+    with pytest.raises(recipes.RecipeError, match="old movement semantics"):
+        recipes.step_from_log(entry)
+
+
+def test_warp_log_keeps_compositor_transport():
+    entry = {
+        "action": "warp",
+        "transport": "hyprland-compositor-v1",
+        "window": {
+            "class": "zen",
+            "logical_rect": {"x": 0, "y": 0, "w": 800, "h": 600},
+        },
+        "relative": {"x": 0.5, "y": 0.25},
+    }
+    step = recipes.step_from_log(entry)
+    assert step["action"] == "warp"
+    assert step["transport"] == "hyprland-compositor-v1"
+
+
 def test_an_aimed_scroll_keeps_its_target():
     entry = {
         "action": "scroll",

@@ -24,6 +24,8 @@ VERIFY_UNAVAILABLE = 28
 CAPTURE_BUDGET_EXCEEDED = 29
 DENIED_BY_POLICY = 30
 TARGET_AMBIGUOUS = 31
+MOTION_NOT_CONVERGED = 32
+MOTION_UNSAFE_ROUTE = 33
 ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
 DESKTOP_BUSY = 42
@@ -87,6 +89,14 @@ RESPONSE = {
         "The intended recipient cannot be established at the aimed point. "
         "Re-observe and arrange the target or choose an unambiguous point."
     ),
+    MOTION_NOT_CONVERGED: (
+        "Native pointer movement did not reach its endpoint within the bound. "
+        "Inspect the pointer and device state before trying again."
+    ),
+    MOTION_UNSAFE_ROUTE: (
+        "Native movement leaves the inspected safe region. "
+        "Capture a wider region or place the pointer inside it first."
+    ),
     DENIED_BY_POLICY: "Refused by the denylist or a locked session. Do not retry; tell the user.",
     ABORTED_BY_USER: (
         "The user aborted. Stop. Do not retry, and do not attempt to clear the abort."
@@ -132,6 +142,8 @@ RETRYABLE = frozenset(
         CONTENT_CHANGED,
         TARGET_NOT_FOUND,
         TARGET_AMBIGUOUS,
+        MOTION_NOT_CONVERGED,
+        MOTION_UNSAFE_ROUTE,
         TIMED_OUT,
         HUMAN_ACTIVE,
         DESKTOP_BUSY,

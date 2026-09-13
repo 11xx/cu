@@ -497,6 +497,106 @@ def test_an_output_frame_asserts_no_particular_window():
     safety.check_target({"id": "f1", "window": None}, window("0xanything"))
 
 
+def _native_move_fixture(monkeypatch):
+    current = [{
+        "address": "0x1", "class": "zen", "title": "fixture",
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "visible": True, "hidden": False, "focus_order": 0,
+    }]
+    frame = {
+        "id": "f1", "captured_at": __import__("time").time(),
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "image_size": {"w": 100, "h": 100},
+        "window": {"address": "0x1", "class": "zen", "title": "fixture",
+                   "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100}},
+    }
+    cursor = [{"x": 10.0, "y": 10.0}]
+    snapshot = {
+        "windows": current, "monitors": [], "focused": current[0],
+        "cursor_logical": cursor[0], "layer_surfaces": [],
+    }
+    monkeypatch.setattr(actions.frames, "load", lambda _frame_id: frame)
+    monkeypatch.setattr(observe, "snapshot", lambda: snapshot)
+    monkeypatch.setattr(observe, "focused", lambda: current[0])
+    monkeypatch.setattr(observe, "windows", lambda _monitors: current)
+    monkeypatch.setattr(observe, "cursor", lambda: cursor[0])
+    monkeypatch.setattr(observe, "layer_surfaces", lambda: [])
+    monkeypatch.setattr(checks, "_processes", lambda **_kwargs: [])
+    return frame, cursor
+
+
+def test_native_move_uses_relative_device_without_a_final_warp(monkeypatch):
+    _frame, cursor = _native_move_fixture(monkeypatch)
+    deltas = []
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def move_relative(self, dx, dy):
+            deltas.append((dx, dy))
+            cursor[0] = {"x": cursor[0]["x"] + dx, "y": cursor[0]["y"] + dy}
+
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    monkeypatch.setattr(
+        actions.hypr, "move_cursor", lambda *_args: pytest.fail("native move warped")
+    )
+    monkeypatch.setattr(actions.time, "sleep", lambda _seconds: None)
+
+    result = actions.move(CFG, "f1", (30, 30), duration=0.1, hz=10, timeout=1, dry_run=False)
+
+    assert result["transport"] == "uinput-relative-v1"
+    assert result["status"] == "converged"
+    assert result["cursor"] == {"x": 30.0, "y": 30.0}
+    assert deltas
+
+
+def test_native_move_refuses_a_start_outside_the_inspected_frame(monkeypatch):
+    frame, _cursor = _native_move_fixture(monkeypatch)
+    frame["logical_rect"] = {"x": 20, "y": 20, "w": 80, "h": 80}
+    created = []
+    monkeypatch.setattr(actions.uinput, "Device", lambda **_kwargs: created.append(True))
+    with pytest.raises(Refused) as caught:
+        actions.move(CFG, "f1", (30, 30), dry_run=False)
+    assert caught.value.code == exits.MOTION_UNSAFE_ROUTE
+    assert created == []
+
+
+def test_native_move_reports_non_convergence(monkeypatch):
+    _frame, _cursor = _native_move_fixture(monkeypatch)
+    clock = [0.0]
+    monkeypatch.setattr(actions.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        actions.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def move_relative(self, _dx, _dy):
+            pass
+
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    with pytest.raises(Refused) as caught:
+        actions.move(CFG, "f1", (30, 30), duration=0.1, hz=10, timeout=0.3, dry_run=False)
+    assert caught.value.code == exits.MOTION_NOT_CONVERGED
+
+
 def test_closing_a_device_writes_explicit_releases(monkeypatch):
     writes = []
     device = uinput.Device(settle_ms=0)
@@ -508,6 +608,20 @@ def test_closing_a_device_writes_explicit_releases(monkeypatch):
     device.close()
     assert len(writes) == 2  # key-up, then SYN_REPORT
     assert device._fd is None
+
+
+def test_relative_move_emits_native_axes_and_a_sync(monkeypatch):
+    writes = []
+    device = uinput.Device(settle_ms=0)
+    device._fd = 123
+    monkeypatch.setattr(uinput.os, "write", lambda fd, data: writes.append((fd, data)) or len(data))
+    device.move_relative(3, -2)
+    events = [uinput.struct.unpack("@llHHi", data)[2:] for _fd, data in writes]
+    assert events == [
+        (uinput.EV_REL, uinput.REL_X, 3),
+        (uinput.EV_REL, uinput.REL_Y, -2),
+        (uinput.EV_SYN, uinput.SYN_REPORT, 0),
+    ]
 
 
 def test_typing_restores_an_initially_empty_clipboard(monkeypatch):
@@ -574,6 +688,17 @@ def test_nonzero_scroll_reaches_the_action(argv, expected, monkeypatch):
     monkeypatch.setattr(actions, "scroll", scroll)
     assert cli.main(argv) == exits.OK
     assert called == [expected]
+
+
+def test_warp_and_move_have_distinct_cli_contracts():
+    parser = cli.build_parser()
+    warp = parser.parse_args(["warp", "--frame", "f1", "--at", "1,1"])
+    move = parser.parse_args(["move", "--frame", "f1", "--at", "1,1"])
+    assert warp.command == "warp"
+    assert not hasattr(warp, "duration")
+    assert move.command == "move"
+    assert move.duration == actions.DEFAULT_MOVE_DURATION
+    assert move.hz == actions.DEFAULT_MOVE_HZ
 
 
 def test_key_rechecks_focus_immediately_before_the_chord(monkeypatch):

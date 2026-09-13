@@ -955,11 +955,17 @@ def _render_action(result: dict[str, Any]) -> None:
     layer_surface = result.get("layer_surface")
     if result["action"] == "click" and window is None and layer_surface is not None:
         where += f"; layer '{layer_surface['namespace']}' covers this point"
-    if result["action"] in {"move", "click"}:
+    if result["action"] in {"move", "warp", "click"}:
         point = result["logical"]
         detail = f"at image {result['at']['x']:g},{result['at']['y']:g} "
         detail += f"→ logical {point['x']:.0f},{point['y']:.0f}"
-        if result["action"] == "click":
+        if result["action"] == "move":
+            detail = f"native {detail} over {result['duration_requested']:.3f}s"
+            detail += (
+                f"; {result['status']} at "
+                f"{result['cursor']['x']:.0f},{result['cursor']['y']:.0f}"
+            )
+        elif result["action"] == "click":
             detail = f"{result['button']}x{result['count']} {detail}"
     elif result["action"] == "scroll":
         detail = f"dy {result['dy']} dx {result['dx']}"
@@ -1104,10 +1110,15 @@ def _verdict(verified: bool | None) -> str:
 
 def _describe_step(step: dict[str, Any]) -> str:
     action = step["action"]
-    if action in {"click", "move"}:
+    if action in {"click", "warp", "move"}:
         rel = step["relative"]
         pressed = f"{step.get('button', 'left')} x{step.get('count', 1)}"
-        how = action if action == "move" else pressed
+        if action == "move":
+            how = f"native move {step.get('duration', '?')}s"
+        elif action == "warp":
+            how = "warp"
+        else:
+            how = pressed
         return f"{how} at {rel['x']:.3f},{rel['y']:.3f} of {step['window_class']}"
     if action == "scroll":
         return f"scroll dy {step.get('dy',0)} dx {step.get('dx',0)}"
@@ -1525,7 +1536,22 @@ def cmd_focus(args: argparse.Namespace) -> int:
 
 def cmd_move(args: argparse.Namespace) -> int:
     cfg = config.load()
-    result = actions.move(cfg, args.frame, _parse_at(args.at), dry_run=args.dry_run)
+    result = actions.move(
+        cfg,
+        args.frame,
+        _parse_at(args.at),
+        duration=args.duration,
+        hz=args.hz,
+        timeout=args.timeout,
+        dry_run=args.dry_run,
+    )
+    _emit(result, args.json, _render_action)
+    return exits.OK
+
+
+def cmd_warp(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    result = actions.warp_to(cfg, args.frame, _parse_at(args.at), dry_run=args.dry_run)
     _emit(result, args.json, _render_action)
     return exits.OK
 
@@ -1692,7 +1718,7 @@ def cmd_session(args: argparse.Namespace) -> int:
 
 MAX_BATCH_STEPS = 32
 MAX_BATCH_BYTES = 65536
-BATCH_COMMANDS = frozenset({"focus", "move", "click", "scroll", "type", "key", "browser"})
+BATCH_COMMANDS = frozenset({"focus", "warp", "move", "click", "scroll", "type", "key", "browser"})
 
 
 def cmd_batch(args: argparse.Namespace) -> int:
@@ -2093,8 +2119,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="'active', a window address, or a class substring",
     )
 
-    move = add_injecting("move", "Warp the pointer to a frame coordinate", cmd_move)
+    move = add_injecting("move", "Move the pointer natively to a frame coordinate", cmd_move)
     add_aim(move, required=True)
+    move.add_argument(
+        "--duration", type=float, default=actions.DEFAULT_MOVE_DURATION,
+        help="Seconds for the bounded native segment (default: 0.25)",
+    )
+    move.add_argument(
+        "--hz", type=float, default=actions.DEFAULT_MOVE_HZ,
+        help="Native motion samples per second (default: 60)",
+    )
+    move.add_argument(
+        "--timeout", type=float, default=actions.DEFAULT_MOVE_TIMEOUT,
+        help="Maximum seconds for movement and convergence (default: 2)",
+    )
+
+    warp = add_injecting(
+        "warp", "Place the compositor pointer at a frame coordinate", cmd_warp
+    )
+    add_aim(warp, required=True)
 
     click = add_injecting("click", "Warp, assert focus, press and release", cmd_click)
     add_aim(click, required=True)
