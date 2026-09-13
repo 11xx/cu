@@ -97,3 +97,23 @@ def test_modes_emit_same_fixture_contract_and_unknown_external_costs(tmp_path):
     assert {envelope["fixture"]["seed"] for envelope in envelopes} == {9}
     assert all(envelope["verification"]["ok"] for envelope in envelopes)
     assert all(envelope["cost"]["monetary_billing"] is None for envelope in envelopes)
+
+
+def test_trial_retains_failed_retry_and_round_shape(tmp_path):
+    envelope = run_trial(tmp_path, mode="batch", shape="cold-resume")
+    assert envelope["outcome"] == "completed"
+    assert envelope["fixture"]["shape"] == "cold-resume"
+    assert [attempt["status"] for attempt in envelope["attempts"]] == [
+        "failed",
+        "completed",
+    ]
+    assert envelope["attempts"][1]["is_retry"] is True
+    assert envelope["attempts"][1]["retry_of"] == envelope["attempts"][0]["attempt_id"]
+    assert envelope["attempts"][0]["attempt_id"] != envelope["attempts"][1]["attempt_id"]
+
+
+def test_interrupted_trial_is_not_a_completed_task(tmp_path):
+    envelope = run_trial(tmp_path, interrupted=True)
+    assert envelope["outcome"] == "aborted"
+    assert envelope["attempts"][0]["status"] == "aborted"
+    assert envelope["recovery"]["attempted"] is False

@@ -22,6 +22,7 @@ FIXTURE_VERSION = "cu-task-fixture/1"
 PRESERVED_RELATIVE = Path("pre-existing") / "README.md"
 PRESERVED_CONTENT = "pre-existing fixture data; keep this file unchanged\n"
 FORMATS = ("md", "txt", "js", "json", "c")
+ROUND_SHAPES = ("full-start", "prepared-page", "warm-follow-up", "cold-resume")
 NAMES = (
     "README.md",
     "README.md",
@@ -207,52 +208,173 @@ def run_trial(
     mode: str = "individual",
     seed: int = 1,
     warm: bool = False,
+    shape: str | None = None,
     delay_seconds: float = 0.0,
     fail_ids: set[str] | None = None,
     recover: bool = True,
     unexpected_dialog: bool = True,
+    interrupted: bool = False,
 ) -> dict[str, Any]:
-    """Run one local fixture trial and return a bounded benchmark envelope."""
+    """Run one local fixture trial and return a bounded benchmark envelope.
+
+    The fixture models an initial attempt and, when recovery is enabled, a
+    separate retry attempt.  The first failure remains in ``attempts``; it is
+    never rewritten into the later successful result.
+    """
     if mode not in {"individual", "batch", "combined"}:
         raise ValueError("mode must be individual, batch, or combined")
+    if shape is None:
+        shape = "warm-follow-up" if warm else "full-start"
+    if shape not in ROUND_SHAPES:
+        raise ValueError(f"shape must be one of {', '.join(ROUND_SHAPES)}")
+    if warm and shape != "warm-follow-up":
+        raise ValueError("warm=True requires the warm-follow-up round shape")
     if delay_seconds < 0 or delay_seconds > 10:
         raise ValueError("delay_seconds must be between 0 and 10")
     items = expected_items(seed)
     by_id = {item["id"]: item for item in items}
-    fail_ids = set(fail_ids or {"item-03"})
+    fail_ids = set(fail_ids) if fail_ids is not None else {"item-03"}
     unknown = fail_ids - by_id.keys()
     if unknown:
         raise ValueError(f"unknown failure ids: {', '.join(sorted(unknown))}")
     started = time.perf_counter()
+    trial_id = uuid.uuid4().hex
+    task_version = f"{FIXTURE_VERSION}:{seed}"
+    context_id = f"{trial_id}:context"
     receipts: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     recovery: list[str] = []
+    attempts: list[dict[str, Any]] = []
     output = root / "artifacts"
     output.mkdir(parents=True, exist_ok=True)
     preservation = _preservation_receipt(root, items)
     application_started = time.perf_counter()
+    initial_started = time.perf_counter()
     batches = [[item] for item in items] if mode == "individual" else [items]
+    processed = 0
+    interrupted_at: str | None = None
     for batch in batches:
         for item in batch:
+            if interrupted and processed >= max(1, len(items) // 2):
+                interrupted_at = item["id"]
+                break
             if item["id"] in fail_ids:
                 failures.append(
                     {"id": item["id"], "stage": "bulk" if mode != "individual" else "item"}
                 )
-                receipts.append({"id": item["id"], "status": "failed"})
+                receipts.append(
+                    {
+                        "id": item["id"],
+                        "status": "failed",
+                        "attempt_id": f"{trial_id}:attempt-1",
+                    }
+                )
+                processed += 1
                 continue
             if delay_seconds and item["id"] == "item-07":
                 time.sleep(delay_seconds)
             _write_item(output, item)
-            receipts.append({"id": item["id"], "status": "completed"})
-    if recover:
+            receipts.append(
+                {
+                    "id": item["id"],
+                    "status": "completed",
+                    "attempt_id": f"{trial_id}:attempt-1",
+                }
+            )
+            processed += 1
+        if interrupted_at is not None:
+            break
+    initial_application_seconds = time.perf_counter() - application_started
+    initial_verification = verify(output, items)
+    initial_status = "aborted" if interrupted_at is not None else (
+        "failed" if failures else "completed"
+    )
+    initial_outcome = "aborted" if interrupted_at is not None else (
+        "completed" if initial_verification["ok"] else "incomplete"
+    )
+    attempts.append(
+        {
+            "job_id": trial_id,
+            "round_id": f"{trial_id}:round-1",
+            "attempt_id": f"{trial_id}:attempt-1",
+            "task_version": task_version,
+            "context_id": context_id,
+            "shape": shape,
+            "status": initial_status,
+            "is_retry": False,
+            "retry_of": None,
+            "paid_assistance": False,
+            "operator_intent_satisfied": initial_outcome == "completed",
+            "explicit_brief_executed": True,
+            "fixture_outcome": initial_outcome,
+            "action_count": sum(receipt["status"] == "completed" for receipt in receipts),
+            "verification": initial_verification,
+            "interrupted_at": interrupted_at,
+            "timing": {
+                "end_to_end_wall_seconds": time.perf_counter() - initial_started,
+                "active_worker_seconds": initial_application_seconds,
+                "application_seconds": initial_application_seconds,
+                "setup_seconds": None,
+                "lead_gap_seconds": None,
+                "cu_seconds": None,
+                "transport_seconds": None,
+                "model_seconds": None,
+            },
+        }
+    )
+    if recover and failures and interrupted_at is None:
+        retry_started = time.perf_counter()
+        retry_application_started = time.perf_counter()
         for failure in failures:
             item = by_id[failure["id"]]
             _write_item(output, item)
             recovery.append(item["id"])
-            receipts.append({"id": item["id"], "status": "recovered"})
+            receipts.append(
+                {
+                    "id": item["id"],
+                    "status": "recovered",
+                    "attempt_id": f"{trial_id}:attempt-2",
+                    "retry_of": f"{trial_id}:attempt-1",
+                }
+            )
+        retry_application_seconds = time.perf_counter() - retry_application_started
+        retry_verification = verify(output, items)
+        attempts.append(
+            {
+                "job_id": trial_id,
+                "round_id": f"{trial_id}:round-2",
+                "attempt_id": f"{trial_id}:attempt-2",
+                "task_version": task_version,
+                "context_id": context_id,
+                "shape": shape,
+                "status": "completed" if retry_verification["ok"] else "failed",
+                "is_retry": True,
+                "retry_of": f"{trial_id}:attempt-1",
+                "paid_assistance": False,
+                "operator_intent_satisfied": retry_verification["ok"],
+                "explicit_brief_executed": True,
+                "fixture_outcome": "completed" if retry_verification["ok"] else "incomplete",
+                "action_count": len(recovery),
+                "verification": retry_verification,
+                "interrupted_at": None,
+                "timing": {
+                    "end_to_end_wall_seconds": time.perf_counter() - retry_started,
+                    "active_worker_seconds": retry_application_seconds,
+                    "application_seconds": retry_application_seconds,
+                    "setup_seconds": None,
+                    "lead_gap_seconds": None,
+                    "cu_seconds": None,
+                    "transport_seconds": None,
+                    "model_seconds": None,
+                },
+            }
+        )
     application_seconds = time.perf_counter() - application_started
     verification = verify(output, items)
     preservation = _finish_preservation(preservation)
+    if attempts[-1]["status"] == "completed" and not preservation["ok"]:
+        attempts[-1]["fixture_outcome"] = "incomplete"
+        attempts[-1]["operator_intent_satisfied"] = False
     envelope = {
         "schema": "cu-task-benchmark/1",
         "fixture": {
@@ -265,19 +387,28 @@ def run_trial(
                 if count > 1
             ),
             "warm": warm,
+            "shape": shape,
         },
-        "trial": {"id": uuid.uuid4().hex, "mode": mode},
+        "trial": {"id": trial_id, "mode": mode},
         "controller": {
             "runtime": os.environ.get("CU_CONTROLLER", "unknown"),
             "model": os.environ.get("CU_MODEL"),
             "effort": os.environ.get("CU_EFFORT"),
         },
-        "outcome": "completed" if verification["ok"] and preservation["ok"] else "incomplete",
+        "outcome": (
+            "aborted"
+            if interrupted_at is not None
+            else "completed" if verification["ok"] and preservation["ok"] else "incomplete"
+        ),
         "verification": verification,
         "preservation": {"policy": "outside-artifacts-root", "receipts": [preservation]},
         "receipts": receipts,
         "failures": failures,
-        "recovery": {"attempted": recover, "ids": recovery},
+        "recovery": {
+            "attempted": recover and interrupted_at is None,
+            "ids": recovery,
+        },
+        "attempts": attempts,
         "unexpected_dialog": (
             {"status": "observed", "kind": "simulated-native-dialog"}
             if unexpected_dialog
@@ -305,22 +436,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", choices=("individual", "batch", "combined"), default="individual")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--warm", action="store_true")
+    parser.add_argument("--shape", choices=ROUND_SHAPES)
     parser.add_argument("--delay", type=float, default=0.0)
     parser.add_argument("--fail", action="append", default=[])
     parser.add_argument("--no-recovery", action="store_true")
     parser.add_argument("--no-dialog", action="store_true")
+    parser.add_argument("--interrupted", action="store_true")
     args = parser.parse_args(argv)
-    fixture_root = Path(tempfile.mkdtemp(prefix="cu-task-", dir=os.environ.get("XDG_RUNTIME_DIR")))
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    fixture_root = Path(
+        tempfile.mkdtemp(
+            prefix="cu-task-",
+            dir=runtime_dir if runtime_dir and os.access(runtime_dir, os.W_OK) else None,
+        )
+    )
     try:
         envelope = run_trial(
             fixture_root,
             mode=args.mode,
             seed=args.seed,
             warm=args.warm,
+            shape=args.shape,
             delay_seconds=args.delay,
             fail_ids=set(args.fail) or None,
             recover=not args.no_recovery,
             unexpected_dialog=not args.no_dialog,
+            interrupted=args.interrupted,
         )
         print(json.dumps(envelope, indent=2))
     finally:
