@@ -35,6 +35,7 @@ from . import (
     knowledge,
     metrics,
     observe,
+    playground,
     png,
     recipes,
     safety,
@@ -126,7 +127,7 @@ MAX_HOVER_WAIT = 10.0
 
 # These commands do not make the desktop look agent-driven. Their parsers also
 # refuse the activity-only options whose values would otherwise be ignored.
-NON_PUBLISHING_COMMANDS = frozenset({"status", "session", "abort", "export"})
+NON_PUBLISHING_COMMANDS = frozenset({"status", "session", "abort", "export", "playground"})
 
 
 def _num(value: float) -> str:
@@ -1960,6 +1961,11 @@ def cmd_abort(args: argparse.Namespace) -> int:
     return exits.OK
 
 
+def cmd_playground(args: argparse.Namespace) -> int:
+    playground.serve(args.port, as_json=args.json)
+    return exits.OK
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     """Export validated frame evidence without touching the desktop."""
     frame = frames.load(args.frame)
@@ -2202,6 +2208,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Agent session; mutations refuse (default: ${status.SESSION_ENV})",
     )
 
+    lab = add(
+        "playground", "Serve a disposable browser playground without an extension", cmd_playground
+    )
+    lab.add_argument("--port", type=int, default=0,
+                     help="Loopback port; 0 selects a free port (default)")
     add("doctor", "Verify every environment precondition", cmd_doctor)
     add("profiles", "What a capture costs each configured consumer", cmd_profiles)
     add("observe", "Monitors, windows, focus, cursor", cmd_observe)
