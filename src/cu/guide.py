@@ -58,6 +58,9 @@ CAPTURE ONLY WHAT YOU NEED TO READ
 
   A region is desktop-absolute by itself. With --output, its x,y are relative
   to that output; the returned logical_rect is always desktop-absolute.
+  `cu observe` also reports each window's intersections with active outputs,
+  edge excess beyond their outer bounds, and bounded interior gaps. A desktop
+  bounding rectangle includes monitor gaps, so a point in one is not reachable.
 
   A capture prints a frame id and a path. Read the PNG at that path, along
   with what the image will cost whoever reads it. --if-changed prints the id it
@@ -180,6 +183,7 @@ EXIT CODES ARE THE CONTRACT
   31  Intended recipient is ambiguous   Re-observe and arrange the target or choose another point
   32  Native movement did not converge  Inspect the pointer/device before trying again
   33  Native route leaves safe frame    Capture wider or place the pointer inside first
+  34  Point is outside active outputs   Choose a reachable point or change the layout explicitly
   40  The user aborted                  Stop. Do not retry. Do not clear it.
   41  The user is moving the mouse      Yield; wait before retrying
   42  Another agent is driving          Wait for it to finish, then retry

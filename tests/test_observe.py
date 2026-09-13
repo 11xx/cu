@@ -190,6 +190,44 @@ def test_desktop_bounds_with_no_outputs():
     assert observe.desktop_bounds([])["w"] == 0
 
 
+def test_reachability_reports_intersections_and_full_coverage():
+    result = observe.reachability(
+        {"x": 10, "y": 20, "w": 30, "h": 40},
+        [{"name": "OUT", "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100}}],
+    )
+    assert result["status"] == "fully-reachable"
+    assert result["reachable_area"] == 1200
+    assert result["intersections"][0]["output"] == "OUT"
+    assert result["gaps"] == []
+
+
+def test_reachability_separates_edge_excess_from_an_interior_gap():
+    outputs = [
+        {"name": "LEFT", "logical_rect": {"x": -20.5, "y": 0, "w": 20.5, "h": 100}},
+        {"name": "RIGHT", "logical_rect": {"x": 10, "y": 0, "w": 20, "h": 100}},
+    ]
+    result = observe.reachability({"x": -30, "y": 0, "w": 70, "h": 100}, outputs)
+    assert result["status"] == "partially-reachable"
+    assert result["edge_excess"]["left"] == pytest.approx(9.5)
+    assert result["gap_count"] == 1
+    assert result["gaps"][0] == {"x": 0.0, "y": 0, "w": 10.0, "h": 100}
+
+
+def test_reachability_ignores_disabled_outputs_and_bounds_gap_details():
+    outputs = [
+        {"name": "OFF", "disabled": True, "logical_rect": {"x": 0, "y": 0, "w": 10, "h": 10}},
+        {"name": "ON-A", "logical_rect": {"x": 10, "y": 20, "w": 5, "h": 10}},
+        {"name": "ON-B", "logical_rect": {"x": 20, "y": 20, "w": 5, "h": 10}},
+    ]
+    result = observe.reachability(
+        {"x": 0, "y": 0, "w": 30, "h": 30}, outputs, max_gaps=0
+    )
+    assert [item["output"] for item in result["intersections"]] == ["ON-A", "ON-B"]
+    assert result["gap_count"] > 0
+    assert result["gaps"] == []
+    assert result["truncated"] is True
+
+
 def test_every_exit_code_documents_a_response():
     codes = {
         v for k, v in vars(exits).items() if k.isupper() and isinstance(v, int)

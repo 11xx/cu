@@ -232,6 +232,13 @@ def cmd_observe(args: argparse.Namespace) -> int:
                 f"{focus}{w['class']:<18} {fmt_rect(w['logical_rect']):<22} "
                 f"ws {w['workspace']:<4} {xw:<9} {w['title'][:44]}"
             )
+            reachability = w.get("reachability")
+            if reachability and reachability["status"] != "fully-reachable":
+                print(
+                    f"    reachability {reachability['status']} "
+                    f"unreachable area {reachability['unreachable_area']:g}; "
+                    f"gaps {reachability['gap_count']}"
+                )
         for surface in s["layer_surfaces"]:
             print(
                 f"  layer {surface['namespace']:<18} "

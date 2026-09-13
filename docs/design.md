@@ -340,6 +340,13 @@ Capture never focuses or switches workspaces. Pixel waits recheck geometry
 and visibility around every probe without treating old reference age or an
 expected content change as a reason to suppress the wait.
 
+Observation also computes deterministic reachability for each window against
+the union of active output rectangles. It reports per-output intersections,
+outer edge excess, and bounded interior gaps without inferring stacking,
+parenthood, or transient ownership. Aimed input refuses a point outside that
+union with `UNREACHABLE_AIM` (34), while a point in a reachable portion remains
+usable even if another portion of the window is clipped.
+
 An output or region capture may carry `--target-window SELECTOR`. The selector
 resolves to one exact observed address at capture time and is stored as
 `target_window`, separately from the source pixels, output geometry, and the

@@ -77,6 +77,16 @@ def aim(frame: dict[str, Any], x: float, y: float, snap: dict[str, Any]) -> dict
     whatever happens to be at that point.
     """
     lx, ly = frames.to_logical(frame, x, y)
+    if snap["monitors"] and not any(
+        not monitor.get("disabled", False)
+        and observe.contains(monitor["logical_rect"], lx, ly)
+        for monitor in snap["monitors"]
+    ):
+        raise Refused(
+            exits.UNREACHABLE_AIM,
+            f"frame {frame['id']} maps ({x:g},{y:g}) to ({lx:g},{ly:g}) outside "
+            "the union of active outputs",
+        )
     declared = frame.get("window")
     covering = observe.windows_at(lx, ly, snap["windows"])
     under = min(covering, key=lambda window: window["focus_order"], default=None)
@@ -230,6 +240,15 @@ def _motion_point_guard(
         raise Refused(
             exits.MOTION_UNSAFE_ROUTE,
             "native movement would leave the inspected frame; capture a wider safe region",
+        )
+    if monitors and not any(
+        not monitor.get("disabled", False)
+        and observe.contains(monitor["logical_rect"], point["x"], point["y"])
+        for monitor in monitors
+    ):
+        raise Refused(
+            exits.UNREACHABLE_AIM,
+            "native movement would leave the union of active outputs",
         )
     covering = observe.windows_at(point["x"], point["y"], windows)
     under = min(covering, key=lambda window: window["focus_order"], default=None)
@@ -1131,6 +1150,15 @@ def _live_pointer_target(
     if frame is not None and frame.get("target_window") is not None:
         layer_surface = observe.layer_surface_at(
             cursor["x"], cursor["y"], observe.layer_surfaces()
+        )
+    if monitors and not any(
+        not monitor.get("disabled", False)
+        and observe.contains(monitor["logical_rect"], cursor["x"], cursor["y"])
+        for monitor in monitors
+    ):
+        raise Refused(
+            exits.UNREACHABLE_AIM,
+            "pointer is outside the union of active outputs",
         )
     safety.preflight_pointer(
         cfg,

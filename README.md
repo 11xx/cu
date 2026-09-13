@@ -108,6 +108,11 @@ Input refuses with exit 31 when a covering layer or ambiguous overlap prevents
 establishing that recipient. Unbound frames and their action receipts state that
 no recipient assertion exists.
 
+`cu observe` reports each window's intersections with active output rectangles,
+edge excess, and bounded interior gaps. A point in a monitor gap is outside the
+active output union and aimed input refuses with exit 34 before moving the
+pointer or creating a device.
+
 `shot` writes a PNG plus a **frame descriptor** recording the logical rectangle
 the image depicts, its pixel size, and what it costs the consumer it was
 captured for. Later commands take coordinates as
