@@ -36,7 +36,7 @@ image block together, without resizing the image. Image blocks contain
 `type: "image"`, `mimeType: "image/png"`, and base64 `data`. Translate only this
 outer representation when a harness uses another image-block schema.
 
-The text block is JSON with schema `cu-observation/1`:
+The text block is JSON with schema `cu-observation/2`:
 
 - `ok` means the requested sequence completed and its final observation is
   available. It is not permission, submission confirmation, or proof of a
@@ -55,6 +55,9 @@ The text block is JSON with schema `cu-observation/1`:
   must not transform them.
 - `error`, when present, identifies `request`, `actions`, `capture`, or `image`.
   Adapter/transport errors do not invent a CU exit code.
+- Correlation fields from CU (`invocation_id`, optional `cu_session`, harness
+  fields, and batch parent/step fields) are opaque join keys. They contain no
+  page content, typed values, URLs, or window titles.
 
 A refusal stops the sequence. No capture follows a failed batch, no previous
 frame is reused, and a capture/image failure does not erase completed actions.

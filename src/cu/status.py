@@ -52,7 +52,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from . import config, exits
+from . import config, context, exits
 from .config import ConfigError
 from .desktop import state_dir
 from .safety import Refused
@@ -116,7 +116,8 @@ def current_session() -> str | None:
     one agent's action under the other's intent — which is worse than an
     unbracketed entry, because it reads as true.
     """
-    return os.environ.get(SESSION_ENV) or None
+    active = context.session()
+    return active if active is not None else os.environ.get(SESSION_ENV) or None
 
 
 def alive(pid: int) -> bool:
