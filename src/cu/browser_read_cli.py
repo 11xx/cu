@@ -7,6 +7,7 @@ import base64
 import binascii
 import fcntl
 import json
+import math
 import os
 import secrets
 import shlex
@@ -76,7 +77,10 @@ def configure(parser: argparse.ArgumentParser) -> None:
     action.set_defaults(injects=True)
     action.add_argument("action", choices=sorted(transport.ACTION_OPERATIONS - {"capture"}))
     action.add_argument("--ref", help="Stable ref from a prior observation")
-    action.add_argument("--value", help="Replacement value for fill")
+    action.add_argument(
+        "--value", help="Replacement value for fill or exact option value for select"
+    )
+    action.add_argument("--label", help="Visible option label for select")
     action.add_argument("--target", choices=("document", "element"), default="element")
     action.add_argument("--dx", type=int, default=0)
     action.add_argument("--dy", type=int, default=0)
@@ -109,6 +113,10 @@ def configure(parser: argparse.ArgumentParser) -> None:
     )
     capture.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     _common(capture)
+    capture.add_argument(
+        "--region",
+        help="CSS viewport rectangle as 'x,y wxh' or 'x,y,w,h'; never a desktop coordinate",
+    )
     for child in commands.choices.values():
         _context(child)
 
@@ -189,12 +197,27 @@ def _check_response(result: dict[str, Any]) -> dict[str, Any]:
         else exits.BROWSER_ACTION_UNCERTAIN
         if reason == "action-uncertain"
         else exits.BROWSER_READ_BUDGET
-        if reason == "observation-too-large"
+        if reason in {"capture-budget", "observation-too-large"}
+        else exits.BROWSER_READ_PROTOCOL
+        if reason in {"capture-format", "capture-scale-mismatch", "capture-identity-mismatch"}
         else exits.BROWSER_READ_TIMEOUT
         if reason in {"wait-timeout", "cancelled"}
         else exits.BROWSER_READ_REFUSED
     )
     raise Refused(code, f"browser request refused: {reason}")
+
+
+def _parse_region(text: str) -> dict[str, float | str]:
+    cleaned = text.replace("x", " ").replace(",", " ")
+    parts = cleaned.split()
+    if len(parts) != 4:
+        raise ValueError(f"browser region must be 'x,y wxh' or 'x,y,w,h', got {text!r}")
+    x, y, width, height = (float(part) for part in parts)
+    if not all(math.isfinite(value) for value in (x, y, width, height)):
+        raise ValueError("browser region coordinates and dimensions must be finite")
+    if width <= 0 or height <= 0:
+        raise ValueError("browser region width and height must be positive")
+    return {"x": x, "y": y, "width": width, "height": height, "space": "css-viewport"}
 
 
 def _read(args: argparse.Namespace) -> dict[str, Any]:
@@ -233,6 +256,15 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
         if not args.ref:
             raise ValueError(f"{args.action} requires --ref")
         payload = {"ref": args.ref}
+    elif args.action == "select":
+        if not args.ref:
+            raise ValueError("select requires --ref")
+        if (args.value is None) == (args.label is None):
+            raise ValueError("select requires exactly one of --value or --label")
+        payload = {"ref": args.ref}
+        payload["value" if args.value is not None else "label"] = (
+            args.value if args.value is not None else args.label
+        )
     elif args.action == "fill":
         if args.ref is None or args.value is None:
             raise ValueError("fill requires --ref and --value")
@@ -341,6 +373,7 @@ def _capture(args: argparse.Namespace) -> dict[str, Any]:
             "browser captures require --document and --generation from a prior observation",
         )
     safety.check_abort()
+    region = _parse_region(args.region) if args.region else None
     with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
         grant = _grant(args, client)
         if "interact" not in grant.get("capabilities", ["read"]):
@@ -348,11 +381,37 @@ def _capture(args: argparse.Namespace) -> dict[str, Any]:
                 exits.BROWSER_READ_REFUSED,
                 "the current browser grant is read-only; choose page interaction in CU Browser",
             )
+        if args.generation != grant["generation"]:
+            raise Refused(exits.BROWSER_DOCUMENT_STALE, "the granted generation changed")
         result = client.capture(
-            **_identity(grant), generation=args.generation, timeout=args.timeout
+            **_identity(grant),
+            generation=args.generation,
+            region=region,
+            timeout=args.timeout,
         )
     _check_response(result)
-    body = result["result"]
+    request = transport.make_request(
+        "capture",
+        session=grant["session"],
+        tab_id=grant["tab_id"],
+        document_id=grant["document_id"],
+        generation=args.generation,
+        payload={} if region is None else {"region": region},
+    )
+    try:
+        result = transport.normalize_capture_response(result, request)
+    except transport.CaptureTransformError as exc:
+        code = (
+            exits.BROWSER_DOCUMENT_STALE
+            if exc.code in {"stale-document", "stale-generation"}
+            else exits.BROWSER_READ_BUDGET
+            if exc.code == "capture-budget"
+            else exits.BROWSER_READ_REFUSED
+            if exc.code == "unsupported-geometry"
+            else exits.BROWSER_READ_PROTOCOL
+        )
+        raise Refused(code, f"browser request refused: {exc.code}") from exc
+    body = dict(result["result"])
     try:
         data = base64.b64decode(body.pop("png_base64"), validate=True)
     except (KeyError, binascii.Error, ValueError) as exc:
@@ -374,6 +433,8 @@ def _capture(args: argparse.Namespace) -> dict[str, Any]:
         raise Refused(exits.BROWSER_READ_PROTOCOL, "invalid browser PNG") from exc
     if body.get("pixels") != {"width": width, "height": height, "space": "image-pixels"}:
         raise Refused(exits.BROWSER_READ_PROTOCOL, "browser PNG dimensions do not match metadata")
+    if body.get("actionable", False) is not False or body.get("input_authority", "none") != "none":
+        raise Refused(exits.BROWSER_READ_PROTOCOL, "browser capture carries native-input authority")
     path = _save_capture(data)
     return {
         "browser_capture": True,

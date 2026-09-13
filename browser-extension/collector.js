@@ -12,7 +12,7 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 2;
+  const VERSION = 4;
   const CAPABILITIES = new Set(["read", "interact"]);
   const PROTOCOL_OPERATIONS = new Set([
     "observe",
@@ -22,10 +22,11 @@
     "fill",
     "scroll",
     "hover",
+    "select",
     "wait",
   ]);
   const READ_OPERATIONS = new Set(["observe", "query"]);
-  const ACTION_OPERATIONS = new Set(["click", "focus", "fill", "scroll", "hover"]);
+  const ACTION_OPERATIONS = new Set(["click", "focus", "fill", "scroll", "hover", "select"]);
   const MAX_TEXT_CHARS = 32768;
   const MAX_ELEMENT_TEXT_CHARS = 512;
   const MAX_VALUE_CHARS = 1024;
@@ -57,6 +58,7 @@
     "include_details",
   ]);
   const CAPTURE_FIELDS = new Set();
+  const CAPTURE_REGION_FIELDS = new Set(["x", "y", "width", "height", "space"]);
   const sensitivePattern =
     /(?:pass(?:word)?|secret|token|api[\s_-]*key|access[\s_-]*key|auth|otp|one[\s_-]*time|credit[\s_-]*card|card[\s_-]*(?:number|security)|security[\s_-]*code|verification[\s_-]*code|\bpin\b|cvv|cvc)/i;
   const sensitiveAutocomplete = new Set([
@@ -143,6 +145,53 @@
     return boundedString(value, "ref", MAX_REF_CHARS);
   }
 
+  function boundedNumber(value, name) {
+    if (typeof value !== "number" || !Number.isFinite(value))
+      throw new ValidationError(`${name} must be a finite number`);
+    return value;
+  }
+
+  function captureRegion(value) {
+    exactKeys(value, CAPTURE_REGION_FIELDS, CAPTURE_REGION_FIELDS);
+    const region = {
+      x: boundedNumber(value.x, "capture region x"),
+      y: boundedNumber(value.y, "capture region y"),
+      width: boundedNumber(value.width, "capture region width"),
+      height: boundedNumber(value.height, "capture region height"),
+      space: boundedString(value.space, "capture region space", 32),
+    };
+    if (region.width <= 0 || region.height <= 0)
+      throw new ValidationError("capture region width and height must be positive");
+    if (region.space !== "css-viewport")
+      throw new ValidationError("capture region space must be css-viewport");
+    return region;
+  }
+
+  function viewportGeometry(viewport) {
+    if (!isRecord(viewport)) throw new ValidationError("capture viewport is unavailable");
+    const width = boundedNumber(viewport.width, "capture viewport width");
+    const height = boundedNumber(viewport.height, "capture viewport height");
+    if (width <= 0 || height <= 0 || viewport.space !== "css-viewport")
+      throw new ValidationError("capture viewport geometry is unsupported");
+    return { width, height };
+  }
+
+  function validateRegionWithinViewport(region, viewport) {
+    if (!region) return;
+    const { width, height } = viewportGeometry(viewport);
+    const epsilon = 1e-9 * Math.max(1, width, height);
+    if (
+      region.x < -epsilon ||
+      region.y < -epsilon ||
+      region.x + region.width > width + epsilon ||
+      region.y + region.height > height + epsilon
+    ) {
+      const error = new ValidationError("capture region is outside the CSS viewport");
+      error.code = "unsupported-geometry";
+      throw error;
+    }
+  }
+
   function validatePayload(operation, payload) {
     const value = payload === undefined || payload === null ? {} : payload;
     if (!isRecord(value)) throw new ValidationError("payload must be an object");
@@ -154,6 +203,20 @@
     if (operation === "click" || operation === "focus" || operation === "hover") {
       exactKeys(value, new Set(["ref"]), new Set(["ref"]));
       return { ref: refValue(value.ref) };
+    }
+    if (operation === "select") {
+      exactKeys(value, new Set(["ref"]), new Set(["ref", "value", "label"]));
+      const hasValue = Object.prototype.hasOwnProperty.call(value, "value");
+      const hasLabel = Object.prototype.hasOwnProperty.call(value, "label");
+      if (hasValue === hasLabel)
+        throw new ValidationError("select requires exactly one of value or label");
+      const optionField = hasValue ? "value" : "label";
+      return {
+        ref: refValue(value.ref),
+        [optionField]: boundedString(value[optionField], optionField, MAX_ACTION_VALUE_CHARS, {
+          empty: true,
+        }),
+      };
     }
     if (operation === "fill") {
       exactKeys(value, new Set(["ref", "value"]), new Set(["ref", "value"]));
@@ -1099,9 +1162,118 @@
         throw new ValidationError("control is read-only or disabled");
       return element;
     }
+    function optionElements(select) {
+      if (select.options && typeof select.options.length === "number")
+        return Array.from(select.options);
+      const options = [];
+      function visit(parent) {
+        for (const child of parent.children || []) {
+          const tag = tagName(child);
+          if (tag === "option") options.push(child);
+          else if (tag === "optgroup") visit(child);
+        }
+      }
+      visit(select);
+      return options;
+    }
+    function optionValue(option) {
+      if (typeof option.value === "string") return option.value;
+      const attributeValue = attribute(option, "value");
+      if (attributeValue !== null) return attributeValue;
+      return String(option.textContent || "");
+    }
+    function optionLabel(option) {
+      const attributeLabel = attribute(option, "label");
+      const raw = attributeLabel !== null ? attributeLabel : String(option.textContent || "");
+      return raw.replace(/\s+/g, " ").trim();
+    }
+    function optionVisible(option) {
+      if (option.hidden || attribute(option, "aria-hidden") === "true") return false;
+      const style = doc.defaultView?.getComputedStyle?.(option);
+      return (
+        !style ||
+        (!["none"].includes(style.display) && !["hidden", "collapse"].includes(style.visibility))
+      );
+    }
+    function optionDisabled(option, select) {
+      let current = option;
+      while (current && current !== select) {
+        if (current.disabled || attribute(current, "disabled") !== null) return true;
+        current = current.parentElement;
+      }
+      return false;
+    }
+    function optionDetails(select) {
+      return optionElements(select).map((option) => ({
+        option,
+        value: optionValue(option),
+        label: optionLabel(option),
+        visible: optionVisible(option),
+        disabled: optionDisabled(option, select),
+      }));
+    }
+    function selectedOption(select, options) {
+      return options.find((item) => item.option.selected === true) || null;
+    }
+    function selectOption(request, element, description) {
+      if (tagName(element) !== "select")
+        return refusal(request, "unsupported-action", "select requires a select control");
+      if (element.multiple)
+        return refusal(request, "unsupported-action", "multiple selections are unsupported");
+      if (currentField(element)?.state === "redacted")
+        return refusal(request, "sensitive-target", "sensitive controls cannot be acted on");
+      const options = optionDetails(element);
+      const by = Object.prototype.hasOwnProperty.call(request.payload, "value") ? "value" : "label";
+      const requested = request.payload[by];
+      const requestedLabel = by === "label" ? optionLabel({ textContent: requested }) : null;
+      if (by === "label" && !requestedLabel)
+        return refusal(request, "missing-option", "the requested visible label is empty");
+      const matches = options.filter((item) =>
+        by === "value" ? item.value === requested : item.visible && item.label === requestedLabel,
+      );
+      if (!matches.length)
+        return refusal(request, "missing-option", `no option matches the requested ${by}`);
+      if (matches.length > 1)
+        return refusal(request, "ambiguous-option", `the requested ${by} matches multiple options`);
+      const match = matches[0];
+      if (!match.visible)
+        return refusal(request, "unsupported-action", "the requested option is not visible");
+      if (match.disabled)
+        return refusal(request, "disabled-option", "the requested option is disabled");
+      for (const item of options) item.option.selected = item.option === match.option;
+      dispatchEvent(element, "input");
+      dispatchEvent(element, "change");
+      const observed = selectedOption(element, options);
+      drainMutations();
+      bumpGeneration();
+      positionOverlay(element);
+      if (!observed)
+        return refusal(
+          request,
+          "action-uncertain",
+          "the resulting selection could not be observed",
+        );
+      return responseFor(request, true, {
+        kind: "action",
+        action: "select",
+        ref: request.payload.ref,
+        backend: "dom",
+        effect: "option-selection-and-events",
+        verification: observed.option === match.option ? "verified" : "unverified",
+        generation,
+        document_id: documentId,
+        requested_option: by === "value" ? { by, value: requested } : { by, label: requested },
+        selection: { value: observed.value, label: observed.label },
+        target: description,
+        note: "DOM selection and synthetic input/change events; not trusted browser input",
+      });
+    }
     function action(request) {
       if (!request.capabilities.includes("interact"))
         return refusal(request, "interaction-not-granted", "the current grant is read-only");
+      const preResolved = request.operation === "select" ? resolveRef(request.payload.ref) : null;
+      if (request.operation === "select" && !preResolved)
+        return refusal(request, "stale-element", "the element ref is stale or disconnected");
       if (request.generation !== null && request.generation !== generation)
         return refusal(request, "stale-generation", "the observation generation did not match");
       if (request.operation === "scroll" && request.payload.target === "document") {
@@ -1124,7 +1296,7 @@
           document_id: documentId,
         });
       }
-      const element = resolveRef(request.payload.ref);
+      const element = preResolved || resolveRef(request.payload.ref);
       if (!element)
         return refusal(request, "stale-element", "the element ref is stale or disconnected");
       if (
@@ -1134,11 +1306,21 @@
         bumpGeneration();
         return refusal(request, "stale-generation", "the field changed since observation");
       }
-      const description = actionable(element, request.operation);
+      let description;
+      try {
+        description = actionable(element, request.operation);
+      } catch (error) {
+        if (request.operation !== "select") throw error;
+        const code =
+          error.message === "element is disabled" ? "disabled-target" : "target-not-visible";
+        return refusal(request, code, error.message);
+      }
       if (
         ["input", "textarea"].includes(tagName(element)) &&
         ["redacted", "unsupported"].includes(currentField(element)?.state)
       )
+        return refusal(request, "sensitive-target", "sensitive controls cannot be acted on");
+      if (request.operation === "select" && currentField(element)?.state === "redacted")
         return refusal(request, "sensitive-target", "sensitive controls cannot be acted on");
       if (request.operation !== "scroll" && typeof doc.elementFromPoint === "function") {
         const rect = element.getBoundingClientRect();
@@ -1154,6 +1336,7 @@
         if (hit !== element && !element.contains(hit))
           return refusal(request, "target-covered", "the target is covered by another element");
       }
+      if (request.operation === "select") return selectOption(request, element, description);
       let verification = "unverified";
       let effect = "event-dispatch";
       if (request.operation === "click") {
@@ -1380,7 +1563,7 @@
         exactKeys(
           message,
           new Set(["type", "session", "document_id", "generation"]),
-          new Set(["type", "session", "document_id", "generation"]),
+          new Set(["type", "session", "document_id", "generation", "region"]),
         );
         if (!session || message.session !== session.id)
           return {
@@ -1391,6 +1574,21 @@
               message: "collector session did not match",
             },
           };
+        let region = null;
+        try {
+          region = Object.prototype.hasOwnProperty.call(message, "region")
+            ? captureRegion(message.region)
+            : null;
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: error.code || "invalid-message",
+              state: "unsupported",
+              message: error.message,
+            },
+          };
+        }
         const preparing = message.type === "capture-prep";
         if (!preparing) setOverlayHidden(false);
         drainMutations();
@@ -1404,6 +1602,35 @@
         if (!session.capabilities.includes("interact"))
           return { ok: false, error: { code: "interaction-not-granted" } };
         const view = doc.defaultView;
+        let viewport;
+        try {
+          viewport = {
+            width: view.innerWidth,
+            height: view.innerHeight,
+            scroll_x: view.scrollX,
+            scroll_y: view.scrollY,
+            device_pixel_ratio: view.devicePixelRatio,
+            space: "css-viewport",
+          };
+          viewportGeometry(viewport);
+          validateRegionWithinViewport(region, viewport);
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: error.code || "unsupported-geometry",
+              state: "unsupported",
+              message: error.message,
+            },
+          };
+        }
+        const requested = region || {
+          x: 0,
+          y: 0,
+          width: viewport.width,
+          height: viewport.height,
+          space: "css-viewport",
+        };
         const result = {
           protocol: PROTOCOL,
           version: VERSION,
@@ -1411,14 +1638,8 @@
           ok: true,
           document_id: documentId,
           generation,
-          viewport: {
-            width: view.innerWidth,
-            height: view.innerHeight,
-            scroll_x: view.scrollX,
-            scroll_y: view.scrollY,
-            device_pixel_ratio: view.devicePixelRatio,
-            space: "css-viewport",
-          },
+          viewport,
+          requested_coverage: requested,
         };
         if (!preparing) return result;
         setOverlayHidden(true);
@@ -1460,7 +1681,11 @@
         return refusal(request, "stale-document", "the document identity did not match");
       if (request.capabilities.includes("interact") && !session.capabilities.includes("interact"))
         return refusal(request, "interaction-not-granted", "the current grant is read-only");
-      if (request.generation !== null && request.generation !== generation)
+      if (
+        request.operation !== "select" &&
+        request.generation !== null &&
+        request.generation !== generation
+      )
         return refusal(request, "stale-generation", "the observation generation did not match");
       if (request.operation === "wait") return waitFor(request);
       try {

@@ -90,6 +90,121 @@ test("textarea fill and focus verify their immediate DOM effects", (t) => {
   assert.equal(document.querySelector("textarea").value, "  exact\nvalue  ");
 });
 
+test("ordinary selects match one option by value or visible label and report synthetic delivery", (t) => {
+  const { document, act } = fixture(
+    t,
+    '<select id="choice"><option value="one">One</option><option value="two">Two</option></select>',
+  );
+  const select = document.querySelector("select");
+  const events = [];
+  select.addEventListener("input", (event) => events.push([event.type, event.isTrusted]));
+  select.addEventListener("change", (event) => events.push([event.type, event.isTrusted]));
+
+  const byValue = act("#choice", "select", { value: "two" });
+  assert.equal(byValue.ok, true);
+  assert.deepEqual(byValue.result.requested_option, { by: "value", value: "two" });
+  assert.deepEqual(byValue.result.selection, { value: "two", label: "Two" });
+  assert.equal(byValue.result.verification, "verified");
+  assert.match(byValue.result.note, /not trusted browser input/);
+  assert.deepEqual(events, [
+    ["input", false],
+    ["change", false],
+  ]);
+
+  events.length = 0;
+  const byLabel = act("#choice", "select", { label: "One" });
+  assert.equal(byLabel.ok, true);
+  assert.deepEqual(byLabel.result.requested_option, { by: "label", label: "One" });
+  assert.deepEqual(byLabel.result.selection, { value: "one", label: "One" });
+});
+
+test("duplicate option labels and values refuse before selection events", (t) => {
+  const { document, act } = fixture(
+    t,
+    `
+      <select id="labels"><option value="one">Same</option><option value="two">Same</option></select>
+      <select id="values"><option value="same">One</option><option value="same">Two</option></select>
+    `,
+  );
+  const labelSelect = document.querySelector("#labels");
+  const valueSelect = document.querySelector("#values");
+  let events = 0;
+  labelSelect.addEventListener("change", () => events++);
+  valueSelect.addEventListener("change", () => events++);
+  assert.equal(act("#labels", "select", { label: "Same" }).error.code, "ambiguous-option");
+  assert.equal(act("#values", "select", { value: "same" }).error.code, "ambiguous-option");
+  assert.equal(act("#labels", "select", { value: "missing" }).error.code, "missing-option");
+  assert.equal(labelSelect.value, "one");
+  assert.equal(valueSelect.value, "same");
+  assert.equal(events, 0);
+});
+
+test("disabled controls and options refuse before selection events", (t) => {
+  const { document, act } = fixture(
+    t,
+    `
+      <select id="control" disabled><option value="one">One</option></select>
+      <select id="option"><option value="one">One</option><option value="two" disabled>Two</option></select>
+    `,
+  );
+  const control = document.querySelector("#control");
+  const option = document.querySelector("#option");
+  let events = 0;
+  control.addEventListener("change", () => events++);
+  option.addEventListener("change", () => events++);
+  assert.equal(act("#control", "select", { value: "one" }).error.code, "disabled-target");
+  assert.equal(act("#option", "select", { value: "two" }).error.code, "disabled-option");
+  assert.equal(control.value, "one");
+  assert.equal(option.value, "one");
+  assert.equal(events, 0);
+});
+
+test("sensitive selects refuse before selection events", (t) => {
+  const { document, act } = fixture(
+    t,
+    '<select id="secret" name="security-code"><option value="one">One</option><option value="two">Two</option></select>',
+  );
+  const select = document.querySelector("select");
+  let events = 0;
+  select.addEventListener("change", () => events++);
+  assert.equal(act("#secret", "select", { value: "two" }).error.code, "sensitive-target");
+  assert.equal(select.value, "one");
+  assert.equal(events, 0);
+});
+
+test("select actions refuse stale generations and detached refs", (t) => {
+  const { document, read, send } = fixture(
+    t,
+    '<select id="choice"><option value="one">One</option><option value="two">Two</option></select>',
+  );
+  const before = read("#choice").result;
+  const ref = before.elements.items[0].ref;
+  document.querySelector("select").value = "two";
+  const stale = send("select", { ref, value: "one" }, before.generation);
+  assert.equal(stale.error.code, "stale-generation");
+  assert.equal(document.querySelector("select").value, "two");
+
+  const current = read("#choice").result;
+  document.querySelector("select").remove();
+  const detached = send(
+    "select",
+    { ref: current.elements.items[0].ref, value: "one" },
+    current.generation,
+  );
+  assert.equal(detached.error.code, "stale-element");
+});
+
+test("read-only grants refuse select actions", (t) => {
+  const { act, document } = fixture(
+    t,
+    '<select id="choice"><option value="one">One</option><option value="two">Two</option></select>',
+    { interact: false },
+  );
+  const result = act("#choice", "select", { value: "two" });
+  assert.equal(result.error.code, "interaction-not-granted");
+  assert.equal(document.querySelector("select").value, "one");
+});
+
 test("sensitive labels and autocomplete tokens refuse fills without changing controls", (t) => {
   const { document, act } = fixture(
     t,

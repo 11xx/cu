@@ -98,6 +98,24 @@ function fakeApi() {
             generation: 0,
           };
         if (message.type === "read-request") {
+          const result =
+            message.request.operation === "select"
+              ? {
+                  kind: "action",
+                  action: "select",
+                  ref: message.request.payload.ref,
+                  backend: "dom",
+                  verification: "verified",
+                  generation: 1,
+                  document_id: "document-1",
+                  requested_option: { by: "value", value: "two" },
+                  selection: { value: "two", label: "Two" },
+                }
+              : {
+                  kind: "observation",
+                  generation: 0,
+                  document_id: "document-1",
+                };
           return {
             protocol: PROTOCOL,
             version: VERSION,
@@ -107,11 +125,7 @@ function fakeApi() {
             tab_id: tabId,
             document_id: "document-1",
             ok: true,
-            result: {
-              kind: "observation",
-              generation: 0,
-              document_id: "document-1",
-            },
+            result,
           };
         }
         return {
@@ -156,10 +170,20 @@ test("installation starts with no grant and only the current tab can be granted"
 test("native requests reject arbitrary tabs and action-like operations", async () => {
   const { api, port } = fakeApi();
   const controller = createController(api);
-  await controller.startCurrent();
+  const started = await controller.startCurrent();
   await port.emit({ ...request("click", { id: "bad-operation" }) });
   assert.equal(port.messages.at(-1).ok, false);
   assert.equal(port.messages.at(-1).error.code, "invalid-request");
+  await port.emit(
+    request("select", {
+      id: "read-only-select",
+      session: started.grant.session,
+      generation: 0,
+      payload: { ref: "e1", value: "two" },
+    }),
+  );
+  assert.equal(port.messages.at(-1).ok, false);
+  assert.equal(port.messages.at(-1).error.code, "interaction-not-granted");
 
   await port.emit({ ...request("observe", { id: "wrong-tab", tab_id: 99 }) });
   assert.equal(port.messages.at(-1).error.code, "tab-not-granted");
@@ -201,6 +225,33 @@ test("background reads report current tab activity, not activation-time metadata
     port,
   );
   assert.equal(port.messages.at(-1).result.context.tab_active, false);
+});
+
+test("background forwards select results with explicit grant provenance", async () => {
+  const { api, port } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  await controller.handleNativeMessage(
+    request("select", {
+      session: started.grant.session,
+      generation: 0,
+      payload: { ref: "e1", value: "two" },
+    }),
+    port,
+  );
+  const response = port.messages.at(-1);
+  assert.equal(response.ok, true);
+  assert.deepEqual(response.result.selection, { value: "two", label: "Two" });
+  assert.deepEqual(response.result.grant_provenance, {
+    state: "explicit",
+    authority: "interaction-grant",
+    capabilities: ["read", "interact"],
+    session: started.grant.session,
+    tab_id: 7,
+    window_id: 3,
+    document_id: "document-1",
+    generation: 1,
+  });
 });
 
 class Element {
@@ -644,6 +695,7 @@ test("capture brackets collector identity and rejects an unprepared document", a
       assert.equal(message.generation, 0);
       return {
         ok: true,
+        document_id: "document-1",
         generation: 0,
         viewport: { width: 800, height: 600, space: "css-viewport" },
       };
@@ -674,6 +726,103 @@ test("capture brackets collector identity and rejects an unprepared document", a
   await controller.handleNativeMessage(capture, port);
   assert.equal(port.messages.at(-1).ok, false);
   assert.equal(captures, 2);
+});
+
+test("region capture validates CSS geometry, image scale, identity, and budget", async () => {
+  const { api, port } = fakeApi();
+  const original = api.tabs.sendMessage;
+  const pattern =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8DwHwyBNBAw/AcAR8oI+ItOQ4UAAAAASUVORK5CYII=";
+  let mode = "valid";
+  api.tabs.captureVisibleTab = async () => pattern;
+  api.tabs.sendMessage = async (tab, message) => {
+    if (!message.type.startsWith("capture-")) return original(tab, message);
+    if (mode === "identity") return { ok: true, document_id: "other-document", generation: 0 };
+    if (mode === "geometry") return { ok: false, error: { code: "unsupported-geometry" } };
+    return {
+      ok: true,
+      document_id: "document-1",
+      generation: 0,
+      viewport:
+        mode === "scale"
+          ? { width: 4, height: 2, space: "css-viewport" }
+          : { width: 2, height: 2, space: "css-viewport" },
+    };
+  };
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  const region = { x: 1, y: 0, width: 1, height: 1, space: "css-viewport" };
+  await controller.handleNativeMessage(
+    request("capture", {
+      id: "region-valid",
+      session: started.grant.session,
+      generation: 0,
+      payload: { region },
+    }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).ok, true);
+  assert.deepEqual(port.messages.at(-1).result.requested_coverage, region);
+  assert.deepEqual(port.messages.at(-1).result.requested_image_pixels, {
+    x: 1,
+    y: 0,
+    width: 1,
+    height: 1,
+  });
+  assert.deepEqual(port.messages.at(-1).result.capture_scale, {
+    x: 1,
+    y: 1,
+    space: "css-viewport-to-image-pixels",
+  });
+
+  mode = "scale";
+  await controller.handleNativeMessage(
+    request("capture", {
+      id: "region-scale",
+      session: started.grant.session,
+      generation: 0,
+      payload: { region },
+    }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).error.code, "capture-scale-mismatch");
+
+  mode = "identity";
+  await controller.handleNativeMessage(
+    request("capture", {
+      id: "region-identity",
+      session: started.grant.session,
+      generation: 0,
+      payload: { region },
+    }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).error.code, "stale-document");
+
+  mode = "geometry";
+  await controller.handleNativeMessage(
+    request("capture", {
+      id: "region-geometry",
+      session: started.grant.session,
+      generation: 0,
+      payload: { region },
+    }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).error.code, "unsupported-geometry");
+
+  mode = "valid";
+  api.tabs.captureVisibleTab = async () => `data:image/png;base64,${"A".repeat(700000)}`;
+  await controller.handleNativeMessage(
+    request("capture", {
+      id: "region-budget",
+      session: started.grant.session,
+      generation: 0,
+      payload: { region },
+    }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).error.code, "observation-too-large");
 });
 
 test("late collector cleanup cannot disconnect a subsequent grant", async () => {

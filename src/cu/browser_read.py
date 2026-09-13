@@ -6,6 +6,8 @@ per-document capabilities; responses have no persistent page archive.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import errno
 import json
 import math
@@ -27,8 +29,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Self
 
+from . import png
+
 PROTOCOL = "cu-browser-read"
-VERSION = 2
+VERSION = 4
 MAX_MESSAGE_BYTES = 1 << 20
 MAX_RECV_CHUNK_BYTES = 64 << 10
 MAX_PENDING_REQUESTS = 64
@@ -58,10 +62,13 @@ SOCKET_PREFIX = "helper-"
 SOCKET_SUFFIX = ".sock"
 
 READ_OPERATIONS = frozenset({"observe", "query", "wait"})
-ACTION_OPERATIONS = frozenset({"click", "focus", "fill", "scroll", "hover", "capture"})
+ACTION_OPERATIONS = frozenset(
+    {"click", "focus", "fill", "scroll", "hover", "select", "capture"}
+)
 OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
 CAPABILITIES = frozenset({"read", "interact"})
 _OBSERVE_FIELDS = frozenset({"include_values", "limit", "selector", "include_details"})
+_CAPTURE_FIELDS = frozenset({"region"})
 _QUERY_FIELDS = frozenset(
     {
         "search",
@@ -108,6 +115,17 @@ class MismatchedResponse(ProtocolError):
 
 class HelperUnavailable(BrowserReadError):
     """The helper connection could not be used."""
+
+
+class CaptureTransformError(ProtocolError):
+    """A browser-region response cannot be safely transformed or published."""
+
+    def __init__(self, code: str, message: str | None = None) -> None:
+        if message is None:
+            message = code
+            code = "capture-transform"
+        super().__init__(message)
+        self.code = code
 
 
 def protocol_limits() -> dict[str, int | float]:
@@ -286,6 +304,12 @@ def _bounded_bool(value: Any, name: str) -> bool:
     return value
 
 
+def _bounded_number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ProtocolError(f"{name} must be a finite number")
+    return float(value)
+
+
 def _object(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ProtocolError(f"{name} must be an object")
@@ -342,16 +366,51 @@ def _ref(value: Any) -> str:
     return _bounded_string(value, "ref", 64)
 
 
+def _capture_region(value: Any) -> dict[str, Any]:
+    region = _object(value, "capture region")
+    fields = {"x", "y", "width", "height", "space"}
+    _exact_fields(region, fields, fields)
+    result = {
+        "x": _bounded_number(region["x"], "capture region x"),
+        "y": _bounded_number(region["y"], "capture region y"),
+        "width": _bounded_number(region["width"], "capture region width"),
+        "height": _bounded_number(region["height"], "capture region height"),
+        "space": _bounded_string(region["space"], "capture region space", 32),
+    }
+    if result["width"] <= 0 or result["height"] <= 0:
+        raise ProtocolError("capture region width and height must be positive")
+    if result["space"] != "css-viewport":
+        raise ProtocolError("capture region space must be css-viewport")
+    return result
+
+
 def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
     if not isinstance(operation, str) or operation not in OPERATIONS:
         raise ProtocolError("operation is not a supported passive read or browser action")
     payload_object = _object({} if payload is None else payload, "payload")
     if operation == "capture":
-        _exact_fields(payload_object, set(), set())
-        return {}
+        _exact_fields(payload_object, set(), set(_CAPTURE_FIELDS))
+        return (
+            {"region": _capture_region(payload_object["region"])}
+            if "region" in payload_object
+            else {}
+        )
     if operation in {"click", "focus", "hover"}:
         _exact_fields(payload_object, {"ref"}, {"ref"})
         return {"ref": _ref(payload_object["ref"])}
+    if operation == "select":
+        _exact_fields(payload_object, {"ref"}, {"ref", "value", "label"})
+        has_value = "value" in payload_object
+        has_label = "label" in payload_object
+        if has_value == has_label:
+            raise ProtocolError("select requires exactly one of value or label")
+        option_field = "value" if has_value else "label"
+        return {
+            "ref": _ref(payload_object["ref"]),
+            option_field: _bounded_string(
+                payload_object[option_field], option_field, MAX_ACTION_VALUE_CHARS, empty=True
+            ),
+        }
     if operation == "fill":
         _exact_fields(payload_object, {"ref", "value"}, {"ref", "value"})
         return {
@@ -452,6 +511,196 @@ def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
         "include_details": include_details,
         "selector": selector,
     }
+
+
+def _capture_viewport(viewport: Any) -> tuple[float, float]:
+    try:
+        value = _object(viewport, "capture viewport")
+        width = _bounded_number(value.get("width"), "capture viewport width")
+        height = _bounded_number(value.get("height"), "capture viewport height")
+    except ProtocolError as exc:
+        raise CaptureTransformError(
+            "capture-scale-mismatch", "capture viewport geometry is unsupported"
+        ) from exc
+    if width <= 0 or height <= 0 or value.get("space") != "css-viewport":
+        raise CaptureTransformError(
+            "capture-scale-mismatch", "capture viewport geometry is unsupported"
+        )
+    device_pixel_ratio = value.get("device_pixel_ratio")
+    if device_pixel_ratio is not None:
+        try:
+            ratio = _bounded_number(device_pixel_ratio, "capture device pixel ratio")
+        except ProtocolError as exc:
+            raise CaptureTransformError(
+                "capture-scale-mismatch", "capture device pixel ratio is unsupported"
+            ) from exc
+        if ratio <= 0:
+            raise CaptureTransformError(
+                "capture-scale-mismatch", "capture device pixel ratio is unsupported"
+            )
+    return width, height
+
+
+def _capture_scale(viewport: Any, width: int, height: int) -> tuple[float, float]:
+    viewport_width, viewport_height = _capture_viewport(viewport)
+    scale_x = width / viewport_width
+    scale_y = height / viewport_height
+    tolerance = 1e-6 * max(1.0, abs(scale_x), abs(scale_y))
+    if (
+        not math.isfinite(scale_x)
+        or not math.isfinite(scale_y)
+        or scale_x <= 0
+        or scale_y <= 0
+        or abs(scale_x - scale_y) > tolerance
+    ):
+        raise CaptureTransformError(
+            "capture-scale-mismatch", "capture image and CSS viewport scales do not match"
+        )
+    return scale_x, scale_y
+
+
+def _capture_pixel_box(
+    region: Mapping[str, Any],
+    viewport: Any,
+    width: int,
+    height: int,
+    scale_x: float,
+    scale_y: float,
+) -> dict[str, int]:
+    viewport_width, viewport_height = _capture_viewport(viewport)
+    right_css = region["x"] + region["width"]
+    bottom_css = region["y"] + region["height"]
+    epsilon = 1e-9 * max(1.0, viewport_width, viewport_height)
+    if (
+        region["x"] < -epsilon
+        or region["y"] < -epsilon
+        or right_css > viewport_width + epsilon
+        or bottom_css > viewport_height + epsilon
+    ):
+        raise CaptureTransformError(
+            "unsupported-geometry", "capture region is outside the CSS viewport"
+        )
+    left = max(0, math.floor(region["x"] * scale_x + 1e-9))
+    top = max(0, math.floor(region["y"] * scale_y + 1e-9))
+    right = min(width, math.ceil(right_css * scale_x - 1e-9))
+    bottom = min(height, math.ceil(bottom_css * scale_y - 1e-9))
+    if left >= right or top >= bottom:
+        raise CaptureTransformError(
+            "unsupported-geometry", "capture region does not cover an image pixel"
+        )
+    pixels = (right - left) * (bottom - top)
+    if pixels > MAX_CAPTURE_PIXELS:
+        raise CaptureTransformError(
+            "capture-budget", "cropped browser capture exceeds the pixel budget"
+        )
+    return {"x": left, "y": top, "width": right - left, "height": bottom - top}
+
+
+def _capture_returned_coverage(
+    box: Mapping[str, int], scale_x: float, scale_y: float
+) -> dict[str, float | str]:
+    return {
+        "x": box["x"] / scale_x,
+        "y": box["y"] / scale_y,
+        "width": box["width"] / scale_x,
+        "height": box["height"] / scale_y,
+        "space": "css-viewport",
+    }
+
+
+def normalize_capture_response(
+    response: Mapping[str, Any], request: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Crop one validated browser PNG while retaining its source identity."""
+    if request.get("operation") != "capture" or not response.get("ok"):
+        return dict(response)
+    payload = _object(request.get("payload"), "capture request payload")
+    if "region" not in payload:
+        return dict(response)
+    region = _capture_region(payload["region"])
+    body = _object(response.get("result"), "capture result")
+    if body.get("document_id") != request.get("document_id"):
+        raise CaptureTransformError("stale-document", "browser capture document identity changed")
+    if body.get("tab_id") != request.get("tab_id"):
+        raise CaptureTransformError(
+            "capture-identity-mismatch", "browser capture tab identity changed"
+        )
+    if body.get("generation") != request.get("generation"):
+        raise CaptureTransformError(
+            "stale-generation", "browser capture generation changed before cropping"
+        )
+    existing_coverage = body.get("coverage")
+    if isinstance(existing_coverage, Mapping):
+        if existing_coverage.get("requested") == region and "source_pixels" in body:
+            return {**response, "result": body}
+        raise CaptureTransformError(
+            "capture-identity-mismatch", "browser capture coverage did not match its request"
+        )
+    encoded = body.get("png_base64")
+    if not isinstance(encoded, str):
+        raise CaptureTransformError("capture-format", "browser capture did not contain PNG bytes")
+    try:
+        data = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError, TypeError) as exc:
+        raise CaptureTransformError("capture-format", "browser capture PNG is invalid") from exc
+    if len(data) > MAX_CAPTURE_BYTES:
+        raise CaptureTransformError("capture-budget", "browser capture exceeds the byte budget")
+    try:
+        source_width, source_height, rgba = png.decode(data)
+    except ValueError as exc:
+        raise CaptureTransformError("capture-format", "browser capture PNG is invalid") from exc
+    if source_width * source_height > MAX_CAPTURE_PIXELS:
+        raise CaptureTransformError("capture-budget", "browser capture exceeds the pixel budget")
+    source_pixels = {
+        "width": source_width,
+        "height": source_height,
+        "space": "image-pixels",
+    }
+    if body.get("pixels") != source_pixels:
+        raise CaptureTransformError(
+            "capture-format", "browser capture dimensions do not match metadata"
+        )
+    scale_x, scale_y = _capture_scale(body.get("viewport"), source_width, source_height)
+    box = _capture_pixel_box(
+        region,
+        body["viewport"],
+        source_width,
+        source_height,
+        scale_x,
+        scale_y,
+    )
+    row_bytes = source_width * 4
+    left = box["x"] * 4
+    right = (box["x"] + box["width"]) * 4
+    cropped_rgba = b"".join(
+        rgba[row * row_bytes + left : row * row_bytes + right]
+        for row in range(box["y"], box["y"] + box["height"])
+    )
+    cropped = png.encode(box["width"], box["height"], cropped_rgba)
+    if len(cropped) > MAX_CAPTURE_BYTES:
+        raise CaptureTransformError(
+            "capture-budget", "cropped browser capture exceeds the byte budget"
+        )
+    returned = _capture_returned_coverage(box, scale_x, scale_y)
+    transformed = {
+        **body,
+        "png_base64": base64.b64encode(cropped).decode("ascii"),
+        "bytes": len(cropped),
+        "source_bytes": len(data),
+        "source_pixels": source_pixels,
+        "pixels": {"width": box["width"], "height": box["height"], "space": "image-pixels"},
+        "capture_scale": {
+            "x": scale_x,
+            "y": scale_y,
+            "space": "css-viewport-to-image-pixels",
+        },
+        "coverage": {
+            "requested": region,
+            "returned": returned,
+            "image_pixels": {**box, "space": "image-pixels"},
+        },
+    }
+    return {**response, "result": transformed}
 
 
 def validate_request(message: Mapping[str, Any]) -> dict[str, Any]:
@@ -1045,6 +1294,7 @@ class BrowserReadClient:
         tab_id: int,
         document_id: str,
         generation: int,
+        region: Mapping[str, Any] | None = None,
         timeout: float | None = None,
     ) -> dict[str, Any]:
         return self.request(
@@ -1053,7 +1303,7 @@ class BrowserReadClient:
             tab_id=tab_id,
             document_id=document_id,
             generation=generation,
-            payload={},
+            payload={} if region is None else {"region": dict(region)},
             timeout=timeout,
         )
 
@@ -1308,6 +1558,11 @@ class NativeMessagingHost:
         for field in ("session", "tab_id", "document_id"):
             if field in value and value[field] != request[field]:
                 raise MismatchedResponse(f"native response {field} did not match the request")
+        if request["operation"] == "capture" and "region" in request["payload"] and value["ok"]:
+            try:
+                value = normalize_capture_response(value, request)
+            except CaptureTransformError as exc:
+                value = _error_response(request_id, exc.code, str(exc))
         try:
             self._write_local(peer, value)
         except OSError:

@@ -10,10 +10,18 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 2;
+  const VERSION = 4;
   const CAPABILITIES = new Set(["read", "interact"]);
   const READ_OPERATIONS = new Set(["observe", "query", "wait"]);
-  const ACTION_OPERATIONS = new Set(["click", "focus", "fill", "scroll", "hover", "capture"]);
+  const ACTION_OPERATIONS = new Set([
+    "click",
+    "focus",
+    "fill",
+    "scroll",
+    "hover",
+    "select",
+    "capture",
+  ]);
   const OPERATIONS = new Set([...READ_OPERATIONS, ...ACTION_OPERATIONS]);
   const MAX_MESSAGE_BYTES = 1024 * 1024;
   const MAX_QUERY_CHARS = 256;
@@ -28,6 +36,7 @@
   const MAX_GRANTS = 16;
   const MAX_CAPTURE_BYTES = 512 * 1024;
   const MAX_CAPTURE_PIXELS = 16 * 1024 * 1024;
+  const CAPTURE_REGION_FIELDS = new Set(["x", "y", "width", "height", "space"]);
   const OBSERVE_FIELDS = new Set(["include_values", "limit", "selector", "include_details"]);
   const QUERY_FIELDS = new Set([
     "search",
@@ -92,6 +101,11 @@
     if (typeof value !== "boolean") throw new ValidationError(`${name} must be a boolean`);
     return value;
   }
+  function boundedNumber(value, name) {
+    if (typeof value !== "number" || !Number.isFinite(value))
+      throw new ValidationError(`${name} must be a finite number`);
+    return value;
+  }
   function validateCapabilities(value, defaultValue = ["read"]) {
     if (value === undefined) return [...defaultValue];
     if (
@@ -114,17 +128,46 @@
   function validateRef(value) {
     return boundedString(value, "ref", 64);
   }
+  function validateCaptureRegion(value) {
+    exactKeys(value, CAPTURE_REGION_FIELDS, CAPTURE_REGION_FIELDS);
+    const region = {
+      x: boundedNumber(value.x, "capture region x"),
+      y: boundedNumber(value.y, "capture region y"),
+      width: boundedNumber(value.width, "capture region width"),
+      height: boundedNumber(value.height, "capture region height"),
+      space: boundedString(value.space, "capture region space", 32),
+    };
+    if (region.width <= 0 || region.height <= 0)
+      throw new ValidationError("capture region width and height must be positive");
+    if (region.space !== "css-viewport")
+      throw new ValidationError("capture region space must be css-viewport");
+    return region;
+  }
 
   function validatePayload(operation, payload) {
     const value = payload === undefined || payload === null ? {} : payload;
     if (!isRecord(value)) throw new ValidationError("payload must be an object");
     if (operation === "capture") {
-      exactKeys(value, new Set(), new Set());
-      return {};
+      exactKeys(value, new Set(), new Set(["region"]));
+      return Object.prototype.hasOwnProperty.call(value, "region")
+        ? { region: validateCaptureRegion(value.region) }
+        : {};
     }
     if (operation === "click" || operation === "focus" || operation === "hover") {
       exactKeys(value, new Set(["ref"]), new Set(["ref"]));
       return { ref: validateRef(value.ref) };
+    }
+    if (operation === "select") {
+      exactKeys(value, new Set(["ref"]), new Set(["ref", "value", "label"]));
+      const hasValue = Object.prototype.hasOwnProperty.call(value, "value");
+      const hasLabel = Object.prototype.hasOwnProperty.call(value, "label");
+      if (hasValue === hasLabel)
+        throw new ValidationError("select requires exactly one of value or label");
+      const optionField = hasValue ? "value" : "label";
+      return {
+        ref: validateRef(value.ref),
+        [optionField]: boundedString(value[optionField], optionField, 1024, { empty: true }),
+      };
     }
     if (operation === "fill") {
       exactKeys(value, new Set(["ref", "value"]), new Set(["ref", "value"]));
@@ -464,6 +507,110 @@
     return { encoded, bytes: bytes.length, width, height };
   }
 
+  function viewportGeometry(viewport) {
+    if (!isRecord(viewport))
+      throw Object.assign(new ValidationError("capture viewport geometry is unsupported"), {
+        code: "capture-scale-mismatch",
+      });
+    let width;
+    let height;
+    try {
+      width = boundedNumber(viewport.width, "capture viewport width");
+      height = boundedNumber(viewport.height, "capture viewport height");
+    } catch (error) {
+      throw Object.assign(new ValidationError("capture viewport geometry is unsupported"), {
+        code: "capture-scale-mismatch",
+        cause: error,
+      });
+    }
+    if (width <= 0 || height <= 0 || viewport.space !== "css-viewport")
+      throw Object.assign(new ValidationError("capture viewport geometry is unsupported"), {
+        code: "capture-scale-mismatch",
+      });
+    if (viewport.device_pixel_ratio !== undefined) {
+      let ratio;
+      try {
+        ratio = boundedNumber(viewport.device_pixel_ratio, "capture device pixel ratio");
+      } catch (error) {
+        throw Object.assign(new ValidationError("capture device pixel ratio is unsupported"), {
+          code: "capture-scale-mismatch",
+          cause: error,
+        });
+      }
+      if (ratio <= 0)
+        throw Object.assign(new ValidationError("capture device pixel ratio is unsupported"), {
+          code: "capture-scale-mismatch",
+        });
+    }
+    return { width, height };
+  }
+
+  function validateRegionWithinViewport(region, viewport) {
+    if (!region) return;
+    const { width, height } = viewportGeometry(viewport);
+    const epsilon = 1e-9 * Math.max(1, width, height);
+    if (
+      region.x < -epsilon ||
+      region.y < -epsilon ||
+      region.x + region.width > width + epsilon ||
+      region.y + region.height > height + epsilon
+    )
+      throw Object.assign(new ValidationError("capture region is outside the CSS viewport"), {
+        code: "unsupported-geometry",
+      });
+  }
+
+  function imageViewportScale(image, viewport) {
+    const { width, height } = viewportGeometry(viewport);
+    const x = image.width / width;
+    const y = image.height / height;
+    const tolerance = 1e-6 * Math.max(1, Math.abs(x), Math.abs(y));
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      x <= 0 ||
+      y <= 0 ||
+      Math.abs(x - y) > tolerance
+    )
+      throw Object.assign(
+        new ValidationError("capture image and CSS viewport scales do not match"),
+        {
+          code: "capture-scale-mismatch",
+        },
+      );
+    return { x, y };
+  }
+
+  function captureCoverage(region, viewport, image, scale) {
+    const { width, height } = viewportGeometry(viewport);
+    const requested = region || { x: 0, y: 0, width, height, space: "css-viewport" };
+    validateRegionWithinViewport(requested, viewport);
+    const left = Math.max(0, Math.floor(requested.x * scale.x + 1e-9));
+    const top = Math.max(0, Math.floor(requested.y * scale.y + 1e-9));
+    const right = Math.min(
+      image.width,
+      Math.ceil((requested.x + requested.width) * scale.x - 1e-9),
+    );
+    const bottom = Math.min(
+      image.height,
+      Math.ceil((requested.y + requested.height) * scale.y - 1e-9),
+    );
+    if (left >= right || top >= bottom)
+      throw Object.assign(new ValidationError("capture region does not cover an image pixel"), {
+        code: "unsupported-geometry",
+      });
+    const pixels = (right - left) * (bottom - top);
+    if (pixels > MAX_CAPTURE_PIXELS)
+      throw Object.assign(new ValidationError("cropped browser capture exceeds the pixel budget"), {
+        code: "capture-budget",
+      });
+    return {
+      requested,
+      source: { x: 0, y: 0, width, height, space: "css-viewport" },
+      image_pixels: { x: left, y: top, width: right - left, height: bottom - top },
+    };
+  }
+
   function createController(api) {
     const state = {
       grant: null,
@@ -690,16 +837,29 @@
     }
     async function capture(request, grant, job) {
       const epoch = state.captureEpoch;
+      const region = request.payload.region || null;
       const snapshot = async (type) => {
         const reply = await api.tabs.sendMessage(request.tab_id, {
           type,
           session: request.session,
           document_id: request.document_id,
           generation: request.generation,
+          ...(region ? { region } : {}),
         });
         if (!reply?.ok)
           throw Object.assign(new ValidationError("capture identity could not be verified"), {
-            code: reply?.error?.code,
+            code: reply?.error?.code || "capture-identity-mismatch",
+          });
+        if (reply.document_id !== request.document_id)
+          throw Object.assign(
+            new ValidationError("capture document identity could not be verified"),
+            {
+              code: "stale-document",
+            },
+          );
+        if (reply.generation !== request.generation)
+          throw Object.assign(new ValidationError("capture generation could not be verified"), {
+            code: "stale-generation",
           });
         return reply;
       };
@@ -730,27 +890,45 @@
         throw Object.assign(new ValidationError("viewport changed during capture"), {
           code: "stale-generation",
         });
+      validateRegionWithinViewport(region, after.viewport);
+      const scale = region ? imageViewportScale(image, after.viewport) : null;
+      const coverage = captureCoverage(region, after.viewport, image, scale || { x: 1, y: 1 });
       return {
         kind: "capture",
         backend: "firefox-tabs.captureVisibleTab",
         effect: "browser-rendered-viewport",
         verification: "identity-bracketed",
         provenance: "browser-rendered, not a CU compositor frame",
+        actionable: false,
+        input_authority: "none",
         document_id: request.document_id,
         generation: after.generation,
         tab_id: request.tab_id,
         window_id: grant.window_id,
         viewport: after.viewport,
         pixels: { width: image.width, height: image.height, space: "image-pixels" },
+        requested_coverage: coverage.requested,
+        source_coverage: coverage.source,
+        ...(region
+          ? {
+              capture_scale: {
+                x: scale.x,
+                y: scale.y,
+                space: "css-viewport-to-image-pixels",
+              },
+              requested_image_pixels: coverage.image_pixels,
+            }
+          : {}),
         png_base64: image.encoded,
         bytes: image.bytes,
         limitations: {
           active_tab_only: true,
-          region: "unsupported",
+          region: "bounded-css-viewport",
           full_page: "unsupported",
           stitching: "unsupported",
           compositor_frame: "unsupported",
           atomic_navigation_binding: "unsupported",
+          css_to_compositor: "unsupported",
         },
       };
     }
@@ -907,6 +1085,20 @@
                   projection: "unprojectable",
                 },
               },
+              ...(request.operation === "select"
+                ? {
+                    grant_provenance: {
+                      state: "explicit",
+                      authority: "interaction-grant",
+                      capabilities: [...grant.capabilities],
+                      session: request.session,
+                      tab_id: request.tab_id,
+                      window_id: grant.window_id,
+                      document_id: request.document_id,
+                      generation: collected.result.generation,
+                    },
+                  }
+                : {}),
             };
       const response = { ...collected, result };
       if (new TextEncoder().encode(JSON.stringify(response)).length > MAX_MESSAGE_BYTES) {

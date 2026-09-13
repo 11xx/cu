@@ -1,6 +1,7 @@
 # Browser interaction fixture
 
-`control.html` contains disposable controls, sensitive-field labels, delayed
+`control.html` contains disposable controls including an ordinary single-select,
+disabled and sensitive select options, sensitive-field labels, delayed
 DOM readiness, replacement targets, application/event counters, a timer-reset
 hover target whose controls begin hidden, a four-item collection with
 hover-only selection and a bulk action, a no-bulk single-item example,
@@ -25,8 +26,11 @@ refuse actions. Stop before choosing interaction mode.
 Use current document, generation and element refs. Fill a value different from
 its initial value, then read it back. Verify clicks, native pointer entry and
 synthetic hover through the counters rather than their delivery receipts. For
-the collection, hover one item first, then use the select-all control and verify
-the selected count before the bulk action. Item 3 deterministically reports a
+the ordinary select, choose an option by its exact value or visible label and
+read back the resulting selection; disabled and sensitive select controls must
+refuse without dispatch. For the collection, hover one item first, then use the
+select-all control and verify the selected count before the bulk action. Item 3
+deterministically reports a
 partial failure so recovery can return to that item without replaying the whole
 batch. Programmatic field changes and replacement targets must invalidate
 previously observed refs; sensitive, disabled, hidden and covered controls must
@@ -34,6 +38,10 @@ refuse interaction. Wait for delayed readiness and advancing media time instead
 of sleeping. Candidate labels on result cards are not verified media durations.
 
 Compare the optional cursor on the visible desktop with a cursor-free browser
-capture. Test inactive-tab refusals, Stop cancellation and reload revocation.
+capture. Request a small CSS viewport region over a known nonsensitive part of
+the fixture and verify its returned coverage and pixels against the full
+viewport. Test inactive-tab refusals, scale/resize drift, Stop cancellation and
+reload revocation. A mocked crop does not establish Firefox rendering or
+capture timing; retain live acceptance as separate coverage evidence.
 When finished, revoke the grant, close disposable tabs, stop the server and
 remove the runtime fixture directory.
