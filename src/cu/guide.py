@@ -123,11 +123,13 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   one is a stanza under [capture.profiles] rather than a change to cu. Encoded
   images beyond that profile's max_bytes refuse with 29, including magnification.
 
-  --timings emits one `cu metrics:` JSON report on stderr after dispatch,
-  including timeout/refusal. Total time includes baseline decoding, acquisition,
-  probe decoding, crop/compare, intentional waits, frame-store and stdout
-  publication. Other work is reported separately. Interpreter startup, the
-  metrics line itself, harness transport and model time are excluded.
+  `shot --timings`, `move --timings`, and `hover --timings` emit one `cu metrics:`
+  JSON report on stderr after dispatch, including timeout/refusal. Capture
+  timing includes baseline decoding, acquisition, probe decoding, crop/compare,
+  intentional waits, frame-store and stdout publication. Native timing includes
+  preflight, device setup/teardown, delivery, convergence, and bounded operation
+  counts. Other work is reported separately. Interpreter startup, the metrics
+  line itself, harness transport and model time are excluded.
   wait.elapsed_seconds retains its narrower meaning: time after baseline decode.
   Summaries contain frame IDs, dimensions, encoded bytes and the cu-patches-v1
   estimator parameters, not pixels, titles, URLs or typed text. They are not billing.
@@ -147,6 +149,7 @@ ACT THROUGH THE FRAME YOU READ
   cu focus zen
   cu warp --frame f3 --at 412,300
   cu move --frame f3 --at 412,300 --duration 0.25 --hz 60
+  cu move --frame f3 --at 412,300 --timings --json
   cu hover --frame f3 --at 412,300 --dwell 0.2 --watch full
   cu click --frame f3 --at 412,300
   cu scroll --frame f3 --at 412,300 --dy -3
@@ -164,18 +167,22 @@ ACT THROUGH THE FRAME YOU READ
   `focus` redirects keyboard actions without moving the pointer. `warp` places
   the compositor pointer exactly; it emits no native movement. `move` sends
   bounded native relative samples over a finite duration, with feedback toward
-  the endpoint and no hidden final warp. Its starting pointer and every sampled
-  point must stay inside the inspected frame; each submitted event gets a
+  the endpoint and no hidden final warp. Its complete sampled route is checked
+  before injection, and live safety is rechecked at each injection boundary;
+  the declared timeout includes that preflight. Each submitted event gets a
   bounded delivery-settle read before another correction. Use --duration, --hz,
-  and --timeout to state the finite motion bound. `scroll` may aim through a frame
-  first, or omit --frame and --at to send wheel events where the pointer already
-  sits.
+  and --timeout to state the finite motion bound. `--timings` adds native
+  preflight, device, delivery, convergence, and operation-count evidence on
+  stderr. `scroll` may aim through a frame first, or omit --frame and --at to
+  send wheel events where the pointer already sits.
 
   `hover` composes one native entry with a finite stationary dwell and a fresh
-  observation. Add --watch to wait for a watched image box to change and settle;
-  that reports pixel evidence only. A dwell-only result, or a changed-pixel
-  result, never claims that the application revealed a particular control. Read
-  the returned frame, then aim the first click or wheel through that frame.
+  observation. Its receipt separates placement, native delivery, and application
+  effect; effect remains unknown until a caller observes it. Add --watch to wait
+  for a watched image box to change and settle; that reports pixel evidence only.
+  A dwell-only result, or a changed-pixel result, never claims that the
+  application revealed a particular control. Read the returned frame, then aim
+  the first click or wheel through that frame.
   Native movement yields with 41 for unexplained movement between settled
   samples. Pending-event readback allows acceleration overshoot and bounded
   rounding relative to the submitted delta; it cannot identify a coincident

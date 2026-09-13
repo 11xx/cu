@@ -2451,6 +2451,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--timeout", type=float, default=actions.DEFAULT_MOVE_TIMEOUT,
         help="Maximum seconds for movement and convergence (default: 2)",
     )
+    move.add_argument(
+        "--timings", action="store_true",
+        help="Emit bounded native preflight, delivery, convergence, and operation counts",
+    )
 
     warp = add_injecting(
         "warp", "Place the compositor pointer at a frame coordinate", cmd_warp
@@ -2492,6 +2496,10 @@ def build_parser() -> argparse.ArgumentParser:
     hover.add_argument(
         "--timeout", type=float, default=3.0,
         help="Seconds to wait for watched pixels, at most 10 (default: 3)",
+    )
+    hover.add_argument(
+        "--timings", action="store_true",
+        help="Emit bounded native entry and observation timing data",
     )
 
     click = add_injecting("click", "Warp, assert focus, press and release", cmd_click)

@@ -15,6 +15,7 @@ _current: ContextVar[Measurement | None] = ContextVar("cu_metrics", default=None
 COMPONENTS = (
     "acquisition", "reference_decode", "probe_decode", "crop_compare",
     "intentional_wait", "frame_publication", "output_publication",
+    "native_preflight", "native_device", "native_delivery", "native_convergence",
 )
 
 
@@ -58,6 +59,13 @@ def span(name: str):
     finally:
         measurement.seconds[name] += time.monotonic() - started
         measurement.operations[name] += 1
+
+
+def count(name: str, amount: int = 1) -> None:
+    """Add bounded operation counts to an opt-in invocation measurement."""
+    measurement = _current.get()
+    if measurement is not None:
+        measurement.operations[name] += amount
 
 
 def timed(name: str):

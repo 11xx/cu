@@ -147,9 +147,12 @@ keybind-oriented and a poor fit for free text.
 
 `cu move` uses relative `REL_X`/`REL_Y` samples from one bounded device. It
 feeds back through cursor observation because libinput acceleration means an
-event delta is not a logical-pixel distance. The route is checked against the
-inspected frame before every sample; abort, stale target, a pointer outside the
-route, device failure, deadline, or non-convergence stops the operation. It
+event delta is not a logical-pixel distance. The complete sampled route is
+checked against the inspected frame during preflight, and the live recipient
+and safety state are checked immediately before each event; abort, stale target,
+a pointer outside the route, device failure, deadline, or non-convergence stops
+the operation. The declared timeout includes preflight, device setup, delivery,
+and convergence. It
 never finishes with a hidden warp. A pointer displacement between native
 samples, with no pending event, yields with `HUMAN_ACTIVE` instead of being
 corrected as acceleration. While an event is pending, CU checks displacement
@@ -164,12 +167,14 @@ settle read before another correction; an event that never becomes visible
 the expected window is still under the point, then press and release through
 uinput.
 
-`cu hover` composes one native entry with a stationary dwell. It can poll a
-watched image box for change and settle, then returns the final frame with pixel
-condition evidence. A changed frame and a dwell alone do not establish that a
-particular application control appeared; the caller reads the returned frame
-before selecting the next action. The watched phase rechecks abort, focus, and
-pointer ownership and has a ten-second upper bound.
+`cu hover` composes one native entry with a stationary dwell. Its receipt keeps
+placement, native delivery, and application effect as separate evidence; the
+effect is unknown until observed. It can poll a watched image box for change and
+settle, then returns the final frame with pixel condition evidence. A changed
+frame and a dwell alone do not establish that a particular application control
+appeared; the caller reads the returned frame before selecting the next action.
+The watched phase rechecks abort, focus, and pointer ownership and has a
+ten-second upper bound.
 
 **A second keyboard path exists, for a sleeping desktop.** Genuine libinput
 events are what make uinput injection indistinguishable from a human, and are
@@ -299,14 +304,17 @@ provider-agnostic image channel — `cu` never talks to a model API.
 
 ### Observation timing and resource accounting
 
-`shot --timings` emits a bounded `cu-metrics/2` JSON report on stderr after
-normal output, including dispatch timeout/refusal paths. Monotonic total time
-starts after argument parsing and includes status publication and stdout flush.
-Component timings separate acquisition, baseline/probe decode, crop/compare,
-intentional waits, descriptor publication and output publication; remaining work
-is `other_seconds`. Process startup, metrics emission, harness transport and
-model inference are explicitly excluded. `wait.elapsed_seconds` continues to
-start after baseline decoding, so it is not total command latency.
+`shot --timings`, `move --timings`, and `hover --timings` emit a bounded
+`cu-metrics/2` JSON report on stderr after normal output, including dispatch
+timeout/refusal paths. Monotonic total time starts after argument parsing and
+includes status publication and stdout flush. Capture component timings separate
+acquisition, baseline/probe decode, crop/compare, intentional waits, descriptor
+publication and output publication. Native component timings separate preflight,
+device setup/teardown, delivery and convergence; operation counts identify
+monitor, cursor, window, layer, focus and native-delta observations. Process startup,
+metrics emission, harness transport and model inference are explicitly excluded.
+`wait.elapsed_seconds` continues to start after baseline decoding, so it is not
+total command latency.
 The report carries the current invocation ID and any explicitly supplied CU or
 harness session fields; it never derives identifiers from process ancestry.
 
