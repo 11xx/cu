@@ -19,6 +19,10 @@ not establish controller speed, model cost, or native chooser behavior.
 
 The caller-managed checkpoint prototype is described in [docs/routines.md](docs/routines.md).
 
+The conditional executor decision and future trial contract are in
+[docs/executor-trial.md](docs/executor-trial.md); unknown costs keep the current
+result at no-trial.
+
 An editable install, so the command on PATH is this checkout rather than a copy
 of it — a stale binary is not a failure mode this project should have. It also
 means the checkout has to stay put. Run `make install` when declared dependencies
