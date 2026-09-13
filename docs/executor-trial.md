@@ -1,27 +1,34 @@
 # Conditional bounded-executor evaluation
 
-The current B12 decision is **no trial**. B10's deterministic fixture and B11's
-checkpoint prototype leave residual controller cost, CU timing, harness
-transport, model time, quota use, and billing unknown. Starting a delegated
-executor without that baseline could not show a saving, so no child process or
-paid experiment is launched.
+`tests/executor_trial.py` keeps trial eligibility separate from result
+accounting. A measured residual controller cost can make a future exploratory
+trial eligible, but an incomplete fixture outcome, a failed verifier, zero
+expected work, or a mismatched count is never eligible for a completed-task
+economic result. Unknown external measurements remain unknown.
 
-`tests/executor_trial.py` records the decision and the contract a future trial
+The result collector and comparison runner record the contract a future trial
 must satisfy:
 
 ```sh
 uv run python tests/executor_trial.py
 ```
 
-An eligible run needs an explicit task intent, semantic or validated landmark
-targets, destination, deadline, cancellation, exclusive reservation ownership,
-child-death cleanup or lifecycle expiry, partial-action receipts without replay,
-and the B10 complete-task verifier. Exit 40 remains a user abort and is never
-retried. Stale or missing targets return to the task controller. Any child/lead
-usage, failures, recovery, and paid escalation are recorded separately from CU
-timings and model time.
+An eligible run needs an explicit fixture version and seed, selected route,
+verification policy, task intent, semantic or validated landmark targets,
+destination, deadline, cancellation, exclusive reservation ownership, child-
+death cleanup or lifecycle expiry, partial-action receipts without replay, and
+the complete-task verifier. The collector records public job, round, and
+attempt identities, plus task-version/context when supplied, and requires one
+of the four supported round shapes.
+Failed, aborted, retried, and paid-assistance attempts remain separate records.
+Exit 40 remains a user abort and is never retried. Stale or missing targets
+return to the task controller. Worker time, CU/application/transport/model
+boundaries, tool/image and token counters, actual billing, quota consumption,
+and estimates are separate fields with explicit coverage.
 
-The trial may use an existing routed harness through `agent-routing` and
-`agent-delegate` only after measured residual cost makes it eligible. It does
-not add a supervisor, queue, daemon, permanent input device, or autonomous
-pixel aiming.
+The collector consumes the delegate's public round/context fields; it does not
+implement worker lifecycle or change agent-delegate. Exploratory collection may
+run without a baseline, while economic conclusions require comparable verified
+outcomes and actual reported billing. The trial does not add a supervisor,
+queue, daemon, permanent input device, quota retry loop, or autonomous pixel
+aiming.
