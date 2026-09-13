@@ -4,6 +4,9 @@ CU Browser provides bounded page evidence and explicitly granted DOM interaction
 It requests only `activeTab`, `scripting`, and `nativeMessaging`: no all-sites
 permission, TCP listener, or persistent page archive.
 
+The supported and unsupported slices, their source/test evidence, and bounded
+successor contracts are maintained in the [Firefox capability matrix](../docs/browser-capabilities.md).
+
 ## Enable a tab
 
 Run `cu web setup`, then temporarily load `browser-extension/manifest.json`
