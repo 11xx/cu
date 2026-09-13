@@ -644,6 +644,7 @@ test("capture brackets collector identity and rejects an unprepared document", a
       assert.equal(message.generation, 0);
       return {
         ok: true,
+        document_id: "document-1",
         generation: 0,
         viewport: { width: 800, height: 600, space: "css-viewport" },
       };
@@ -674,6 +675,103 @@ test("capture brackets collector identity and rejects an unprepared document", a
   await controller.handleNativeMessage(capture, port);
   assert.equal(port.messages.at(-1).ok, false);
   assert.equal(captures, 2);
+});
+
+test("region capture validates CSS geometry, image scale, identity, and budget", async () => {
+  const { api, port } = fakeApi();
+  const original = api.tabs.sendMessage;
+  const pattern =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8DwHwyBNBAw/AcAR8oI+ItOQ4UAAAAASUVORK5CYII=";
+  let mode = "valid";
+  api.tabs.captureVisibleTab = async () => pattern;
+  api.tabs.sendMessage = async (tab, message) => {
+    if (!message.type.startsWith("capture-")) return original(tab, message);
+    if (mode === "identity") return { ok: true, document_id: "other-document", generation: 0 };
+    if (mode === "geometry") return { ok: false, error: { code: "unsupported-geometry" } };
+    return {
+      ok: true,
+      document_id: "document-1",
+      generation: 0,
+      viewport:
+        mode === "scale"
+          ? { width: 4, height: 2, space: "css-viewport" }
+          : { width: 2, height: 2, space: "css-viewport" },
+    };
+  };
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  const region = { x: 1, y: 0, width: 1, height: 1, space: "css-viewport" };
+  await controller.handleNativeMessage(
+    request("capture", {
+      id: "region-valid",
+      session: started.grant.session,
+      generation: 0,
+      payload: { region },
+    }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).ok, true);
+  assert.deepEqual(port.messages.at(-1).result.requested_coverage, region);
+  assert.deepEqual(port.messages.at(-1).result.requested_image_pixels, {
+    x: 1,
+    y: 0,
+    width: 1,
+    height: 1,
+  });
+  assert.deepEqual(port.messages.at(-1).result.capture_scale, {
+    x: 1,
+    y: 1,
+    space: "css-viewport-to-image-pixels",
+  });
+
+  mode = "scale";
+  await controller.handleNativeMessage(
+    request("capture", {
+      id: "region-scale",
+      session: started.grant.session,
+      generation: 0,
+      payload: { region },
+    }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).error.code, "capture-scale-mismatch");
+
+  mode = "identity";
+  await controller.handleNativeMessage(
+    request("capture", {
+      id: "region-identity",
+      session: started.grant.session,
+      generation: 0,
+      payload: { region },
+    }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).error.code, "stale-document");
+
+  mode = "geometry";
+  await controller.handleNativeMessage(
+    request("capture", {
+      id: "region-geometry",
+      session: started.grant.session,
+      generation: 0,
+      payload: { region },
+    }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).error.code, "unsupported-geometry");
+
+  mode = "valid";
+  api.tabs.captureVisibleTab = async () => `data:image/png;base64,${"A".repeat(700000)}`;
+  await controller.handleNativeMessage(
+    request("capture", {
+      id: "region-budget",
+      session: started.grant.session,
+      generation: 0,
+      payload: { region },
+    }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).error.code, "observation-too-large");
 });
 
 test("late collector cleanup cannot disconnect a subsequent grant", async () => {

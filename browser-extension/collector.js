@@ -12,7 +12,7 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 2;
+  const VERSION = 3;
   const CAPABILITIES = new Set(["read", "interact"]);
   const PROTOCOL_OPERATIONS = new Set([
     "observe",
@@ -57,6 +57,7 @@
     "include_details",
   ]);
   const CAPTURE_FIELDS = new Set();
+  const CAPTURE_REGION_FIELDS = new Set(["x", "y", "width", "height", "space"]);
   const sensitivePattern =
     /(?:pass(?:word)?|secret|token|api[\s_-]*key|access[\s_-]*key|auth|otp|one[\s_-]*time|credit[\s_-]*card|card[\s_-]*(?:number|security)|security[\s_-]*code|verification[\s_-]*code|\bpin\b|cvv|cvc)/i;
   const sensitiveAutocomplete = new Set([
@@ -141,6 +142,53 @@
   }
   function refValue(value) {
     return boundedString(value, "ref", MAX_REF_CHARS);
+  }
+
+  function boundedNumber(value, name) {
+    if (typeof value !== "number" || !Number.isFinite(value))
+      throw new ValidationError(`${name} must be a finite number`);
+    return value;
+  }
+
+  function captureRegion(value) {
+    exactKeys(value, CAPTURE_REGION_FIELDS, CAPTURE_REGION_FIELDS);
+    const region = {
+      x: boundedNumber(value.x, "capture region x"),
+      y: boundedNumber(value.y, "capture region y"),
+      width: boundedNumber(value.width, "capture region width"),
+      height: boundedNumber(value.height, "capture region height"),
+      space: boundedString(value.space, "capture region space", 32),
+    };
+    if (region.width <= 0 || region.height <= 0)
+      throw new ValidationError("capture region width and height must be positive");
+    if (region.space !== "css-viewport")
+      throw new ValidationError("capture region space must be css-viewport");
+    return region;
+  }
+
+  function viewportGeometry(viewport) {
+    if (!isRecord(viewport)) throw new ValidationError("capture viewport is unavailable");
+    const width = boundedNumber(viewport.width, "capture viewport width");
+    const height = boundedNumber(viewport.height, "capture viewport height");
+    if (width <= 0 || height <= 0 || viewport.space !== "css-viewport")
+      throw new ValidationError("capture viewport geometry is unsupported");
+    return { width, height };
+  }
+
+  function validateRegionWithinViewport(region, viewport) {
+    if (!region) return;
+    const { width, height } = viewportGeometry(viewport);
+    const epsilon = 1e-9 * Math.max(1, width, height);
+    if (
+      region.x < -epsilon ||
+      region.y < -epsilon ||
+      region.x + region.width > width + epsilon ||
+      region.y + region.height > height + epsilon
+    ) {
+      const error = new ValidationError("capture region is outside the CSS viewport");
+      error.code = "unsupported-geometry";
+      throw error;
+    }
   }
 
   function validatePayload(operation, payload) {
@@ -1380,7 +1428,7 @@
         exactKeys(
           message,
           new Set(["type", "session", "document_id", "generation"]),
-          new Set(["type", "session", "document_id", "generation"]),
+          new Set(["type", "session", "document_id", "generation", "region"]),
         );
         if (!session || message.session !== session.id)
           return {
@@ -1391,6 +1439,21 @@
               message: "collector session did not match",
             },
           };
+        let region = null;
+        try {
+          region = Object.prototype.hasOwnProperty.call(message, "region")
+            ? captureRegion(message.region)
+            : null;
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: error.code || "invalid-message",
+              state: "unsupported",
+              message: error.message,
+            },
+          };
+        }
         const preparing = message.type === "capture-prep";
         if (!preparing) setOverlayHidden(false);
         drainMutations();
@@ -1404,6 +1467,35 @@
         if (!session.capabilities.includes("interact"))
           return { ok: false, error: { code: "interaction-not-granted" } };
         const view = doc.defaultView;
+        let viewport;
+        try {
+          viewport = {
+            width: view.innerWidth,
+            height: view.innerHeight,
+            scroll_x: view.scrollX,
+            scroll_y: view.scrollY,
+            device_pixel_ratio: view.devicePixelRatio,
+            space: "css-viewport",
+          };
+          viewportGeometry(viewport);
+          validateRegionWithinViewport(region, viewport);
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: error.code || "unsupported-geometry",
+              state: "unsupported",
+              message: error.message,
+            },
+          };
+        }
+        const requested = region || {
+          x: 0,
+          y: 0,
+          width: viewport.width,
+          height: viewport.height,
+          space: "css-viewport",
+        };
         const result = {
           protocol: PROTOCOL,
           version: VERSION,
@@ -1411,14 +1503,8 @@
           ok: true,
           document_id: documentId,
           generation,
-          viewport: {
-            width: view.innerWidth,
-            height: view.innerHeight,
-            scroll_x: view.scrollX,
-            scroll_y: view.scrollY,
-            device_pixel_ratio: view.devicePixelRatio,
-            space: "css-viewport",
-          },
+          viewport,
+          requested_coverage: requested,
         };
         if (!preparing) return result;
         setOverlayHidden(true);

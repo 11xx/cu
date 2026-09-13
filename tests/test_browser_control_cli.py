@@ -131,3 +131,146 @@ def test_browser_capture_validates_pixels_and_writes_a_private_nonframe(bridge, 
     bridge.capture["pixels"]["width"] = 3
     assert cli.main(args) == exits.BROWSER_READ_PROTOCOL
     assert list(path.parent.glob("*.png")) == [path]
+
+
+def test_browser_region_capture_crops_a_known_pattern_and_preserves_coverage(bridge, capsys):
+    pixels = bytes(
+        [
+            255,
+            0,
+            0,
+            255,
+            0,
+            255,
+            0,
+            255,
+            0,
+            0,
+            255,
+            255,
+            255,
+            255,
+            0,
+            255,
+        ]
+    )
+    image = png.encode(2, 2, pixels)
+    bridge.capture = {
+        "kind": "capture",
+        "png_base64": base64.b64encode(image).decode(),
+        "pixels": {"width": 2, "height": 2, "space": "image-pixels"},
+        "document_id": "fixture-document",
+        "tab_id": 1,
+        "generation": 0,
+        "viewport": {
+            "width": 2,
+            "height": 2,
+            "device_pixel_ratio": 1,
+            "space": "css-viewport",
+        },
+        "provenance": "browser-rendered, not a CU compositor frame",
+        "actionable": False,
+    }
+    args = [
+        "web",
+        "capture",
+        "--document",
+        "fixture-document",
+        "--generation",
+        "0",
+        "--region",
+        "1,0 1x1",
+        "--json",
+    ]
+    assert cli.main(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    width, height, cropped = png.decode(Path(result["path"]).read_bytes())
+    assert (width, height, cropped) == (1, 1, bytes([0, 255, 0, 255]))
+    assert result["coverage"]["requested"] == {
+        "x": 1.0,
+        "y": 0.0,
+        "width": 1.0,
+        "height": 1.0,
+        "space": "css-viewport",
+    }
+    assert result["coverage"]["returned"] == result["coverage"]["requested"]
+    assert result["coverage"]["image_pixels"] == {
+        "x": 1,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "space": "image-pixels",
+    }
+    assert result["source_pixels"] == {"width": 2, "height": 2, "space": "image-pixels"}
+    assert result["actionable"] is False
+    assert "frame" not in result
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        (
+            "viewport",
+            {"width": 1, "height": 2, "space": "css-viewport"},
+            exits.BROWSER_READ_PROTOCOL,
+        ),
+        ("document_id", "other-document", exits.BROWSER_DOCUMENT_STALE),
+        ("generation", 1, exits.BROWSER_DOCUMENT_STALE),
+    ],
+)
+def test_browser_region_capture_refuses_scale_and_identity_drift(bridge, field, value, code):
+    image = png.encode(2, 2, bytes([255, 0, 0, 255]) * 4)
+    bridge.capture = {
+        "kind": "capture",
+        "png_base64": base64.b64encode(image).decode(),
+        "pixels": {"width": 2, "height": 2, "space": "image-pixels"},
+        "document_id": "fixture-document",
+        "tab_id": 1,
+        "generation": 0,
+        "viewport": {"width": 2, "height": 2, "space": "css-viewport"},
+    }
+    bridge.capture[field] = value
+    args = [
+        "web",
+        "capture",
+        "--document",
+        "fixture-document",
+        "--generation",
+        "0",
+        "--region",
+        "0,0 1x1",
+        "--json",
+    ]
+    assert cli.main(args) == code
+
+
+def test_browser_region_capture_refuses_unsupported_geometry_and_budget(bridge):
+    image = png.encode(2, 2, bytes([255, 0, 0, 255]) * 4)
+    bridge.capture = {
+        "kind": "capture",
+        "png_base64": base64.b64encode(image).decode(),
+        "pixels": {"width": 2, "height": 2, "space": "image-pixels"},
+        "document_id": "fixture-document",
+        "tab_id": 1,
+        "generation": 0,
+        "viewport": {"width": 2, "height": 2, "space": "css-viewport"},
+    }
+    outside = [
+        "web",
+        "capture",
+        "--document",
+        "fixture-document",
+        "--generation",
+        "0",
+        "--region",
+        "1,1 2x2",
+        "--json",
+    ]
+    assert cli.main(outside) == exits.BROWSER_READ_REFUSED
+    bridge.capture = {
+        **bridge.capture,
+        "viewport": {"width": 0, "height": 2, "space": "css-viewport"},
+    }
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(wire, "MAX_CAPTURE_BYTES", 1)
+        assert cli.main([*outside[:-2], "0,0 1x1", "--json"]) == exits.BROWSER_READ_BUDGET

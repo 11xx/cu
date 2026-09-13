@@ -29,7 +29,7 @@ from cu.browser_read import (
     write_frame,
 )
 
-PROTOCOL = {"protocol": "cu-browser-read", "version": 2}
+PROTOCOL = {"protocol": "cu-browser-read", "version": 3}
 
 
 def response(request: dict[str, object], *, response_id: str | None = None) -> dict[str, object]:
@@ -247,6 +247,24 @@ def test_action_protocol_requires_generation_and_bounds_structured_reads():
     )
     with pytest.raises(ProtocolError, match="selector"):
         validate_payload("query", {"selector": "x" * 257})
+
+
+def test_capture_region_is_explicitly_css_viewport_geometry():
+    assert validate_payload(
+        "capture",
+        {"region": {"x": 1, "y": 2, "width": 30, "height": 40, "space": "css-viewport"}},
+    )["region"] == {
+        "x": 1.0,
+        "y": 2.0,
+        "width": 30.0,
+        "height": 40.0,
+        "space": "css-viewport",
+    }
+    with pytest.raises(ProtocolError, match="css-viewport"):
+        validate_payload(
+            "capture",
+            {"region": {"x": 0, "y": 0, "width": 1, "height": 1, "space": "image-pixels"}},
+        )
 
 
 def test_action_timeout_reports_uncertain_effect():

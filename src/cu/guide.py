@@ -511,6 +511,8 @@ OPTIONAL FIREFOX CU BROWSER
   cu web action click --document DOCUMENT --generation 3 --ref e4 --tab 12
   cu web wait --document DOCUMENT --selector '.result-card' --state visible
   cu web capture --document DOCUMENT --generation 6 --tab 12 --json
+  cu web capture --document DOCUMENT --generation 6 --tab 12 \
+    --region '120,80 640x360' --json
 
   Temporarily load browser-extension/manifest.json through Firefox about:debugging.
   The CU Browser popup offers a read-only grant or an explicit page-interaction
@@ -541,11 +543,15 @@ OPTIONAL FIREFOX CU BROWSER
   requires ready, unpaused media with advancing time. Capture uses Firefox
   `tabs.captureVisibleTab` only for the active granted tab, checks identity around
   the async call, and saves bounded PNG bytes
-  under runtime state. The result is browser-rendered provenance, not a CU frame;
-  regions, full-page capture, and stitching are unsupported. The optional owned
-  amber browser arrowhead is selected in the popup, pointer-events-none, excluded
-  from reads and capture, and never claims to move the OS cursor. Capture bounds
-  are 512 KiB PNG and 16 megapixels; at most 60 private runtime captures are kept.
+  under runtime state. `--region` names one explicit CSS viewport rectangle;
+  the full browser viewport is captured, its image/viewport scale is validated,
+  and the native host crops that rectangle while retaining requested and
+  pixel-quantized returned coverage. The result is browser-rendered provenance,
+  not a CU frame, and it has no native-input authority. Full-page capture and
+  stitching are unsupported. The optional owned amber browser arrowhead is
+  selected in the popup, pointer-events-none, excluded from reads and capture,
+  and never claims to move the OS cursor. Capture bounds are 512 KiB PNG and 16
+  megapixels; at most 60 private runtime captures are kept.
 
   Browser actions pass the desktop lock, reservation, abort, locked-session and
   window-denylist interlocks. Receipts distinguish dispatch from immediate DOM

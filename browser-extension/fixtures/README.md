@@ -34,6 +34,10 @@ refuse interaction. Wait for delayed readiness and advancing media time instead
 of sleeping. Candidate labels on result cards are not verified media durations.
 
 Compare the optional cursor on the visible desktop with a cursor-free browser
-capture. Test inactive-tab refusals, Stop cancellation and reload revocation.
+capture. Request a small CSS viewport region over a known nonsensitive part of
+the fixture and verify its returned coverage and pixels against the full
+viewport. Test inactive-tab refusals, scale/resize drift, Stop cancellation and
+reload revocation. A mocked crop does not establish Firefox rendering or
+capture timing; retain live acceptance as separate coverage evidence.
 When finished, revoke the grant, close disposable tabs, stop the server and
 remove the runtime fixture directory.
