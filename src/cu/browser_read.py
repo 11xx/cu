@@ -32,7 +32,7 @@ from typing import Any, BinaryIO, Self
 from . import png
 
 PROTOCOL = "cu-browser-read"
-VERSION = 3
+VERSION = 4
 MAX_MESSAGE_BYTES = 1 << 20
 MAX_RECV_CHUNK_BYTES = 64 << 10
 MAX_PENDING_REQUESTS = 64
@@ -62,7 +62,9 @@ SOCKET_PREFIX = "helper-"
 SOCKET_SUFFIX = ".sock"
 
 READ_OPERATIONS = frozenset({"observe", "query", "wait"})
-ACTION_OPERATIONS = frozenset({"click", "focus", "fill", "scroll", "hover", "capture"})
+ACTION_OPERATIONS = frozenset(
+    {"click", "focus", "fill", "scroll", "hover", "select", "capture"}
+)
 OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
 CAPABILITIES = frozenset({"read", "interact"})
 _OBSERVE_FIELDS = frozenset({"include_values", "limit", "selector", "include_details"})
@@ -396,6 +398,19 @@ def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
     if operation in {"click", "focus", "hover"}:
         _exact_fields(payload_object, {"ref"}, {"ref"})
         return {"ref": _ref(payload_object["ref"])}
+    if operation == "select":
+        _exact_fields(payload_object, {"ref"}, {"ref", "value", "label"})
+        has_value = "value" in payload_object
+        has_label = "label" in payload_object
+        if has_value == has_label:
+            raise ProtocolError("select requires exactly one of value or label")
+        option_field = "value" if has_value else "label"
+        return {
+            "ref": _ref(payload_object["ref"]),
+            option_field: _bounded_string(
+                payload_object[option_field], option_field, MAX_ACTION_VALUE_CHARS, empty=True
+            ),
+        }
     if operation == "fill":
         _exact_fields(payload_object, {"ref", "value"}, {"ref", "value"})
         return {

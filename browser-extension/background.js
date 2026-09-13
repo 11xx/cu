@@ -10,10 +10,18 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 3;
+  const VERSION = 4;
   const CAPABILITIES = new Set(["read", "interact"]);
   const READ_OPERATIONS = new Set(["observe", "query", "wait"]);
-  const ACTION_OPERATIONS = new Set(["click", "focus", "fill", "scroll", "hover", "capture"]);
+  const ACTION_OPERATIONS = new Set([
+    "click",
+    "focus",
+    "fill",
+    "scroll",
+    "hover",
+    "select",
+    "capture",
+  ]);
   const OPERATIONS = new Set([...READ_OPERATIONS, ...ACTION_OPERATIONS]);
   const MAX_MESSAGE_BYTES = 1024 * 1024;
   const MAX_QUERY_CHARS = 256;
@@ -148,6 +156,18 @@
     if (operation === "click" || operation === "focus" || operation === "hover") {
       exactKeys(value, new Set(["ref"]), new Set(["ref"]));
       return { ref: validateRef(value.ref) };
+    }
+    if (operation === "select") {
+      exactKeys(value, new Set(["ref"]), new Set(["ref", "value", "label"]));
+      const hasValue = Object.prototype.hasOwnProperty.call(value, "value");
+      const hasLabel = Object.prototype.hasOwnProperty.call(value, "label");
+      if (hasValue === hasLabel)
+        throw new ValidationError("select requires exactly one of value or label");
+      const optionField = hasValue ? "value" : "label";
+      return {
+        ref: validateRef(value.ref),
+        [optionField]: boundedString(value[optionField], optionField, 1024, { empty: true }),
+      };
     }
     if (operation === "fill") {
       exactKeys(value, new Set(["ref", "value"]), new Set(["ref", "value"]));
@@ -1065,6 +1085,20 @@
                   projection: "unprojectable",
                 },
               },
+              ...(request.operation === "select"
+                ? {
+                    grant_provenance: {
+                      state: "explicit",
+                      authority: "interaction-grant",
+                      capabilities: [...grant.capabilities],
+                      session: request.session,
+                      tab_id: request.tab_id,
+                      window_id: grant.window_id,
+                      document_id: request.document_id,
+                      generation: collected.result.generation,
+                    },
+                  }
+                : {}),
             };
       const response = { ...collected, result };
       if (new TextEncoder().encode(JSON.stringify(response)).length > MAX_MESSAGE_BYTES) {

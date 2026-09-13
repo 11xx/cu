@@ -509,6 +509,7 @@ OPTIONAL FIREFOX CU BROWSER
   cu web hosts --json
   cu web read --selector '.result-card' --details --query Port --json
   cu web action click --document DOCUMENT --generation 3 --ref e4 --tab 12
+  cu web action select --document DOCUMENT --generation 4 --ref e5 --value two --tab 12
   cu web wait --document DOCUMENT --selector '.result-card' --state visible
   cu web capture --document DOCUMENT --generation 6 --tab 12 --json
   cu web capture --document DOCUMENT --generation 6 --tab 12 \
@@ -532,11 +533,16 @@ OPTIONAL FIREFOX CU BROWSER
 
   Actions require the observed document and generation plus a stable ref, except
   document scroll. Click, focus, ordinary nonsecret fill/replace, element/document
-  scroll, and synthetic hover are bounded and serialized. Hover says event
-  dispatch, not genuine CSS `:hover` or OS-pointer behavior. Actions require the
-  active tab and focused browser window; no native-input fallback or guessed CSS
-  geometry is used. Read-only grants refuse actions. Timeout or disconnect after
-  send can mean partial effect, so it is reported and never replayed.
+  scroll, synthetic hover, and one ordinary single-select operation are bounded
+  and serialized. Select requires exactly one unambiguous option value or visible
+  label; missing, duplicate, disabled, sensitive, stale, detached, and read-only
+  cases refuse before dispatch. Its receipt includes the requested identity,
+  observed value/label, document/generation, and explicit grant provenance. Hover
+  says event dispatch, not genuine CSS `:hover` or OS-pointer behavior. Actions
+  require the active tab and focused browser window; no native-input fallback or
+  guessed CSS geometry is used. Select dispatches synthetic input/change events,
+  not trusted browser input or arbitrary script evaluation. Timeout or disconnect
+  after send can mean partial effect, so it is reported and never replayed.
 
   Waits re-check fresh DOM or media conditions for at most 10 seconds (12-second
   default transport budget). Stop and client disconnect cancel them. Playing

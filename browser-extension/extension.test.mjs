@@ -98,6 +98,24 @@ function fakeApi() {
             generation: 0,
           };
         if (message.type === "read-request") {
+          const result =
+            message.request.operation === "select"
+              ? {
+                  kind: "action",
+                  action: "select",
+                  ref: message.request.payload.ref,
+                  backend: "dom",
+                  verification: "verified",
+                  generation: 1,
+                  document_id: "document-1",
+                  requested_option: { by: "value", value: "two" },
+                  selection: { value: "two", label: "Two" },
+                }
+              : {
+                  kind: "observation",
+                  generation: 0,
+                  document_id: "document-1",
+                };
           return {
             protocol: PROTOCOL,
             version: VERSION,
@@ -107,11 +125,7 @@ function fakeApi() {
             tab_id: tabId,
             document_id: "document-1",
             ok: true,
-            result: {
-              kind: "observation",
-              generation: 0,
-              document_id: "document-1",
-            },
+            result,
           };
         }
         return {
@@ -156,10 +170,20 @@ test("installation starts with no grant and only the current tab can be granted"
 test("native requests reject arbitrary tabs and action-like operations", async () => {
   const { api, port } = fakeApi();
   const controller = createController(api);
-  await controller.startCurrent();
+  const started = await controller.startCurrent();
   await port.emit({ ...request("click", { id: "bad-operation" }) });
   assert.equal(port.messages.at(-1).ok, false);
   assert.equal(port.messages.at(-1).error.code, "invalid-request");
+  await port.emit(
+    request("select", {
+      id: "read-only-select",
+      session: started.grant.session,
+      generation: 0,
+      payload: { ref: "e1", value: "two" },
+    }),
+  );
+  assert.equal(port.messages.at(-1).ok, false);
+  assert.equal(port.messages.at(-1).error.code, "interaction-not-granted");
 
   await port.emit({ ...request("observe", { id: "wrong-tab", tab_id: 99 }) });
   assert.equal(port.messages.at(-1).error.code, "tab-not-granted");
@@ -201,6 +225,33 @@ test("background reads report current tab activity, not activation-time metadata
     port,
   );
   assert.equal(port.messages.at(-1).result.context.tab_active, false);
+});
+
+test("background forwards select results with explicit grant provenance", async () => {
+  const { api, port } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  await controller.handleNativeMessage(
+    request("select", {
+      session: started.grant.session,
+      generation: 0,
+      payload: { ref: "e1", value: "two" },
+    }),
+    port,
+  );
+  const response = port.messages.at(-1);
+  assert.equal(response.ok, true);
+  assert.deepEqual(response.result.selection, { value: "two", label: "Two" });
+  assert.deepEqual(response.result.grant_provenance, {
+    state: "explicit",
+    authority: "interaction-grant",
+    capabilities: ["read", "interact"],
+    session: started.grant.session,
+    tab_id: 7,
+    window_id: 3,
+    document_id: "document-1",
+    generation: 1,
+  });
 });
 
 class Element {

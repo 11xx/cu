@@ -21,6 +21,19 @@
   <h1>CU Browser control fixture</h1>
   <p>All values and actions on this page are disposable test data.</p>
   <label>Ordinary value <input id="entry" value="8080" /></label>
+  <label>Ordinary choice
+    <select id="choice">
+      <option value="one">One</option>
+      <option value="two">Two</option>
+      <option value="disabled" disabled>Disabled choice</option>
+    </select>
+  </label>
+  <label>Security choice
+    <select id="sensitive-choice" name="security-code">
+      <option value="one">One</option>
+      <option value="two">Two</option>
+    </select>
+  </label>
   <label>Notes <textarea id="notes">Original notes</textarea></label>
   <label>Security code <input id="sensitive" value="fixture-only-code" /></label>
   <button id="apply">Apply once</button>

@@ -29,7 +29,7 @@ from cu.browser_read import (
     write_frame,
 )
 
-PROTOCOL = {"protocol": "cu-browser-read", "version": 3}
+PROTOCOL = {"protocol": "cu-browser-read", "version": 4}
 
 
 def response(request: dict[str, object], *, response_id: str | None = None) -> dict[str, object]:
@@ -247,6 +247,23 @@ def test_action_protocol_requires_generation_and_bounds_structured_reads():
     )
     with pytest.raises(ProtocolError, match="selector"):
         validate_payload("query", {"selector": "x" * 257})
+
+
+def test_select_payload_requires_one_bounded_option_identity():
+    assert validate_payload("select", {"ref": "e1", "value": "two"}) == {
+        "ref": "e1",
+        "value": "two",
+    }
+    assert validate_payload("select", {"ref": "e1", "label": "Two"}) == {
+        "ref": "e1",
+        "label": "Two",
+    }
+    for payload in (
+        {"ref": "e1"},
+        {"ref": "e1", "value": "two", "label": "Two"},
+    ):
+        with pytest.raises(ProtocolError, match="exactly one of value or label"):
+            validate_payload("select", payload)
 
 
 def test_capture_region_is_explicitly_css_viewport_geometry():

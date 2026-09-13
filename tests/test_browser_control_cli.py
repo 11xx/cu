@@ -23,7 +23,7 @@ def bridge(monkeypatch):
         "hidden": False,
         "capabilities": ["read", "interact"],
     }
-    state = SimpleNamespace(calls=0, grant=grant, failure=None, capture=None)
+    state = SimpleNamespace(calls=0, grant=grant, failure=None, capture=None, payloads=[])
 
     class Client:
         def __init__(self):
@@ -39,6 +39,7 @@ def bridge(monkeypatch):
             with desktop.lock_path().open("a") as lock, pytest.raises(BlockingIOError):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             state.calls += 1
+            state.payloads.append((operation, kwargs["payload"]))
             if state.failure:
                 raise state.failure
             return {"ok": True, "result": {"kind": "action", "verification": "unverified"}}
@@ -93,6 +94,44 @@ def test_read_grant_cannot_dispatch_action(bridge):
     bridge.grant["capabilities"] = ["read"]
     assert cli.main(action_args()) == exits.BROWSER_READ_REFUSED
     assert bridge.calls == 0
+
+
+def test_select_action_requires_one_option_identity_and_forwards_value(bridge, capsys):
+    args = [
+        "web",
+        "action",
+        "select",
+        "--document",
+        "fixture-document",
+        "--generation",
+        "0",
+        "--ref",
+        "e1",
+        "--value",
+        "two",
+        "--json",
+    ]
+    assert cli.main(args) == 0
+    json.loads(capsys.readouterr().out)
+    assert bridge.payloads[-1] == ("select", {"ref": "e1", "value": "two"})
+
+    with pytest.raises(ValueError, match="exactly one"):
+        web._action(
+            SimpleNamespace(
+                action="select",
+                document="fixture-document",
+                generation=0,
+                ref="e1",
+                value=None,
+                label=None,
+                target="element",
+                dx=0,
+                dy=0,
+                helper=None,
+                tab=None,
+                timeout=2.0,
+            )
+        )
 
 
 def test_abort_and_reservation_refuse_before_browser_dispatch(bridge):

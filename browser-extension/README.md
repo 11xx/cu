@@ -59,14 +59,21 @@ permission to act.
 ```sh
 cu web action click --document DOCUMENT --generation 3 --ref e4 --tab 12
 cu web action fill --document DOCUMENT --generation 4 --ref e5 --value 'ordinary text'
+cu web action select --document DOCUMENT --generation 5 --ref e6 --value two --tab 12
+cu web action select --document DOCUMENT --generation 6 --ref e6 --label Two --tab 12
 cu web action scroll --target document --dy 500 --document DOCUMENT --generation 5
 cu web wait --document DOCUMENT --selector '.result-card' --state visible
 cu web wait --document DOCUMENT --ref e4 --state text --text Ready
 ```
 
 Actions need the observed document/generation and a ref, except document scroll.
-Click, focus, fill of ordinary nonsecret text inputs/textareas, scroll, and
-synthetic hover are supported. Element scroll with deltas scrolls that element;
+Click, focus, fill of ordinary nonsecret text inputs/textareas, scroll, synthetic
+hover, and one ordinary single-select operation are supported. Select requires
+exactly one `--value` or visible `--label`; missing or duplicate identities,
+disabled options, sensitive controls, stale/detached refs, and read-only grants
+refuse before dispatch. Its receipt includes the requested option identity, the
+observed resulting value/label, document/generation, and explicit grant
+provenance. Element scroll with deltas scrolls that element;
 without deltas it brings the element into view. Positive `dy` is down in DOM
 scroll space. Hidden, disabled, sensitive, stale, and covered targets refuse.
 Use scroll before targeting an offscreen element. File/hidden controls and
@@ -77,6 +84,8 @@ Actions serialize and pass the CLI's desktop lock, reservation, abort,
 locked-session, and window-denylist checks. No native-input fallback or guessed
 CSS coordinate transform occurs. Synthetic hover dispatches pointer/mouse events;
 it does **not** establish CSS `:hover`, trusted events, or an OS-pointer position.
+Select uses a DOM selection setter plus synthetic `input`/`change` events; it
+does not claim trusted browser input or arbitrary script evaluation.
 
 Receipts separate dispatch from verification. Click/event delivery is not proof
 of application success. Fill/focus verification describes the immediate DOM
@@ -124,7 +133,7 @@ revocation, and collector disposal remove it.
 ## Transport and refusals
 
 The extension ID is `cu-browser-read@local`, the native host is `org.cu.read`, and
-the protocol is `cu-browser-read`, version **3**. Extension and host versions must
+the protocol is `cu-browser-read`, version **4**. Extension and host versions must
 match. Frames use native-endian uint32 length plus UTF-8 JSON, bounded at 1 MiB.
 Missing grant capabilities mean read-only, never implicit action authority.
 

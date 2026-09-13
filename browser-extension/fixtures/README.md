@@ -1,6 +1,7 @@
 # Browser interaction fixture
 
-`control.html` contains disposable controls, sensitive-field labels, delayed
+`control.html` contains disposable controls including an ordinary single-select,
+disabled and sensitive select options, sensitive-field labels, delayed
 DOM readiness, replacement targets, application/event counters, a timer-reset
 hover target whose controls begin hidden, a four-item collection with
 hover-only selection and a bulk action, a no-bulk single-item example,
@@ -25,8 +26,11 @@ refuse actions. Stop before choosing interaction mode.
 Use current document, generation and element refs. Fill a value different from
 its initial value, then read it back. Verify clicks, native pointer entry and
 synthetic hover through the counters rather than their delivery receipts. For
-the collection, hover one item first, then use the select-all control and verify
-the selected count before the bulk action. Item 3 deterministically reports a
+the ordinary select, choose an option by its exact value or visible label and
+read back the resulting selection; disabled and sensitive select controls must
+refuse without dispatch. For the collection, hover one item first, then use the
+select-all control and verify the selected count before the bulk action. Item 3
+deterministically reports a
 partial failure so recovery can return to that item without replaying the whole
 batch. Programmatic field changes and replacement targets must invalidate
 previously observed refs; sensitive, disabled, hidden and covered controls must

@@ -77,7 +77,10 @@ def configure(parser: argparse.ArgumentParser) -> None:
     action.set_defaults(injects=True)
     action.add_argument("action", choices=sorted(transport.ACTION_OPERATIONS - {"capture"}))
     action.add_argument("--ref", help="Stable ref from a prior observation")
-    action.add_argument("--value", help="Replacement value for fill")
+    action.add_argument(
+        "--value", help="Replacement value for fill or exact option value for select"
+    )
+    action.add_argument("--label", help="Visible option label for select")
     action.add_argument("--target", choices=("document", "element"), default="element")
     action.add_argument("--dx", type=int, default=0)
     action.add_argument("--dy", type=int, default=0)
@@ -253,6 +256,15 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
         if not args.ref:
             raise ValueError(f"{args.action} requires --ref")
         payload = {"ref": args.ref}
+    elif args.action == "select":
+        if not args.ref:
+            raise ValueError("select requires --ref")
+        if (args.value is None) == (args.label is None):
+            raise ValueError("select requires exactly one of --value or --label")
+        payload = {"ref": args.ref}
+        payload["value" if args.value is not None else "label"] = (
+            args.value if args.value is not None else args.label
+        )
     elif args.action == "fill":
         if args.ref is None or args.value is None:
             raise ValueError("fill requires --ref and --value")
