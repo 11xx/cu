@@ -124,6 +124,7 @@ def run_comparison(
             "outcome": trial["outcome"],
             "recovery": trial["recovery"],
         },
+        "routine": trial["routine"],
         "accounting": collector.report(),
     }
 

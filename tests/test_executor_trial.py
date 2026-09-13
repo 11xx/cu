@@ -208,6 +208,8 @@ def test_comparison_runner_requires_matching_verified_fixture(tmp_path):
     assert report["accounting"]["summary"]["retry_count"] == 1
     assert report["accounting"]["summary"]["verified_completed_attempts"] == 1
     assert report["accounting"]["run"]["timing"]["end_to_end_wall_seconds"] >= 0
+    assert report["routine"]["resume"]["context_id"] == report["routine"]["context"]["context_id"]
+    assert report["routine"]["eventual"]["eventual_outcome"] == "completed"
     assert compare_results(report["accounting"], report["accounting"])["comparable"] is True
     incomplete = run_comparison(
         fixture_version="cu-task-fixture/1",

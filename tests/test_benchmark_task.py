@@ -16,6 +16,12 @@ def test_verifier_accepts_exact_recovered_fixture(tmp_path):
     assert result["timing"]["model_seconds"] is None
     assert result["preservation"]["receipts"][0]["status"] == "unchanged"
     assert result["preservation"]["receipts"][0]["different_from_expected"] is True
+    assert "item-03" not in result["routine"]["resume"]["skip_completed"]
+    assert len(result["routine"]["resume"]["skip_completed"]) == 15
+    assert result["routine"]["resume"]["rebound_frames"] == []
+    assert result["routine"]["eventual"]["first_attempt_outcome"] == "incomplete"
+    assert result["routine"]["eventual"]["eventual_outcome"] == "completed"
+    assert result["recovery"]["verified_prefix"] == result["routine"]["resume"]["skip_completed"]
 
 
 def test_verifier_rejects_missing_zero_wrong_and_duplicate_count_only(tmp_path):
@@ -110,6 +116,13 @@ def test_trial_retains_failed_retry_and_round_shape(tmp_path):
     assert envelope["attempts"][1]["is_retry"] is True
     assert envelope["attempts"][1]["retry_of"] == envelope["attempts"][0]["attempt_id"]
     assert envelope["attempts"][0]["attempt_id"] != envelope["attempts"][1]["attempt_id"]
+    assert envelope["routine"]["resume"]["shape"] == "cold-resume"
+
+
+def test_routine_context_retains_warm_follow_up_shape(tmp_path):
+    envelope = run_trial(tmp_path, shape="warm-follow-up", warm=True)
+    assert envelope["routine"]["context"]["run"]["shape"] == "warm-follow-up"
+    assert envelope["routine"]["resume"]["shape"] == "warm-follow-up"
 
 
 def test_interrupted_trial_is_not_a_completed_task(tmp_path):
@@ -117,3 +130,5 @@ def test_interrupted_trial_is_not_a_completed_task(tmp_path):
     assert envelope["outcome"] == "aborted"
     assert envelope["attempts"][0]["status"] == "aborted"
     assert envelope["recovery"]["attempted"] is False
+    assert envelope["routine"]["resume"]["status"] == "refused"
+    assert envelope["routine"]["resume"]["reason"] == "aborted"

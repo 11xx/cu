@@ -21,7 +21,7 @@ The disposable headless-output interaction demo is documented in
 [docs/publication-demo.md](docs/publication-demo.md); its GIF is local evidence,
 not a hosted product claim.
 
-The caller-managed checkpoint prototype is described in [docs/routines.md](docs/routines.md).
+The caller-managed task context is described in [docs/routines.md](docs/routines.md).
 
 The conditional executor decision and future trial contract are in
 [docs/executor-trial.md](docs/executor-trial.md); unknown costs keep the current

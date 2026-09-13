@@ -17,8 +17,9 @@ Use it when a task needs the real screen rather than the filesystem. `cu` acts
 on the **visible desktop** by default, and that is a safety property rather
 than a limitation: the user can watch what you do and stop you.
 
-There is no state to hold between calls except frame ids and, if you open one,
-a session id — both live on disk. Every command takes --json.
+CU does not own task state between calls except frame ids and, if you open one,
+a session id — both live on disk. A caller may keep a bounded task context in
+its own storage, but CU never loads it implicitly. Every command takes --json.
 
 EXPLICIT PRACTICE AND BENCHMARKS
   cu playground                 Serve a disposable local page; print its URL.
@@ -476,6 +477,25 @@ RECOVER AT THE FIRST UNCERTAIN STEP
   batch result before choosing the next action; no retry is implied by a
   missing image or a transport error. A fresh observation is evidence, not
   permission to continue.
+
+  TASK-LOCAL CONTEXT
+    A caller-managed context can retain exact task identity, parameters,
+    pending exceptions, and receipts for verified completed effects across a
+    warm or cold follow-up. Reuse compares task, destination, revision,
+    document, scope, and parameters; a mismatch refuses the context.
+    Completed membership is not proof: the caller must recheck each relative
+    artifact path, size, and digest. Missing or changed artifacts return to
+    the decision boundary, while verified effects remain the only prefix that
+    may be skipped. No context operation retries or replays an action.
+    After inspection, hand a decided chunk to existing `cu batch`, a reviewed
+    recipe, or the caller's worker handoff; the context is not an executor.
+
+    Old frame and lease identifiers are historical evidence only. Reacquire a
+    fresh target through CU and inspect it before acting; a context never
+    supplies rebound coordinates or runtime authority. Preserve first-attempt
+    and eventual outcomes, failures, recovery, abort, and round shape as
+    separate evidence. This task-local context is not a recipe, `cu know`
+    entry, approval, durable store, or cost result.
 
 CHOOSE THE POSTCONDITION BEFORE INPUT
   Name the fact that will make the action meaningful before sending it. A
