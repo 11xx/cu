@@ -389,12 +389,14 @@ resolves to one exact observed address at capture time and is stored as
 `target_window`, separately from the source pixels, output geometry, and the
 `window` field. This lets a native dialog remain observable when ordinary
 window capture would refuse its obstruction. Aimed input rechecks the target's
-address, class, geometry, content identity when available, visible windows, and
-covering layer surfaces immediately before dispatch and after device
-settlement. A top or overlay layer or more than one possible window refuses
-with `TARGET_AMBIGUOUS` (31); background and bottom layers remain below the
-window. An unbound output or region retains its observational meaning and
-records `target_window: null`.
+address, class, geometry, content identity when available, output geometry and
+scale, visible windows, and covering layer surfaces immediately before dispatch
+and after device settlement. A compositor warp performs the same check after
+the pointer lands, and aimed typing repeats it before each chord. A top or
+overlay layer or more than one possible window refuses with
+`TARGET_AMBIGUOUS` (31); background and bottom layers remain below the window.
+An unbound output or region retains its observational meaning and records
+`target_window: null`.
 
 Aimed capture is an optimization over a working default, not the default
 itself. `--window active` stays the recommended first call.

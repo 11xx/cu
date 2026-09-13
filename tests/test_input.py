@@ -265,14 +265,17 @@ def test_output_frame_preflight_uses_snapshot_monitors_without_another_query(
     assert resolved["aimed"]["logical"] == {"x": 10, "y": 10}
 
 
-def test_target_window_refuses_replacement_before_the_button_event(monkeypatch):
+@pytest.mark.parametrize("replacement_class", ["second", "first"])
+def test_target_window_refuses_replacement_before_the_button_event(
+    monkeypatch, replacement_class
+):
     """A target assertion prevents a delayed replacement from receiving input."""
     monitor = {
         "name": "DP-1",
         "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
     }
     target = at(0, 0, 100, 100, address="0x1", cls="first")
-    replacement = {**target, "address": "0x2", "class": "second"}
+    replacement = {**target, "address": "0x2", "class": replacement_class}
     frame = {
         "id": "f1",
         "captured_at": __import__("time").time(),
@@ -319,6 +322,229 @@ def test_target_window_refuses_replacement_before_the_button_event(monkeypatch):
 
     assert cli.main(["click", "--frame", "f1", "--at", "50,50"]) == exits.FOCUS_CHANGED
     assert clicked == []
+
+
+def test_target_window_refuses_scale_drift_after_device_settlement(monkeypatch):
+    captured_monitor = {
+        "name": "DP-1",
+        "scale": 1.0,
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+    }
+    live_monitor = {**captured_monitor}
+    target = at(0, 0, 100, 100, address="0x1", cls="first")
+    frame = {
+        "id": "f1",
+        "captured_at": __import__("time").time(),
+        "logical_rect": captured_monitor["logical_rect"],
+        "image_size": {"w": 100, "h": 100},
+        "window": None,
+        "target_window": target,
+        "monitor": captured_monitor,
+    }
+    current = [target]
+    snapshot = {
+        "monitors": [captured_monitor],
+        "windows": current,
+        "focused": target,
+        "cursor_logical": {"x": 50, "y": 50},
+        "layer_surfaces": [],
+    }
+    clicked = []
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            live_monitor["scale"] = 1.25
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def click(self, *args):
+            clicked.append(args)
+
+    monkeypatch.setattr(actions.frames, "load", lambda _frame_id: frame)
+    monkeypatch.setattr(observe, "snapshot", lambda: snapshot)
+    monkeypatch.setattr(observe, "monitors", lambda: [live_monitor])
+    monkeypatch.setattr(observe, "windows", lambda _monitors: current)
+    monkeypatch.setattr(observe, "cursor", lambda: {"x": 50, "y": 50})
+    monkeypatch.setattr(observe, "layer_surfaces", lambda: [])
+    monkeypatch.setattr(actions.hypr, "move_cursor", lambda *_args: None)
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    monkeypatch.setattr(checks, "_processes", lambda **_kwargs: [])
+
+    assert cli.main(["click", "--frame", "f1", "--at", "50,50"]) == exits.STALE_FRAME
+    assert clicked == []
+
+
+def test_window_frame_refuses_a_layer_appearing_after_device_settlement(monkeypatch):
+    monitor = {
+        "name": "DP-1",
+        "scale": 1.0,
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+    }
+    target = at(0, 0, 100, 100, address="0x1", cls="first")
+    frame = {
+        "id": "f1",
+        "captured_at": __import__("time").time(),
+        "logical_rect": monitor["logical_rect"],
+        "image_size": {"w": 100, "h": 100},
+        "window": {key: target[key] for key in ("address", "class", "title", "logical_rect")},
+        "monitor": monitor,
+    }
+    layers = []
+    snapshot = {
+        "monitors": [monitor],
+        "windows": [target],
+        "focused": target,
+        "cursor_logical": {"x": 50, "y": 50},
+        "layer_surfaces": layers,
+    }
+    clicked = []
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            layers[:] = [{
+                "address": "layer-1",
+                "namespace": "modal",
+                "level": 3,
+                "logical_rect": monitor["logical_rect"],
+            }]
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def click(self, *args):
+            clicked.append(args)
+
+    monkeypatch.setattr(actions.frames, "load", lambda _frame_id: frame)
+    monkeypatch.setattr(observe, "snapshot", lambda: snapshot)
+    monkeypatch.setattr(observe, "monitors", lambda: [monitor])
+    monkeypatch.setattr(observe, "windows", lambda _monitors: [target])
+    monkeypatch.setattr(observe, "cursor", lambda: {"x": 50, "y": 50})
+    monkeypatch.setattr(observe, "layer_surfaces", lambda: layers)
+    monkeypatch.setattr(actions.hypr, "move_cursor", lambda *_args: None)
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    monkeypatch.setattr(checks, "_processes", lambda **_kwargs: [])
+
+    assert cli.main(["click", "--frame", "f1", "--at", "50,50"]) == exits.TARGET_AMBIGUOUS
+    assert clicked == []
+
+
+def test_warp_refuses_a_replacement_after_compositor_settlement(monkeypatch):
+    monitor = {
+        "name": "DP-1",
+        "scale": 1.0,
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+    }
+    target = at(0, 0, 100, 100, address="0x1", cls="first")
+    replacement = {**target, "address": "0x2", "class": "second"}
+    current = [target]
+    frame = {
+        "id": "f1",
+        "captured_at": __import__("time").time(),
+        "logical_rect": monitor["logical_rect"],
+        "image_size": {"w": 100, "h": 100},
+        "window": None,
+        "target_window": target,
+        "monitor": monitor,
+    }
+    snapshot = {
+        "monitors": [monitor],
+        "windows": current,
+        "focused": target,
+        "cursor_logical": {"x": 50, "y": 50},
+        "layer_surfaces": [],
+    }
+
+    def move_cursor(*_args):
+        current[:] = [replacement]
+
+    monkeypatch.setattr(actions.frames, "load", lambda _frame_id: frame)
+    monkeypatch.setattr(observe, "snapshot", lambda: snapshot)
+    monkeypatch.setattr(observe, "monitors", lambda: [monitor])
+    monkeypatch.setattr(observe, "windows", lambda _monitors: current)
+    monkeypatch.setattr(observe, "cursor", lambda: {"x": 50, "y": 50})
+    monkeypatch.setattr(observe, "layer_surfaces", lambda: [])
+    monkeypatch.setattr(actions.hypr, "move_cursor", move_cursor)
+    monkeypatch.setattr(checks, "_processes", lambda **_kwargs: [])
+
+    assert cli.main(["warp", "--frame", "f1", "--at", "50,50"]) == exits.FOCUS_CHANGED
+
+
+@pytest.mark.parametrize("child_after_click", [False, True])
+def test_aimed_type_rechecks_the_target_before_text(
+    monkeypatch, child_after_click
+):
+    monitor = {
+        "name": "DP-1",
+        "scale": 1.0,
+        "logical_rect": {"x": 0, "y": 0, "w": 100, "h": 100},
+    }
+    target = at(0, 0, 100, 100, address="0x1", cls="first")
+    child = {**target, "address": "0x2", "class": "dialog", "focus_order": 1}
+    current = [target]
+    frame = {
+        "id": "f1",
+        "captured_at": __import__("time").time(),
+        "logical_rect": monitor["logical_rect"],
+        "image_size": {"w": 100, "h": 100},
+        "window": None,
+        "target_window": target,
+        "monitor": monitor,
+    }
+    snapshot = {
+        "monitors": [monitor],
+        "windows": current,
+        "focused": target,
+        "cursor_logical": {"x": 50, "y": 50},
+        "layer_surfaces": [],
+    }
+    events = []
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def click(self, *args):
+            events.append(("button", args))
+            if child_after_click:
+                current.append(child)
+
+        def chord(self, chord, _press_ms):
+            events.append(("text", chord))
+
+    monkeypatch.setattr(actions.frames, "load", lambda _frame_id: frame)
+    monkeypatch.setattr(observe, "snapshot", lambda: snapshot)
+    monkeypatch.setattr(observe, "monitors", lambda: [monitor])
+    monkeypatch.setattr(observe, "windows", lambda _monitors: current)
+    monkeypatch.setattr(observe, "focused", lambda: target)
+    monkeypatch.setattr(observe, "cursor", lambda: {"x": 50, "y": 50})
+    monkeypatch.setattr(observe, "layer_surfaces", lambda: [])
+    monkeypatch.setattr(actions.hypr, "move_cursor", lambda *_args: None)
+    monkeypatch.setattr(actions.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    monkeypatch.setattr(checks, "_processes", lambda **_kwargs: [])
+
+    code = cli.main([
+        "type", "probe", "--method", "keys", "--frame", "f1", "--at", "50,50"
+    ])
+    assert code == (exits.TARGET_AMBIGUOUS if child_after_click else exits.OK)
+    assert [kind for kind, _args in events] == (
+        ["button"] if child_after_click else ["button", "text", "text", "text", "text", "text"]
+    )
 
 
 def test_target_window_refuses_an_ambiguous_overlap():
@@ -452,6 +678,8 @@ def test_a_click_rechecks_the_target_after_device_settlement(monkeypatch):
     monkeypatch.setattr(observe, "snapshot", lambda: snapshot)
     monkeypatch.setattr(observe, "windows", lambda _monitors: [overlay])
     monkeypatch.setattr(observe, "cursor", lambda: {"x": 10, "y": 10})
+    monkeypatch.setattr(observe, "monitors", lambda: [])
+    monkeypatch.setattr(observe, "layer_surfaces", lambda: [])
     monkeypatch.setattr(actions, "warp", lambda *a, **k: {"x": 10, "y": 10})
     monkeypatch.setattr(safety, "_common", lambda *a, **k: None)
 

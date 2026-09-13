@@ -41,6 +41,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(observe, "windows", lambda *_: snap["windows"])
     monkeypatch.setattr(observe, "focused", lambda: snap["focused"])
     monkeypatch.setattr(observe, "cursor", lambda: snap["cursor_logical"])
+    monkeypatch.setattr(observe, "layer_surfaces", lambda: snap["layer_surfaces"])
     monkeypatch.setattr(checks, "_processes", lambda **_: [])
     monkeypatch.setattr(capture, "grab_region", lambda rect, dest, scale: dest.write_bytes(
         png.encode(2, 1, bytes([10, 20, 30, 255]) * 2)))
@@ -230,9 +231,13 @@ def test_magnified_output_remains_actionable(world, capsys):
             logical_rect=world["monitors"][0]["logical_rect"],
             image_size={"w": 2, "h": 1}, scratch=scratch,
             monitor=world["monitors"][0], captured_at=time.time(),
+            target_window={key: world["windows"][0][key] for key in (
+                "address", "class", "title", "logical_rect"
+            )},
         )
     assert cli.main(["magnify", "--frame", original["id"], "--scale", "2", "--json"]) == 0
     enlarged = json.loads(capsys.readouterr().out)
+    assert enlarged["target_window"]["address"] == "0x1"
     assert cli.main(["move", "--frame", enlarged["id"], "--at", "1,1", "--dry-run"]) == 0
 
 

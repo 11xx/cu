@@ -211,6 +211,29 @@ def _window_staleness(
     return None
 
 
+def _monitor_staleness(
+    frame: dict[str, Any], monitors: list[dict[str, Any]], *, required: bool = False
+) -> str | None:
+    """Check the output geometry and scale a frame's pixels came from."""
+    captured = frame.get("monitor") or {}
+    if not captured:
+        return "frame has no captured output geometry" if required else None
+    captured_rect = captured.get("logical_rect")
+    if captured_rect is None:
+        return "frame has no captured output geometry" if required else None
+    live = next((m for m in monitors if m.get("name") == captured.get("name")), None)
+    if live is None:
+        return f"output {captured.get('name', '<unknown>')} is gone"
+    if live.get("logical_rect") != captured_rect:
+        return f"output {captured['name']} moved or changed size since capture"
+    if "scale" in captured and live.get("scale") != captured["scale"]:
+        return (
+            f"output {captured['name']} scale changed from {captured['scale']} "
+            f"to {live.get('scale', '<unknown>')} since capture"
+        )
+    return None
+
+
 def staleness(
     frame: dict[str, Any],
     windows: list[dict[str, Any]],
@@ -232,19 +255,16 @@ def staleness(
     window = frame.get("window")
     target_window = frame.get("target_window") if window is None else None
     if window is None:
-        monitor = frame.get("monitor") or {}
-        captured = monitor.get("logical_rect")
-        if captured is None:
-            return "frame has no captured output geometry"
-        live = next((m for m in monitors if m["name"] == monitor.get("name")), None)
-        if live is None:
-            return f"output {monitor.get('name', '<unknown>')} is gone"
-        if live["logical_rect"] != captured:
-            return f"output {monitor['name']} moved or changed size since capture"
+        why = _monitor_staleness(frame, monitors, required=True)
+        if why:
+            return why
         if target_window is not None:
             return _window_staleness("target window", target_window, windows)
         return None
-    return _window_staleness("window", window, windows)
+    why = _window_staleness("window", window, windows)
+    if why:
+        return why
+    return _monitor_staleness(frame, monitors)
 
 
 def content_drift(

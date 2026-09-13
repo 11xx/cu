@@ -115,6 +115,18 @@ def test_changed_output_geometry_makes_a_frame_stale():
     assert "moved" in frames.staleness(output_frame(), [], moved)
 
 
+def test_changed_output_scale_makes_a_frame_stale():
+    monitor = {**MONITORS[1], "scale": 1.0}
+    f = frame(
+        monitor["logical_rect"],
+        {"w": 1, "h": 1},
+        window=None,
+        monitor=monitor,
+    )
+    live = [{**monitor, "scale": 1.25}]
+    assert "scale" in frames.staleness(f, [], live)
+
+
 def test_vanished_output_makes_a_frame_stale():
     assert "gone" in frames.staleness(output_frame(), [], [MONITORS[0]])
 
@@ -337,6 +349,44 @@ def test_output_region_can_bind_an_intended_window_without_window_capture(
     assert frame["target_window"]["address"] == "0x1"
     assert frame["target_window"]["class"] == "zen"
     assert frame["target_window"]["logical_rect"] == target["logical_rect"]
+
+
+def test_if_changed_does_not_reuse_a_frame_for_another_target_window(
+    monkeypatch, capsys
+):
+    cli, _ = _region_shot_world(monkeypatch)
+    target = {
+        "address": "0x1",
+        "class": "zen",
+        "title": "first",
+        "logical_rect": {"x": 0, "y": 0, "w": 900, "h": 500},
+        "visible": True,
+        "hidden": False,
+    }
+    replacement = {**target, "address": "0x2", "title": "second"}
+    current = [target]
+    snap = {
+        "monitors": [{**MONITORS[1], "scale": 1.0}],
+        "windows": current,
+        "focused": target,
+        "cursor_logical": {"x": 0, "y": 0},
+        "desktop_logical_bounds": MONITORS[1]["logical_rect"],
+        "layer_surfaces": [],
+    }
+    monkeypatch.setattr(cli.observe, "snapshot", lambda: snap)
+    monkeypatch.setattr(cli.observe, "windows", lambda _monitors: current)
+
+    args = [
+        "shot", "--json", "--if-changed", "--output", "DP-2", "--region", "0,0 900x26",
+        "--target-window",
+    ]
+    assert cli.main([*args, "0x1"]) == exits.OK
+    first = json.loads(capsys.readouterr().out)
+    current[:] = [replacement]
+    assert cli.main([*args, "0x2"]) == exits.OK
+    second = json.loads(capsys.readouterr().out)
+    assert second["id"] != first["id"]
+    assert second["target_window"]["address"] == "0x2"
 
 
 def test_an_output_relative_region_clamps_to_its_named_output(monkeypatch, capsys):
@@ -794,6 +844,39 @@ def test_after_refuses_a_probe_with_a_different_image_size(monkeypatch, capsys):
     assert cli.main(_watch_argv(reference)) == exits.STALE_FRAME
     assert "capture conditions changed" in capsys.readouterr().err
     assert len(list(frames.store_dir().glob("f*.json"))) == 1
+
+
+def test_after_refuses_a_replaced_target_before_publishing(monkeypatch, capsys):
+    original = _watch_png(1)
+    changed = _watch_png(2)
+    cli, reference = _watch_world(monkeypatch, [original, changed])
+    target = {
+        "address": "0x1",
+        "class": "zen",
+        "title": "first",
+        "logical_rect": reference["logical_rect"],
+    }
+    replacement = {**target, "address": "0x2", "title": "second"}
+    reference["target_window"] = target
+    frames.save(reference)
+    calls = [0]
+
+    def snapshot():
+        calls[0] += 1
+        current = target if calls[0] == 1 else replacement
+        return {
+            "monitors": [reference["monitor"]],
+            "windows": [current],
+            "focused": current,
+            "cursor_logical": {"x": 7, "y": 8},
+            "desktop_logical_bounds": reference["logical_rect"],
+            "layer_surfaces": [],
+        }
+
+    monkeypatch.setattr(cli.observe, "snapshot", snapshot)
+    assert cli.main(_watch_argv(reference, "--quiet-ms", "0")) == exits.STALE_FRAME
+    assert "gone" in capsys.readouterr().err
+    assert len(list(frames.store_dir().glob("*.json"))) == 1
 
 
 @pytest.mark.parametrize(
