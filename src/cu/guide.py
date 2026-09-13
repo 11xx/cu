@@ -182,6 +182,9 @@ CAPTURE ONLY WHAT YOU NEED TO READ
 
 ACT THROUGH THE FRAME YOU READ
   cu focus zen
+  cu present zen --why 'make the target readable'
+  cu present zen --output OUTPUT-A --why 'move the target to this output'
+  cu restore TOKEN --why 'return the target after reading it'
   cu warp --frame f3 --at 412,300
   cu move --frame f3 --at 412,300 --duration 0.25 --hz 60
   cu move --frame f3 --at 412,300 --timings --json
@@ -228,13 +231,25 @@ ACT THROUGH THE FRAME YOU READ
   rechecks abort, focus, and pointer ownership and is bounded to ten seconds;
   it yields instead of completing after an interruption.
 
-  Native pointer, keyboard, and focus commands take --dry-run: each interlock
-  runs and the log is written without emitting an event.
+  Native pointer, keyboard, focus, and presentation commands take --dry-run:
+  each interlock runs and the log is written without changing the desktop.
 
   `focus` is the explicit operation that can bring a named window's workspace
-  into view. Capture does not arrange a window, and there is no automatic
-  maximize, fullscreen, move, or restore step. Treat any layout change as a
-  visible user decision until a reversible presentation contract is available.
+  into view. Capture does not arrange a window. There is no automatic
+  arrangement: presentation is a separate explicit request.
+  `present WINDOW` is the separate, explicit arrangement request: it requires
+  a visible window, uses its active output unless `--output NAME` selects
+  another active output, makes a tiled target floating when needed, and moves
+  its current rectangle to the selected output's center. It does not guess a
+  resize or fullscreen operation. Each compositor step is read back, and the
+  result carries the actual before and after state plus an opaque runtime token.
+  `restore TOKEN` changes the window only while its identity and presented
+  geometry, floating, workspace, output, and visibility state still match the
+  token. A mismatch invalidates the token and refuses without overwriting the
+  current arrangement; a compositor refusal or partial read-back is an error
+  with the actual state attached. The token is volatile and is not application
+  knowledge. These presentation claims describe the implemented Hyprland seam,
+  not universal compositor support.
 
   A frame is bound to what it depicted, not only to where. A window that keeps
   its place while its content changes — a tab that navigated, a view that was
@@ -270,6 +285,11 @@ EXIT CODES ARE THE CONTRACT
   32  Native movement did not converge  Inspect the pointer/device before trying again
   33  Native route leaves safe frame    Capture wider or place the pointer inside first
   34  Point is outside active outputs   Choose a reachable point or change the layout explicitly
+  35  Presentation was refused          Inspect actual state before trying again
+  36  Presentation was partial          Inspect actual state; do NOT replay blindly
+  37  Window changed after presentation Restoration refused; current state was preserved
+  38  Presentation identity is stale     Re-observe and present again
+  39  Presentation token is invalid     Re-observe and present again
   40  The user aborted                  Stop. Do not retry. Do not clear it.
   41  The user is moving the mouse      Yield; wait before retrying
   42  Another agent is driving          Wait for it to finish, then retry

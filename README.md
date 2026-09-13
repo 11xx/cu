@@ -94,6 +94,8 @@ cu profiles                      # what a capture costs each consumer
 
 cu wait window-open --class zen  # block on a compositor event
 cu focus zen                     # give a window keyboard focus
+cu present zen --why 'make the target readable' # explicit bounded arrangement
+cu restore <token> --why 'return the target'    # restore only unchanged state
 cu warp  --frame f3 --at 412,300 # place the compositor pointer exactly
 cu move  --frame f3 --at 412,300 # bounded native movement to a frame coordinate
 cu move  --frame f3 --at 412,300 --timings --json # native cost evidence
@@ -124,6 +126,12 @@ cu session end
 
 Every injecting command takes `--dry-run`, which runs every interlock and
 writes the same log entry without emitting a single event.
+
+`cu present` and `cu restore` are explicit compositor arrangements, not capture
+side effects. Presentation requires a visible window, records actual
+before/after state in a volatile token, and may refuse or leave a typed partial
+outcome when read-back disagrees. Restoration refuses after a window identity
+or relevant arrangement state changes; it never overwrites that current state.
 
 Receipts and opt-in metrics carry a generated `invocation_id`, the explicit CU
 session when named, and optional `CU_HARNESS`/`CU_HARNESS_SESSION` join keys.

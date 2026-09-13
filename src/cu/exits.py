@@ -27,6 +27,11 @@ TARGET_AMBIGUOUS = 31
 MOTION_NOT_CONVERGED = 32
 MOTION_UNSAFE_ROUTE = 33
 UNREACHABLE_AIM = 34
+PRESENTATION_REFUSED = 35
+PRESENTATION_PARTIAL = 36
+PRESENTATION_CHANGED = 37
+PRESENTATION_STALE = 38
+PRESENTATION_TOKEN = 39
 ABORTED_BY_USER = 40
 HUMAN_ACTIVE = 41
 DESKTOP_BUSY = 42
@@ -101,6 +106,26 @@ RESPONSE = {
     UNREACHABLE_AIM: (
         "The aimed point is outside the union of active outputs. "
         "Choose a reachable point or explicitly change the desktop layout."
+    ),
+    PRESENTATION_REFUSED: (
+        "The compositor refused the requested presentation or its read-back was unchanged. "
+        "Inspect the actual state before trying again."
+    ),
+    PRESENTATION_PARTIAL: (
+        "Presentation or restoration was only partly applied. "
+        "Inspect the actual window state; do not replay blindly."
+    ),
+    PRESENTATION_CHANGED: (
+        "The window changed after presentation. Restoration was refused and "
+        "the current state was preserved."
+    ),
+    PRESENTATION_STALE: (
+        "The presentation token's window identity is stale or unknown. "
+        "Re-observe and present again."
+    ),
+    PRESENTATION_TOKEN: (
+        "The presentation token is missing, invalid, or already consumed. "
+        "Re-observe and present again."
     ),
     DENIED_BY_POLICY: "Refused by the denylist or a locked session. Do not retry; tell the user.",
     ABORTED_BY_USER: (
