@@ -1024,7 +1024,12 @@ def browser_action(
     )
     result.update(
         {"action": "browser", "semantic": action, "browser": target["name"],
-         "resolved_from": source}
+         "resolved_from": source,
+         "delivery": "not-dispatched" if dry_run else "dispatched",
+         "effect": {
+             "status": "unknown",
+             "meaning": "native delivery does not verify browser closure or navigation",
+         }}
     )
     safety.record(cfg, result)
     return result

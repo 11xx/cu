@@ -374,6 +374,13 @@ BROWSERS
   reaches an edge, so an address bar missing from a capture may be revealable
   rather than absent. That is one instance of the pattern below.
 
+  Native browser actions report the binding they resolved and whether CU
+  dispatched it. They do not claim that a tab closed, a download opened, or a
+  Library window appeared. For close or navigation, wait for the exact window or
+  grant change and observe it; an auxiliary window of the same class can have a
+  different shortcut context. If delivery is uncertain, inspect before any
+  retry.
+
 OPTIONAL FIREFOX CU BROWSER
   cu web setup
   cu web hosts --json
