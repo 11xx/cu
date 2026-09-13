@@ -151,10 +151,16 @@ event delta is not a logical-pixel distance. The route is checked against the
 inspected frame before every sample; abort, stale target, a pointer outside the
 route, device failure, deadline, or non-convergence stops the operation. It
 never finishes with a hidden warp. A pointer displacement between native
-samples is treated as user intervention and yields with `HUMAN_ACTIVE` instead
-of being corrected as acceleration. A submitted event gets a bounded delivery
+samples, with no pending event, yields with `HUMAN_ACTIVE` instead of being
+corrected as acceleration. While an event is pending, CU checks displacement
+against the submitted relative delta: positive forward motion and at most the
+endpoint tolerance of transverse deviation. Acceleration may overshoot a sampled
+waypoint; reducing distance to that waypoint is not a delivery requirement.
+Cursor readback alone cannot distinguish an own event from a coincident human
+movement consistent with that event. A submitted event gets a bounded delivery
 settle read before another correction; an event that never becomes visible
-yields with `MOTION_NOT_CONVERGED`. A click remains: warp through IPC, assert
+(including subpixel motion rounded back to the origin) yields with
+`MOTION_NOT_CONVERGED` rather than being replayed or attributed to a human. A click remains: warp through IPC, assert
 the expected window is still under the point, then press and release through
 uinput.
 

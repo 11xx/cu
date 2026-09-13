@@ -8,6 +8,8 @@ in the wrong window.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from cu import actions, checks, cli, compositor, config, exits, observe, safety, uinput
@@ -585,7 +587,10 @@ def test_native_move_uses_relative_device_without_a_final_warp(monkeypatch):
     assert deltas
 
 
-def test_native_move_yields_when_pointer_moves_between_samples(monkeypatch):
+@pytest.mark.parametrize("duration, expected_events", [(0.2, 1), (0.1, 2)])
+def test_native_move_yields_when_pointer_moves_between_samples(
+    monkeypatch, duration, expected_events
+):
     _frame, cursor = _native_move_fixture(monkeypatch)
     clock = [0.0]
     moves = []
@@ -616,9 +621,9 @@ def test_native_move_yields_when_pointer_moves_between_samples(monkeypatch):
 
     monkeypatch.setattr(actions.uinput, "Device", Device)
     with pytest.raises(Refused) as caught:
-        actions.move(CFG, "f1", (40, 40), duration=0.2, hz=10, timeout=1, dry_run=False)
+        actions.move(CFG, "f1", (40, 40), duration=duration, hz=10, timeout=1, dry_run=False)
     assert caught.value.code == exits.HUMAN_ACTIVE
-    assert len(moves) == 1
+    assert len(moves) == expected_events
 
 
 def test_native_move_accepts_delayed_own_event_delivery(monkeypatch):
@@ -1132,3 +1137,126 @@ def test_text_that_landed_is_never_logged_as_a_bare_click(monkeypatch):
     with pytest.raises(actions.ClipboardError):
         actions.type_text(CFG, "443", frame_id="f23", at=(455, 320), dry_run=False)
     assert [e["action"] for e in recorded] == []
+
+
+@pytest.mark.parametrize("gain", [0.5, 1.0, 1.5, 2.0])
+@pytest.mark.parametrize("delayed", [False, True])
+@pytest.mark.parametrize("quantized", [False, True])
+def test_native_cli_classifies_scaled_and_quantized_delivery(
+    monkeypatch, capsys, tmp_path, gain, delayed, quantized
+):
+    _frame, cursor = _native_move_fixture(monkeypatch)
+    monkeypatch.setattr(config, "log_path", lambda _cfg: tmp_path / "actions.jsonl")
+    clock = [0.0]
+    pending = []
+    position = dict(cursor[0])
+    emitted = []
+
+    def apply(dx, dy):
+        position["x"] += gain * dx
+        position["y"] += gain * dy
+        cursor[0] = {
+            axis: round(value) if quantized else value
+            for axis, value in position.items()
+        }
+
+    def sleep(seconds):
+        clock[0] += seconds
+        while pending:
+            apply(*pending.pop(0))
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def move_relative(self, dx, dy):
+            emitted.append((dx, dy))
+            if delayed:
+                pending.append((dx, dy))
+            else:
+                apply(dx, dy)
+
+    monkeypatch.setattr(actions.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(actions.time, "sleep", sleep)
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    monkeypatch.setattr(actions.hypr, "move_cursor", lambda *_: pytest.fail("native move warped"))
+    code = cli.main(["move", "--frame", "f1", "--at", "30,30", "--json"])
+    if quantized and gain == 0.5:
+        # The first half-pixel delta rounds back to the origin. With no
+        # observable delivery, CU must not label it human or stack more input.
+        assert code == exits.MOTION_NOT_CONVERGED
+        assert len(emitted) == 1
+        return
+    assert code == exits.OK
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "converged"
+    assert sum((result["cursor"][axis] - 30) ** 2 for axis in ("x", "y")) <= (
+        actions.MOTION_TOLERANCE ** 2
+    )
+
+
+@pytest.mark.parametrize("direction", ["reverse", "transverse"])
+def test_native_cli_yields_to_delivery_inconsistent_with_its_delta(
+    monkeypatch, direction
+):
+    _frame, cursor = _native_move_fixture(monkeypatch)
+    emitted = []
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def move_relative(self, dx, dy):
+            emitted.append((dx, dy))
+            mx, my = (-dx, -dy) if direction == "reverse" else (-dy, dx)
+            cursor[0] = {"x": cursor[0]["x"] + mx, "y": cursor[0]["y"] + my}
+
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    monkeypatch.setattr(actions.time, "sleep", lambda _seconds: None)
+    assert cli.main(["move", "--frame", "f1", "--at", "30,30"]) == exits.HUMAN_ACTIVE
+    assert len(emitted) == 1
+
+
+def test_native_cli_honors_abort_while_waiting_for_delivery(monkeypatch):
+    _native_move_fixture(monkeypatch)
+    clock = [0.0]
+    submitted = [False]
+    aborted = [False]
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if submitted[0]:
+            aborted[0] = True
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def move_relative(self, _dx, _dy):
+            submitted[0] = True
+
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    monkeypatch.setattr(actions.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(actions.time, "sleep", sleep)
+    monkeypatch.setattr(config, "aborted", lambda: aborted[0])
+    assert cli.main([
+        "move", "--frame", "f1", "--at", "30,30", "--duration", "0.1", "--hz", "10",
+    ]) == exits.ABORTED_BY_USER

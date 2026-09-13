@@ -288,36 +288,39 @@ def _confirm_motion_cursor(
 def _confirm_native_delivery(
     origin: dict[str, float],
     current: dict[str, float],
-    waypoint: dict[str, float],
+    delta: tuple[int, int],
     frame: dict[str, Any],
 ) -> None:
-    """Accept a delayed own event only when it made bounded route progress."""
+    """Allow gain and rounding along the submitted event, including overshoot."""
     if not _inside(frame["logical_rect"], current):
         raise Refused(
             exits.HUMAN_ACTIVE,
             "pointer moved outside the inspected native movement region; yielding to the user",
         )
-    before = math.hypot(waypoint["x"] - origin["x"], waypoint["y"] - origin["y"])
-    after = math.hypot(waypoint["x"] - current["x"], waypoint["y"] - current["y"])
-    if after >= before:
+    dx, dy = delta
+    moved_x, moved_y = current["x"] - origin["x"], current["y"] - origin["y"]
+    forward = moved_x * dx + moved_y * dy
+    transverse = abs(moved_x * dy - moved_y * dx)
+    if forward <= 0 or transverse > MOTION_TOLERANCE * math.hypot(dx, dy):
         raise Refused(
             exits.HUMAN_ACTIVE,
-            "pointer movement did not make progress toward the native waypoint; yielding",
+            "pointer movement disagrees with the submitted native delta; yielding",
         )
 
 
 def _settle_native_delivery(
     origin: dict[str, float],
-    waypoint: dict[str, float],
+    delta: tuple[int, int],
     frame: dict[str, Any],
     deadline: float,
 ) -> dict[str, float]:
     """Wait briefly for a submitted event to become visible to cursor reads."""
     settle_deadline = min(deadline, time.monotonic() + NATIVE_SETTLE_TIMEOUT)
     while True:
+        safety.check_abort()
         current = observe.cursor()
         if current != origin:
-            _confirm_native_delivery(origin, current, waypoint, frame)
+            _confirm_native_delivery(origin, current, delta, frame)
             return current
         remaining = settle_deadline - time.monotonic()
         if remaining <= 0:
@@ -390,7 +393,7 @@ def move(
     deadline = started + timeout
     period = 1 / hz
     actual = start
-    pending_own: tuple[dict[str, float], dict[str, float]] | None = None
+    pending_own: tuple[dict[str, float], tuple[int, int]] | None = None
     with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
         settled = observe.cursor()
         safety.confirm_pointer(cfg, (start["x"], start["y"]), settled)
@@ -409,8 +412,8 @@ def move(
                 observe.layer_surfaces() if frame.get("target_window") is not None else layers
             )
             if pending_own is not None:
-                origin, pending_waypoint = pending_own
-                actual = _settle_native_delivery(origin, pending_waypoint, frame, deadline)
+                origin, pending_delta = pending_own
+                actual = _settle_native_delivery(origin, pending_delta, frame, deadline)
                 last_own_cursor = actual
                 pending_own = None
             _motion_point_guard(
@@ -437,13 +440,11 @@ def move(
                 result["delta_events"] += 1
                 delivered = observe.cursor()
                 if delivered == origin:
-                    pending_own = (origin, dict(waypoint))
+                    pending_own = (origin, (dx, dy))
                 else:
-                    _confirm_native_delivery(origin, delivered, waypoint, frame)
+                    _confirm_native_delivery(origin, delivered, (dx, dy), frame)
                     last_own_cursor = delivered
-            actual = observe.cursor()
-            if pending_own is None:
-                last_own_cursor = actual
+            actual = last_own_cursor
         while True:
             live_monitors = observe.monitors() if frame.get("window") is None else monitors
             live_windows = observe.windows(live_monitors)
@@ -451,8 +452,8 @@ def move(
                 observe.layer_surfaces() if frame.get("target_window") is not None else layers
             )
             if pending_own is not None:
-                origin, pending_waypoint = pending_own
-                actual = _settle_native_delivery(origin, pending_waypoint, frame, deadline)
+                origin, pending_delta = pending_own
+                actual = _settle_native_delivery(origin, pending_delta, frame, deadline)
                 last_own_cursor = actual
                 pending_own = None
             actual = observe.cursor()
@@ -477,9 +478,9 @@ def move(
                 result["delta_events"] += 1
                 delivered = observe.cursor()
                 if delivered == origin:
-                    pending_own = (origin, dict(endpoint))
+                    pending_own = (origin, (dx, dy))
                 else:
-                    _confirm_native_delivery(origin, delivered, endpoint, frame)
+                    _confirm_native_delivery(origin, delivered, (dx, dy), frame)
                     last_own_cursor = delivered
             time.sleep(period)
     result.update(
