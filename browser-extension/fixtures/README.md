@@ -2,9 +2,10 @@
 
 `control.html` contains disposable controls, sensitive-field labels, delayed DOM
 readiness, replacement targets, application/event counters, a timer-reset hover
-target whose controls begin hidden, duration-labelled result cards, a scroll pane, and
-muted media controls. Its values are synthetic. It does not submit data or
-contact external services.
+target whose controls begin hidden, a four-item collection with hover-only
+selection and a bulk action, a no-bulk single-item example, duration-labelled
+result cards, a scroll pane, and muted media controls. Its values are synthetic.
+It does not submit data or contact external services.
 
 Run from the repository root. Generate the optional four-second media clip in a
 private runtime directory; do not commit generated media:
@@ -25,7 +26,10 @@ Use current document, generation, and element refs. Fill a value different from
 its initial value, then read it back. Verify clicks, native pointer entry, and
 synthetic hover through the counters rather than their delivery receipts. A
 `cu hover` pixel change shows that the page repainted; inspect the returned frame
-before calling the control revealed. Programmatic field changes
+before calling the control revealed. For the collection, hover one item first,
+then use the month-style select-all control and verify the selected count before
+the bulk action. Item 3 deterministically reports a partial failure so recovery
+can return to that item without replaying the whole batch. Programmatic field changes
 and replacement targets must invalidate previously observed refs; sensitive,
 disabled, hidden, and covered controls must refuse interaction. Wait for delayed
 readiness and advancing media time instead of sleeping. Candidate labels on the

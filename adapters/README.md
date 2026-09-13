@@ -44,6 +44,10 @@ The text block is JSON with schema `cu-observation/1`:
 - `actions.status` is `not-started`, `not-requested`, `unknown`, `completed`, or
   `refused`. A completed batch retains its CU results, including verification.
   CU refusals retain their numeric exit code. An interrupted action may be partial.
+- An action receipt proves dispatch through CU's input path, not that the
+  application accepted it. Choose a compositor event, changed-pixel frame,
+  granted browser state, or completed file/receipt as the postcondition that
+  can disprove the next claim.
 - `observation` is the unmodified frame descriptor, or null on every failure.
   Its ID, window/content identity, dimensions and logical rectangle belong to
   the sibling PNG. The adapter checks byte count, dimensions and SHA-256 before

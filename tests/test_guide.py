@@ -142,6 +142,22 @@ def test_the_tactic_prefers_widening_to_guessing_an_edge():
     assert "widen the capture rather than hovering each edge" in HIDDEN_UI
 
 
+POSTCONDITION = _section("CHOOSE THE POSTCONDITION BEFORE INPUT")
+
+
+def test_postcondition_guidance_names_the_four_evidence_channels():
+    for channel in ("compositor event", "watched pixels", "granted `cu web wait`", "file count"):
+        assert channel in POSTCONDITION
+    assert "input receipt says that an event was dispatched" in POSTCONDITION
+
+
+def test_bulk_guidance_requires_representative_selection_and_recovery():
+    assert "inspect one representative item" in POSTCONDITION
+    assert "verify the visible selection count" in POSTCONDITION
+    assert "recover only the failed items" in POSTCONDITION
+    assert "failed or unobserved reveal" in POSTCONDITION
+
+
 @pytest.mark.parametrize("command", ["cu know show", "cu move --frame", "cu shot --after",
                                      "cu know note"])
 def test_every_command_the_tactic_names_exists(command):
