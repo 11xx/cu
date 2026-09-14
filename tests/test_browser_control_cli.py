@@ -47,6 +47,7 @@ def bridge(monkeypatch):
             return {"ok": True, "result": {"kind": "action", "verification": "unverified"}}
 
         def capture(self, **kwargs):
+            state.requests.append(("capture", kwargs))
             return {"ok": True, "result": dict(state.capture)}
 
         def control(self, operation, **kwargs):
@@ -186,6 +187,29 @@ def test_browser_capture_validates_pixels_and_writes_a_private_nonframe(bridge, 
     bridge.capture["pixels"]["width"] = 3
     assert cli.main(args) == exits.BROWSER_READ_PROTOCOL
     assert list(path.parent.glob("*.png")) == [path]
+
+
+def test_browser_full_page_capture_asks_for_the_debugger_render(bridge, capsys):
+    image = png.encode(2, 3, bytes([0, 0, 255, 255]) * 6)
+    bridge.capture = {
+        "kind": "capture",
+        "backend": "debugger",
+        "png_base64": base64.b64encode(image).decode(),
+        "pixels": {"width": 2, "height": 3, "space": "image-pixels"},
+        "document_id": "fixture-document",
+        "tab_id": 1,
+        "generation": 0,
+        "document_size": {"width": 2, "height": 3, "space": "css-document"},
+        "actionable": False,
+    }
+    args = ["web", "capture", "--document", "fixture-document", "--generation", "0"]
+    assert cli.main([*args, "--full-page", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert Path(result["path"]).read_bytes() == image
+    assert bridge.requests[-1][1]["full_page"] is True
+    assert bridge.requests[-1][1]["region"] is None
+    assert cli.main([*args, "--full-page", "--region", "0,0 1x1", "--json"]) == exits.USAGE
+    assert len(bridge.requests) == 1
 
 
 def test_browser_region_capture_crops_a_known_pattern_and_preserves_coverage(bridge, capsys):

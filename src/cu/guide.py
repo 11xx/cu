@@ -669,8 +669,10 @@ OPTIONAL FIREFOX CU BROWSER
   the full browser viewport is captured, its image/viewport scale is validated,
   and the native host crops that rectangle while retaining requested and
   pixel-quantized returned coverage. The result is browser-rendered provenance,
-  not a CU frame, and it has no native-input authority. Full-page capture and
-  stitching are unsupported. The optional owned amber browser arrowhead is
+  not a CU frame, and it has no native-input authority. With the Chromium
+  debugger attached, `--full-page` renders the whole document as one image,
+  refusing before rendering when it would exceed the pixel budget; stitching is
+  unsupported. The optional owned amber browser arrowhead is
   selected in the popup, pointer-events-none, excluded from reads and capture,
   and never claims to move the OS cursor. Capture bounds are 512 KiB PNG and 16
   megapixels; at most 60 private runtime captures are kept.

@@ -195,7 +195,14 @@
     const value = payload === undefined || payload === null ? {} : payload;
     if (!isRecord(value)) throw new ValidationError("payload must be an object");
     if (operation === "capture") {
-      exactKeys(value, new Set(), new Set(["region"]));
+      exactKeys(value, new Set(), new Set(["region", "full_page"]));
+      if (Object.prototype.hasOwnProperty.call(value, "full_page")) {
+        if (Object.prototype.hasOwnProperty.call(value, "region"))
+          throw new ValidationError("capture takes a region or the full page, not both");
+        if (value.full_page !== true)
+          throw new ValidationError("capture full_page must be true when present");
+        return { full_page: true };
+      }
       return Object.prototype.hasOwnProperty.call(value, "region")
         ? { region: validateCaptureRegion(value.region) }
         : {};
@@ -1074,6 +1081,8 @@
           throw new ValidationError("capture grant is no longer current");
       };
       await assertCurrent();
+      if (request.payload.full_page)
+        return captureFullPage(request, grant, snapshot, assertCurrent);
       let before, after, image;
       try {
         before = await snapshot("capture-prep");
@@ -1124,7 +1133,88 @@
         limitations: {
           active_tab_only: true,
           region: "bounded-css-viewport",
-          full_page: "unsupported",
+          full_page: "debugger-only",
+          stitching: "unsupported",
+          compositor_frame: "unsupported",
+          atomic_navigation_binding: "unsupported",
+          css_to_compositor: "unsupported",
+        },
+      };
+    }
+    // The debugger renders beyond the viewport in one call, so the document's
+    // size is checked against the pixel budget before anything is rendered.
+    async function captureFullPage(request, grant, snapshot, assertCurrent) {
+      const debug = state.debug;
+      if (!debug || debug.grant !== grant)
+        throw Object.assign(new ValidationError("attach the debugger with cu web debug attach"), {
+          code: "debugger-not-attached",
+        });
+      const send = async (method, params) => {
+        try {
+          return await api.debugger.sendCommand({ tabId: debug.tabId }, method, params);
+        } catch (_) {
+          throw Object.assign(new ValidationError("the debugger did not render the page"), {
+            code: state.debug === debug ? "debugger-command-failed" : "debugger-detached",
+          });
+        }
+      };
+      let before, after, image, content;
+      try {
+        before = await snapshot("capture-prep");
+        await assertCurrent();
+        const size = (await send("Page.getLayoutMetrics", {}))?.cssContentSize;
+        if (
+          !isRecord(size) ||
+          !Number.isFinite(size.width) ||
+          !Number.isFinite(size.height) ||
+          size.width <= 0 ||
+          size.height <= 0
+        )
+          throw Object.assign(new ValidationError("the page reported no content size"), {
+            code: "unsupported-geometry",
+          });
+        content = { width: size.width, height: size.height, space: "css-document" };
+        const ratio = before.viewport.device_pixel_ratio;
+        if (Math.ceil(content.width * ratio) * Math.ceil(content.height * ratio) > MAX_CAPTURE_PIXELS)
+          throw Object.assign(new ValidationError("the full page exceeds the pixel budget"), {
+            code: "capture-budget",
+          });
+        const shot = await send("Page.captureScreenshot", {
+          format: "png",
+          captureBeyondViewport: true,
+          clip: { x: 0, y: 0, width: content.width, height: content.height, scale: 1 },
+        });
+        image = pngInfo(`data:image/png;base64,${shot?.data ?? ""}`);
+        await assertCurrent();
+      } finally {
+        after = await snapshot("capture-finish");
+      }
+      await assertCurrent();
+      if (JSON.stringify(before.viewport) !== JSON.stringify(after.viewport))
+        throw Object.assign(new ValidationError("viewport changed during capture"), {
+          code: "stale-generation",
+        });
+      return {
+        kind: "capture",
+        backend: "debugger",
+        effect: "browser-rendered-full-page",
+        verification: "identity-bracketed",
+        provenance: "browser-rendered, not a CU compositor frame",
+        actionable: false,
+        input_authority: "none",
+        document_id: request.document_id,
+        generation: after.generation,
+        tab_id: request.tab_id,
+        window_id: grant.window_id,
+        viewport: after.viewport,
+        document_size: content,
+        pixels: { width: image.width, height: image.height, space: "image-pixels" },
+        png_base64: image.encoded,
+        bytes: image.bytes,
+        limitations: {
+          active_tab_only: true,
+          region: "unsupported-with-full-page",
+          full_page: "single-debugger-render",
           stitching: "unsupported",
           compositor_frame: "unsupported",
           atomic_navigation_binding: "unsupported",

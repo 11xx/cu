@@ -1477,6 +1477,76 @@ test("accessibility evidence queries by role and name and omits values unless as
   assert.equal(port.messages.at(-1).result.nodes[0].value, "typed");
 });
 
+test("full-page capture renders through the attached debugger and checks its budget first", async () => {
+  const { api, port } = fakeApi();
+  const calls = debuggerFake(api);
+  let content = { x: 0, y: 0, width: 2, height: 1 };
+  const send = api.debugger.sendCommand;
+  api.debugger.sendCommand = async (target, method, params) => {
+    await send(target, method, params);
+    if (method === "Page.getLayoutMetrics") return { cssContentSize: content };
+    if (method === "Page.captureScreenshot")
+      return {
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8DwH4QBEfcD/ePF9e8AAAAASUVORK5CYII=",
+      };
+    return {};
+  };
+  const original = api.tabs.sendMessage;
+  api.tabs.sendMessage = async (tab, message) => {
+    if (!message.type.startsWith("capture-")) return original(tab, message);
+    return {
+      ok: true,
+      document_id: "document-1",
+      generation: 0,
+      viewport: { width: 800, height: 600, device_pixel_ratio: 2, space: "css-viewport" },
+    };
+  };
+  const controller = createController(api);
+  controller.connectNative();
+  const fullPage = (id, session, payload = { full_page: true }) =>
+    request("capture", { id, session, generation: 0, payload });
+
+  await controller.handleNativeMessage(
+    control("grant", { id: "grant-plain", capabilities: ["read", "interact"] }),
+    port,
+  );
+  const plain = port.messages.at(-1).result.grant.session;
+  await controller.handleNativeMessage(fullPage("unattached", plain), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-not-attached");
+  await controller.stop();
+
+  const session = await grantWithDebugger(controller, port);
+  await controller.handleNativeMessage(fullPage("full", session), port);
+  const captured = port.messages.at(-1);
+  assert.equal(captured.ok, true, JSON.stringify(captured));
+  assert.equal(captured.result.backend, "debugger");
+  assert.equal(captured.result.effect, "browser-rendered-full-page");
+  assert.deepEqual(captured.result.pixels, { width: 2, height: 1, space: "image-pixels" });
+  assert.deepEqual(captured.result.document_size, { width: 2, height: 1, space: "css-document" });
+  assert.deepEqual(calls.at(-1), [
+    "send",
+    "Page.captureScreenshot",
+    {
+      format: "png",
+      captureBeyondViewport: true,
+      clip: { x: 0, y: 0, width: 2, height: 1, scale: 1 },
+    },
+  ]);
+
+  const rendered = calls.filter((call) => call[1] === "Page.captureScreenshot").length;
+  content = { x: 0, y: 0, width: 2100, height: 2000 };
+  await controller.handleNativeMessage(fullPage("over-budget", session), port);
+  assert.equal(port.messages.at(-1).error.code, "capture-budget");
+  assert.equal(calls.filter((call) => call[1] === "Page.captureScreenshot").length, rendered);
+
+  const region = { x: 0, y: 0, width: 1, height: 1, space: "css-viewport" };
+  await controller.handleNativeMessage(
+    fullPage("both", session, { full_page: true, region }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).error.code, "invalid-request");
+});
+
 test("navigation and a detach from the browser both end the debugger", async () => {
   const { api, port } = fakeApi();
   const calls = debuggerFake(api);

@@ -285,6 +285,15 @@ def test_capture_region_is_explicitly_css_viewport_geometry():
         )
 
 
+def test_full_page_capture_is_exclusive_with_a_region():
+    region = {"x": 0, "y": 0, "width": 1, "height": 1, "space": "css-viewport"}
+    assert validate_payload("capture", {"full_page": True}) == {"full_page": True}
+    with pytest.raises(ProtocolError, match="must be true"):
+        validate_payload("capture", {"full_page": False})
+    with pytest.raises(ProtocolError, match="not both"):
+        validate_payload("capture", {"full_page": True, "region": region})
+
+
 def test_action_timeout_reports_uncertain_effect():
     helper = HelperSocket.create()
     thread, errors = serve_once(helper, respond=False)

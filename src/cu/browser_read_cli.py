@@ -165,14 +165,19 @@ def configure(parser: argparse.ArgumentParser) -> None:
 
     capture = commands.add_parser(
         "capture",
-        help="Capture the explicitly granted active tab viewport as PNG",
-        description="Capture the explicitly granted active tab viewport as PNG",
+        help="Capture the explicitly granted active tab as PNG",
+        description="Capture the explicitly granted active tab's viewport, a region, or full page",
     )
     capture.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     _common(capture)
     capture.add_argument(
         "--region",
         help="CSS viewport rectangle as 'x,y wxh' or 'x,y,w,h'; never a desktop coordinate",
+    )
+    capture.add_argument(
+        "--full-page",
+        action="store_true",
+        help="Render the whole document through the attached Chromium debugger",
     )
 
     debug = commands.add_parser(
@@ -592,6 +597,7 @@ def _capture(args: argparse.Namespace) -> dict[str, Any]:
         )
     safety.check_abort()
     region = _parse_region(args.region) if args.region else None
+    payload = transport.capture_payload(region, args.full_page)
     with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
         grant = _grant(args, client)
         if "interact" not in grant.get("capabilities", ["read"]):
@@ -605,6 +611,7 @@ def _capture(args: argparse.Namespace) -> dict[str, Any]:
             **_identity(grant),
             generation=args.generation,
             region=region,
+            full_page=args.full_page,
             timeout=args.timeout,
         )
     _check_response(result)
@@ -614,7 +621,7 @@ def _capture(args: argparse.Namespace) -> dict[str, Any]:
         tab_id=grant["tab_id"],
         document_id=grant["document_id"],
         generation=args.generation,
-        payload={} if region is None else {"region": region},
+        payload=payload,
     )
     try:
         result = transport.normalize_capture_response(result, request)

@@ -184,7 +184,8 @@ The result distinguishes CSS viewport metadata from PNG image pixels. The CLI
 validates PNG structure/dimensions and writes a private runtime file, retaining at
 most 60 captures. Bounds are 512 KiB encoded PNG and 16 megapixels; oversized
 source or cropped captures refuse rather than stream or silently change
-resolution. Full-page and stitched capture are unsupported. A browser PNG has
+resolution. Full-page capture needs the Chromium debugger (see below); stitched
+capture is unsupported. A browser PNG has
 no CU frame ID, reports `actionable: false` and `input_authority: "none"`, and
 cannot authorize native coordinate input.
 
@@ -246,6 +247,18 @@ and Space. Receipts name backend `debugger` and stay `unverified`, and a failure
 after input started is uncertain (exit 58). Input never falls back between `dom`
 and `debugger`, and actions still require the bound tab to be active in the
 focused window.
+
+```sh
+cu web capture --full-page --document DOCUMENT --generation 6 --json
+```
+
+`--full-page` renders the document's CSS content size, beyond the viewport, as
+one PNG through the debugger. The collector brackets it with the same document
+and generation checks as a viewport capture. The page's device-pixel size is
+checked against the 16-megapixel bound before rendering, and the encoded PNG
+against 512 KiB after. The receipt names backend `debugger`, carries the
+`document_size` in CSS pixels, and has no native-input authority. It cannot be
+combined with `--region`.
 
 ## Transport and refusals
 

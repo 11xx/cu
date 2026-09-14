@@ -97,7 +97,7 @@ OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
 CONTROL_OPERATIONS = frozenset({"grant", "release", "debug-attach", "debug-detach"})
 CAPABILITIES = frozenset({"read", "interact"})
 _OBSERVE_FIELDS = frozenset({"include_values", "limit", "selector", "include_details"})
-_CAPTURE_FIELDS = frozenset({"region"})
+_CAPTURE_FIELDS = frozenset({"region", "full_page"})
 _QUERY_FIELDS = frozenset(
     {
         "search",
@@ -413,12 +413,26 @@ def _capture_region(value: Any) -> dict[str, Any]:
     return result
 
 
+def capture_payload(region: Mapping[str, Any] | None, full_page: bool) -> dict[str, Any]:
+    if region is not None and full_page:
+        raise ValueError("a capture takes a region or the full page, not both")
+    if full_page:
+        return {"full_page": True}
+    return {} if region is None else {"region": dict(region)}
+
+
 def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
     if not isinstance(operation, str) or operation not in OPERATIONS:
         raise ProtocolError("operation is not a supported passive read or browser action")
     payload_object = _object({} if payload is None else payload, "payload")
     if operation == "capture":
         _exact_fields(payload_object, set(), set(_CAPTURE_FIELDS))
+        if "full_page" in payload_object:
+            if "region" in payload_object:
+                raise ProtocolError("capture takes a region or the full page, not both")
+            if payload_object["full_page"] is not True:
+                raise ProtocolError("capture full_page must be true when present")
+            return {"full_page": True}
         return (
             {"region": _capture_region(payload_object["region"])}
             if "region" in payload_object
@@ -1492,6 +1506,7 @@ class BrowserReadClient:
         document_id: str,
         generation: int,
         region: Mapping[str, Any] | None = None,
+        full_page: bool = False,
         timeout: float | None = None,
     ) -> dict[str, Any]:
         return self.request(
@@ -1500,7 +1515,7 @@ class BrowserReadClient:
             tab_id=tab_id,
             document_id=document_id,
             generation=generation,
-            payload={} if region is None else {"region": dict(region)},
+            payload=capture_payload(region, full_page),
             timeout=timeout,
         )
 
