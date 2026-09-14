@@ -12,7 +12,7 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 6;
+  const VERSION = 7;
   const CAPABILITIES = new Set(["read", "interact"]);
   const PROTOCOL_OPERATIONS = new Set([
     "observe",

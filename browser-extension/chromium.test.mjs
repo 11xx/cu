@@ -9,12 +9,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "chromium");
 const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
 
-test("the Chromium manifest is MV3 and requests what the Firefox manifest requests", () => {
+test("the Chromium manifest is MV3 and adds only the debugger to the Firefox requests", () => {
   const firefox = JSON.parse(readFileSync(join(here, "manifest.json"), "utf8"));
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual(manifest.permissions, ["scripting", "nativeMessaging", "storage"]);
+  assert.deepEqual(manifest.permissions, ["scripting", "nativeMessaging", "storage", "debugger"]);
   assert.deepEqual(manifest.host_permissions, ["<all_urls>"]);
-  assert.deepEqual(firefox.permissions, ["<all_urls>", ...manifest.permissions]);
+  // Firefox has no extension debugger permission.
+  assert.deepEqual([...firefox.permissions, "debugger"], ["<all_urls>", ...manifest.permissions]);
   assert.equal(manifest.content_scripts, undefined);
   assert.equal(manifest.background.service_worker, "worker.js");
   assert.equal(manifest.action.default_popup, "popup.html");

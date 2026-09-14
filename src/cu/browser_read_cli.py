@@ -164,6 +164,19 @@ def configure(parser: argparse.ArgumentParser) -> None:
         "--region",
         help="CSS viewport rectangle as 'x,y wxh' or 'x,y,w,h'; never a desktop coordinate",
     )
+
+    debug = commands.add_parser(
+        "debug",
+        help="Attach the Chromium debugger to the bound tab and read its evidence",
+        description="Attach the Chromium debugger to the bound tab and read its evidence",
+    )
+    debug.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    _common(debug)
+    debug.add_argument("debug_command", choices=("attach", "detach", "console", "network", "ax"))
+    debug.add_argument("--limit", type=int, help="Most recent entries or nodes to return")
+    debug.add_argument("--role", help="Accessibility role to match (ax only)")
+    debug.add_argument("--name", help="Accessible name to match (ax only)")
+    debug.add_argument("--values", action="store_true", help="Include accessible values (ax only)")
     for child in commands.choices.values():
         _context(child)
 
@@ -451,6 +464,40 @@ def _release(args: argparse.Namespace) -> dict[str, Any]:
     return {"browser_grant_released": True, **result}
 
 
+def _debug(args: argparse.Namespace) -> dict[str, Any]:
+    if args.debug_command in {"attach", "detach"}:
+        if args.debug_command == "attach":
+            safety.check_abort()
+            safety.check_session()
+        with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
+            result = client.control(
+                f"debug-{args.debug_command}", tab_id=args.tab, timeout=args.timeout
+            )
+        _check_response(result)
+        grant = result["result"]["grant"]
+        safety.record(
+            config.load(),
+            {
+                "action": f"browser-debug-{args.debug_command}",
+                "tab_id": grant["tab_id"],
+                "document_id": grant["document_id"],
+            },
+        )
+        return {"browser_debugger": result["result"]["debugger"], **result}
+    operation = "ax-query" if args.debug_command == "ax" else args.debug_command
+    payload: dict[str, Any] = {} if args.limit is None else {"limit": args.limit}
+    if operation == "ax-query":
+        payload.update({"role": args.role, "name": args.name, "include_values": args.values})
+    elif args.role or args.name or args.values:
+        raise ValueError("--role, --name and --values apply only to debug ax")
+    payload = transport.validate_payload(operation, payload)
+    with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
+        grant = _grant(args, client)
+        result = client.request(operation, **_identity(grant), payload=payload)
+    _check_response(result)
+    return {"evidence_only": True, "untrusted_page_content": True, **result}
+
+
 def _wait(args: argparse.Namespace) -> dict[str, Any]:
     if args.document is None:
         raise Refused(
@@ -604,6 +651,8 @@ def run(args: argparse.Namespace) -> int:
             result = _bind(args)
         elif args.web_command == "stop":
             result = _release(args)
+        elif args.web_command == "debug":
+            result = _debug(args)
         elif args.web_command == "read":
             result = _read(args)
         elif args.web_command == "action":

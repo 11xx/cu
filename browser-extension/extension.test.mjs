@@ -1232,6 +1232,242 @@ test("a lost native host is retried no sooner than the retry interval", () => {
   assert.equal(ports[1].messages[0].type, "hello");
 });
 
+function debuggerFake(api, responses = {}) {
+  const calls = [];
+  api.debugger = {
+    attach: async (target, version) => calls.push(["attach", target.tabId, version]),
+    detach: async (target) => calls.push(["detach", target.tabId]),
+    sendCommand: async (target, method, params) => {
+      calls.push(["send", method, params]);
+      return responses[method] || {};
+    },
+  };
+  return calls;
+}
+
+async function grantWithDebugger(controller, port, id = "debug") {
+  await controller.handleNativeMessage(
+    control("grant", { id: `grant-${id}`, capabilities: ["read", "interact"] }),
+    port,
+  );
+  const session = port.messages.at(-1).result.grant.session;
+  await controller.handleNativeMessage(control("debug-attach", { id: `attach-${id}` }), port);
+  assert.equal(port.messages.at(-1).ok, true, JSON.stringify(port.messages.at(-1)));
+  return session;
+}
+
+test("debug attach needs an interaction grant and enables the evidence domains", async () => {
+  const { api, port } = fakeApi();
+  const calls = debuggerFake(api);
+  const controller = createController(api);
+  controller.connectNative();
+  await controller.handleNativeMessage(readyMessage(), port);
+  await controller.handleNativeMessage(control("grant", { capabilities: ["read"] }), port);
+  await controller.handleNativeMessage(control("debug-attach", { id: "attach-read" }), port);
+  assert.equal(port.messages.at(-1).error.code, "interaction-not-granted");
+  await controller.stop();
+  await grantWithDebugger(controller, port);
+  const attached = port.messages.at(-1);
+  assert.equal(attached.result.debugger, "attached");
+  assert.equal(attached.result.grant.debugger, true);
+  assert.equal(port.messages.at(-2).type, "grant");
+  assert.equal(port.messages.at(-2).grant.debugger, true);
+  assert.deepEqual(calls, [
+    ["attach", 7, "1.3"],
+    ["send", "Runtime.enable", {}],
+    ["send", "Log.enable", {}],
+    ["send", "Network.enable", {}],
+  ]);
+  await controller.handleNativeMessage(control("debug-attach", { id: "attach-again" }), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-active");
+  await controller.handleNativeMessage(control("debug-detach", { id: "detach" }), port);
+  assert.equal(port.messages.at(-1).result.debugger, "detached");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.at(-1), ["detach", 7]);
+  assert.equal(controller.status().grant.debugger, false);
+});
+
+test("debugger evidence keeps failures and request metadata without queries or headers", async () => {
+  const { api, port } = fakeApi();
+  debuggerFake(api);
+  const controller = createController(api);
+  controller.connectNative();
+  const session = await grantWithDebugger(controller, port);
+  const tab = { tabId: 7 };
+  const log = (value) => ({ type: "string", value });
+  controller.handleDebuggerEvent(tab, "Runtime.consoleAPICalled", { type: "log", args: [log("no")] });
+  controller.handleDebuggerEvent(tab, "Runtime.consoleAPICalled", {
+    type: "error",
+    args: [log("boom"), { type: "number", value: 3 }],
+  });
+  controller.handleDebuggerEvent(tab, "Runtime.exceptionThrown", {
+    exceptionDetails: {
+      text: "Uncaught",
+      exception: { description: "TypeError: x" },
+      url: "http://127.0.0.1/app.js?token=secret#frag",
+      lineNumber: 4,
+    },
+  });
+  controller.handleDebuggerEvent(tab, "Log.entryAdded", {
+    entry: { level: "warning", source: "network", text: "slow" },
+  });
+  controller.handleDebuggerEvent({ tabId: 8 }, "Runtime.consoleAPICalled", {
+    type: "error",
+    args: [log("another tab")],
+  });
+  controller.handleDebuggerEvent(tab, "Network.requestWillBeSent", {
+    requestId: "r1",
+    request: {
+      method: "POST",
+      url: "https://example.test/api/save?session=abc#x",
+      headers: { Cookie: "c" },
+      postData: "body",
+    },
+    type: "Fetch",
+    wallTime: 1,
+  });
+  controller.handleDebuggerEvent(tab, "Network.responseReceived", {
+    requestId: "r1",
+    response: { status: 201, mimeType: "application/json", headers: { "Set-Cookie": "c" } },
+  });
+  controller.handleDebuggerEvent(tab, "Network.loadingFinished", { requestId: "r1" });
+  controller.handleDebuggerEvent(tab, "Network.requestWillBeSent", {
+    requestId: "r2",
+    request: { method: "GET", url: "http://127.0.0.1:47620/media.webm" },
+    type: "Media",
+  });
+  controller.handleDebuggerEvent(tab, "Network.loadingFailed", {
+    requestId: "r2",
+    errorText: "net::ERR_ABORTED",
+    canceled: true,
+  });
+
+  await controller.handleNativeMessage(request("console", { id: "c1", session, payload: {} }), port);
+  const evidence = port.messages.at(-1).result;
+  assert.equal(evidence.backend, "debugger");
+  assert.deepEqual(
+    evidence.entries.map((entry) => [entry.kind, entry.text]),
+    [
+      ["console", "boom 3"],
+      ["exception", "TypeError: x"],
+    ],
+  );
+  assert.equal(evidence.entries[1].url, "http://127.0.0.1/app.js");
+  await controller.handleNativeMessage(
+    request("network", { id: "n1", session, payload: { limit: 5 } }),
+    port,
+  );
+  const network = port.messages.at(-1).result.entries;
+  assert.deepEqual(network[0], {
+    method: "POST",
+    url: "https://example.test/api/save",
+    type: "Fetch",
+    wall_time: 1,
+    status: 201,
+    mime_type: "application/json",
+    finished: true,
+    failure: null,
+  });
+  assert.deepEqual(network[1].failure, {
+    error: "net::ERR_ABORTED",
+    canceled: true,
+    blocked_reason: null,
+  });
+  assert.equal(/abc|Cookie|body/.test(JSON.stringify(network)), false);
+});
+
+test("accessibility evidence queries by role and name and omits values unless asked", async () => {
+  const { api, port } = fakeApi();
+  const calls = debuggerFake(api, {
+    "DOM.getDocument": { root: { backendNodeId: 1 } },
+    "Accessibility.queryAXTree": {
+      nodes: [
+        {
+          nodeId: "10",
+          ignored: false,
+          role: { value: "button" },
+          name: { value: "Apply once" },
+          value: { value: "hidden value" },
+          properties: [
+            { name: "disabled", value: { value: false } },
+            { name: "url", value: { value: "x" } },
+          ],
+          childIds: ["11"],
+        },
+        { nodeId: "12", ignored: true, role: { value: "generic" } },
+      ],
+    },
+    "Accessibility.getFullAXTree": {
+      nodes: [{ nodeId: "20", ignored: false, role: { value: "textbox" }, value: { value: "typed" } }],
+    },
+  });
+  const controller = createController(api);
+  controller.connectNative();
+  const session = await grantWithDebugger(controller, port);
+  await controller.handleNativeMessage(
+    request("ax-query", { id: "ax1", session, payload: { role: "button", name: "Apply once" } }),
+    port,
+  );
+  const matched = port.messages.at(-1).result;
+  assert.deepEqual(matched.nodes, [
+    {
+      ax_id: "10",
+      role: "button",
+      name: "Apply once",
+      description: null,
+      states: { disabled: false },
+      child_count: 1,
+    },
+  ]);
+  assert.equal(matched.values, "omitted");
+  assert.deepEqual(calls.find((call) => call[1] === "Accessibility.queryAXTree")[2], {
+    backendNodeId: 1,
+    role: "button",
+    accessibleName: "Apply once",
+  });
+  await controller.handleNativeMessage(
+    request("ax-query", { id: "ax2", session, payload: { include_values: true } }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).result.nodes[0].value, "typed");
+});
+
+test("navigation and a detach from the browser both end the debugger", async () => {
+  const { api, port } = fakeApi();
+  const calls = debuggerFake(api);
+  const controller = createController(api);
+  controller.connectNative();
+  await grantWithDebugger(controller, port, "first");
+  await controller.handleTabUpdated(7, { status: "loading" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.at(-1), ["detach", 7]);
+  assert.equal(controller.status().debugger, "detached");
+
+  const session = await grantWithDebugger(controller, port, "second");
+  assert.equal(controller.handleDebuggerDetach({ tabId: 7 }, "canceled_by_user"), true);
+  assert.equal(controller.status().grant.debugger, false);
+  assert.equal(controller.status().debugger_detach_reason, "canceled_by_user");
+  await controller.handleNativeMessage(request("console", { id: "c", session, payload: {} }), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-not-attached");
+  await controller.handleNativeMessage(control("debug-detach", { id: "d" }), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-not-attached");
+});
+
+test("a browser without an extension debugger refuses debugger mode", async () => {
+  const { api, port } = fakeApi();
+  const controller = createController(api);
+  controller.connectNative();
+  await controller.handleNativeMessage(
+    control("grant", { capabilities: ["read", "interact"] }),
+    port,
+  );
+  const session = port.messages.at(-1).result.grant.session;
+  await controller.handleNativeMessage(control("debug-attach", { id: "attach" }), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-unsupported");
+  await controller.handleNativeMessage(request("network", { id: "n", session, payload: {} }), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-not-attached");
+});
+
 test("a callback-mode collector answers through sendResponse", async () => {
   let listener;
   collectorModule.install(

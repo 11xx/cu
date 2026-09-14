@@ -30,7 +30,7 @@ from cu.browser_read import (
     write_frame,
 )
 
-PROTOCOL = {"protocol": "cu-browser-read", "version": 6}
+PROTOCOL = {"protocol": "cu-browser-read", "version": 7}
 
 
 def response(request: dict[str, object], *, response_id: str | None = None) -> dict[str, object]:
@@ -458,6 +458,25 @@ def test_client_control_tracks_the_grant_the_helper_announces():
         thread.join(timeout=1)
         helper.close()
     assert errors == []
+
+
+def test_debugger_evidence_payloads_and_controls_are_bounded():
+    assert validate_payload("console", {}) == {"limit": 100}
+    assert validate_payload("network", {"limit": 5}) == {"limit": 5}
+    with pytest.raises(ProtocolError):
+        validate_payload("network", {"limit": 101})
+    with pytest.raises(ProtocolError, match="unsupported message field since"):
+        validate_payload("console", {"since": 1})
+    assert validate_payload("ax-query", {"role": "button"}) == {
+        "role": "button",
+        "name": None,
+        "include_values": False,
+        "limit": MAX_ELEMENTS,
+    }
+    for operation in ("debug-attach", "debug-detach"):
+        assert make_control(operation)["tab_id"] is None
+        with pytest.raises(ProtocolError, match=f"{operation} takes no"):
+            make_control(operation, capabilities=["read"])
 
 
 def test_reload_receipt_names_the_revoked_grant_and_tracks_the_revocation():

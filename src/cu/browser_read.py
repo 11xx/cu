@@ -32,7 +32,7 @@ from typing import Any, BinaryIO, Self
 from . import png
 
 PROTOCOL = "cu-browser-read"
-VERSION = 6
+VERSION = 7
 MAX_MESSAGE_BYTES = 1 << 20
 MAX_RECV_CHUNK_BYTES = 64 << 10
 MAX_PENDING_REQUESTS = 64
@@ -56,19 +56,22 @@ MAX_CAPTURE_PIXELS = 16 * 1024 * 1024
 MAX_ACTION_VALUE_CHARS = 1024
 MAX_WAIT_MS = 10_000
 MAX_WAIT_POLL_MS = 1_000
+MAX_DEBUG_ENTRIES = 100
 MAX_ERROR_CODE_CHARS = 64
 MAX_ERROR_MESSAGE_CHARS = 256
 SOCKET_PREFIX = "helper-"
 SOCKET_SUFFIX = ".sock"
 
-READ_OPERATIONS = frozenset({"observe", "query", "wait"})
+READ_OPERATIONS = frozenset({"observe", "query", "wait", "ax-query", "console", "network"})
+# Evidence read through an attached Chromium debugger rather than the page collector.
+DEBUGGER_READS = frozenset({"ax-query", "console", "network"})
 ACTION_OPERATIONS = frozenset(
     {"click", "focus", "fill", "scroll", "hover", "select", "capture", "reload"}
 )
 # A receipt from any other backend does not describe the operation that was sent.
 _ACTION_BACKENDS = {"reload": "tabs"}
 OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
-CONTROL_OPERATIONS = frozenset({"grant", "release"})
+CONTROL_OPERATIONS = frozenset({"grant", "release", "debug-attach", "debug-detach"})
 CAPABILITIES = frozenset({"read", "interact"})
 _OBSERVE_FIELDS = frozenset({"include_values", "limit", "selector", "include_details"})
 _CAPTURE_FIELDS = frozenset({"region"})
@@ -439,6 +442,30 @@ def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
             **({"ref": _ref(payload_object["ref"])} if target == "element" else {}),
             "dx": _bounded_signed_int(payload_object.get("dx", 0), "dx", 10000),
             "dy": _bounded_signed_int(payload_object.get("dy", 0), "dy", 10000),
+        }
+    if operation in {"console", "network"}:
+        _exact_fields(payload_object, set(), {"limit"})
+        return {
+            "limit": _bounded_int(
+                payload_object.get("limit", MAX_DEBUG_ENTRIES),
+                "limit",
+                MAX_DEBUG_ENTRIES,
+                minimum=1,
+            )
+        }
+    if operation == "ax-query":
+        _exact_fields(payload_object, set(), {"role", "name", "include_values", "limit"})
+        role = payload_object.get("role")
+        name = payload_object.get("name")
+        return {
+            "role": None if role is None else _bounded_string(role, "role", MAX_ROLE_CHARS),
+            "name": None if name is None else _bounded_string(name, "name", MAX_QUERY_CHARS),
+            "include_values": _bounded_bool(
+                payload_object.get("include_values", False), "include_values"
+            ),
+            "limit": _bounded_int(
+                payload_object.get("limit", MAX_ELEMENTS), "limit", MAX_ELEMENTS, minimum=1
+            ),
         }
     if operation == "wait":
         allowed = {"ref", "selector", "state", "text", "value", "timeout_ms", "poll_ms"}
@@ -829,9 +856,9 @@ def validate_control(message: Mapping[str, Any]) -> dict[str, Any]:
         "operation": operation,
         "tab_id": None if tab_id is None else _bounded_int(tab_id, "tab_id", 2**31 - 1, minimum=1),
     }
-    if operation == "release":
+    if operation != "grant":
         if "capabilities" in control or "cursor" in control:
-            raise ProtocolError("release takes no capabilities or cursor")
+            raise ProtocolError(f"{operation} takes no capabilities or cursor")
         return result
     result["capabilities"] = _capabilities(control.get("capabilities"))
     if "cursor" in control:
@@ -873,6 +900,7 @@ def _validate_grant(grant: Mapping[str, Any]) -> dict[str, Any]:
         "capabilities",
         "active",
         "hidden",
+        "debugger",
     }
     _exact_fields(
         value,
@@ -896,6 +924,11 @@ def _validate_grant(grant: Mapping[str, Any]) -> dict[str, Any]:
         "capabilities": capabilities,
         "active": active,
         "hidden": hidden,
+        **(
+            {"debugger": _bounded_bool(value["debugger"], "grant debugger")}
+            if "debugger" in value
+            else {}
+        ),
     }
 
 

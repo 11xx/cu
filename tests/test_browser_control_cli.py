@@ -24,7 +24,7 @@ def bridge(monkeypatch):
         "capabilities": ["read", "interact"],
     }
     state = SimpleNamespace(
-        calls=0, grant=grant, failure=None, capture=None, payloads=[], controls=[]
+        calls=0, grant=grant, failure=None, capture=None, payloads=[], controls=[], requests=[]
     )
 
     class Client:
@@ -51,8 +51,15 @@ def bridge(monkeypatch):
 
         def control(self, operation, **kwargs):
             state.controls.append((operation, kwargs))
+            if operation.startswith("debug-"):
+                attached = "attached" if operation == "debug-attach" else "detached"
+                return {"ok": True, "result": {"grant": grant, "debugger": attached}}
             key = "grant" if operation == "grant" else "revoked_grant"
             return {"ok": True, "result": {key: grant}}
+
+        def request(self, operation, **kwargs):
+            state.requests.append((operation, kwargs["payload"]))
+            return {"ok": True, "result": {"kind": "debugger-evidence", "evidence": operation}}
 
     monkeypatch.setattr(wire.BrowserReadClient, "connect", lambda *args: Client())
     monkeypatch.setattr(web, "_paths", lambda args: [Path("unused")])
@@ -388,3 +395,30 @@ def test_abort_refuses_a_grant_but_not_a_stop(bridge):
         # Only remove the test's isolated flag, never the user's runtime state.
         flag.unlink()
     assert [operation for operation, _ in bridge.controls] == ["release"]
+
+
+def test_debug_attach_passes_the_interlocks_and_detach_does_not(bridge):
+    flag = config.abort_path()
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.touch()
+    try:
+        assert cli.main(["web", "debug", "attach", "--json"]) == exits.ABORTED_BY_USER
+        assert cli.main(["web", "debug", "detach", "--json"]) == 0
+    finally:
+        # Only remove the test's isolated flag, never the user's runtime state.
+        flag.unlink()
+    assert cli.main(["web", "debug", "attach", "--tab", "1", "--json"]) == 0
+    assert [(operation, kwargs["tab_id"]) for operation, kwargs in bridge.controls] == [
+        ("debug-detach", None),
+        ("debug-attach", 1),
+    ]
+
+
+def test_debug_reads_forward_bounded_payloads(bridge, capsys):
+    assert cli.main(["web", "debug", "console", "--limit", "5", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["untrusted_page_content"] is True
+    ax = ["web", "debug", "ax", "--role", "button", "--name", "Apply once", "--json"]
+    assert cli.main(ax) == 0
+    assert cli.main(["web", "debug", "network", "--role", "button", "--json"]) == exits.USAGE
+    ax_payload = {"role": "button", "name": "Apply once", "include_values": False, "limit": 128}
+    assert bridge.requests == [("console", {"limit": 5}), ("ax-query", ax_payload)]
