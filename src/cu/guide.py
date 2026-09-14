@@ -654,8 +654,9 @@ OPTIONAL FIREFOX CU BROWSER
 
   Reload takes no ref and needs an interaction grant on the active, focused
   tab. An accepted reload revokes that grant before one tabs.reload: queued
-  requests refuse as grant-revoked, waits cancel, and the receipt names the
-  revoked grant with new_document_grant "none". It never reports page load and
+  requests and pending waits refuse as grant-revoked (exit 56, not a timeout),
+  and the receipt names the revoked grant with new_document_grant "none". It
+  never reports page load and
   never re-grants; bind the reloaded page again with `cu web grant`. A tab
   lost before dispatch or a rejected reload stays revoked; exit 58 means the
   receipt was lost, so inspect the tab instead of reloading again.

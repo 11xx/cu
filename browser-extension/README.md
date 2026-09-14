@@ -159,7 +159,9 @@ blindly. Cache-bypass reload, navigation, and tab transfer are unsupported.
 
 Waits poll DOM/media conditions for at most 10 seconds; the CLI's default wait
 transport budget is 12 seconds. `playing` requires ready, unpaused media with
-advancing current time. Stop, revocation, and client disconnect cancel waits.
+advancing current time. Stop, revocation, and client disconnect cancel waits. A
+wait cancelled because its grant was revoked exits 56 and says to bind the tab
+again; other cancellations and timeouts exit 54.
 Waits never dispatch or replay an action.
 
 ## Browser-rendered viewport capture
