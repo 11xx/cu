@@ -7,7 +7,7 @@
 # should not have a stale copy of itself as its own first failure mode.
 
 .DEFAULT_GOAL := help
-.PHONY: help install uninstall test test-native test-adapters lint build check
+.PHONY: help install uninstall test test-native test-adapters lint build check node-modules
 
 help:
 	@echo 'make install    put cu on PATH (editable: tracks this checkout)'
@@ -37,7 +37,7 @@ uninstall:
 test:
 	uv run pytest
 
-test-native: node_modules/.package-lock.json
+test-native: node-modules
 	node --test tests/native_playground.test.mjs
 
 lint:
@@ -46,10 +46,22 @@ lint:
 build:
 	uv build
 
-node_modules/.package-lock.json: package.json package-lock.json
-	npm ci --ignore-scripts
+# Installed modules are current when the lockfiles' content matches the digest
+# stamped at install time; checkout mtimes say nothing about that. A symlinked
+# node_modules is never installed through, because npm ci would rewrite the
+# checkout it points at.
+NODE_STAMP := node_modules/.cu-lockfile-digest
 
-test-adapters: node_modules/.package-lock.json
+node-modules:
+	@digest=$$(cat package.json package-lock.json | sha256sum | cut -d' ' -f1); \
+	if [ "$$(cat $(NODE_STAMP) 2>/dev/null)" = "$$digest" ]; then exit 0; fi; \
+	if [ -L node_modules ]; then \
+		echo 'node_modules is a symlink to modules for other lockfiles; copy it instead' >&2; \
+		exit 1; \
+	fi; \
+	npm ci --ignore-scripts && echo "$$digest" > $(NODE_STAMP)
+
+test-adapters: node-modules
 	node --test adapters/observation.test.mjs browser-extension/*.test.mjs
 
 check: test test-native test-adapters lint build
