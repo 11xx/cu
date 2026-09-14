@@ -731,7 +731,7 @@
       state.nativePort = null;
       state.nativeReady = false;
       state.nativeSocket = null;
-      state.nativeError = null;
+      state.nativeError = reason === "native-disconnect" ? "native-unavailable" : null;
       if (port) {
         if (grant) postNative(revokeMessage(grant, reason), port);
         try {

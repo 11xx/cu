@@ -857,6 +857,18 @@ test("late collector cleanup cannot disconnect a subsequent grant", async () => 
   assert.equal(nextPort.messages.at(-1).ok, true);
 });
 
+test("a lost native host revokes the grant and stays reported as unavailable", async () => {
+  const { api, port } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  assert.equal(started.ok, true);
+  port.disconnect();
+  await new Promise((resolve) => setImmediate(resolve));
+  const status = controller.status();
+  assert.equal(status.active, false);
+  assert.equal(status.native_error, "native-unavailable");
+});
+
 test("a tab moved to another browser window cannot retain action authority", async () => {
   const { api, currentTab, port, calls } = fakeApi();
   const controller = createController(api);

@@ -26,7 +26,10 @@ function render(response) {
     return;
   }
   if (!response.active) {
-    statusElement.textContent = "No tab is granted.";
+    statusElement.textContent =
+      response.native_error === "native-unavailable"
+        ? "The CU native host is unavailable. Run cu web setup for this browser."
+        : "No tab is granted.";
     capabilitiesElement.textContent = "Capabilities: none";
     readButton.disabled = false;
     interactionButton.disabled = false;
