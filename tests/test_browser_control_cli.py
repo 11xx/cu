@@ -23,7 +23,9 @@ def bridge(monkeypatch):
         "hidden": False,
         "capabilities": ["read", "interact"],
     }
-    state = SimpleNamespace(calls=0, grant=grant, failure=None, capture=None, payloads=[])
+    state = SimpleNamespace(
+        calls=0, grant=grant, failure=None, capture=None, payloads=[], controls=[]
+    )
 
     class Client:
         def __init__(self):
@@ -46,6 +48,11 @@ def bridge(monkeypatch):
 
         def capture(self, **kwargs):
             return {"ok": True, "result": dict(state.capture)}
+
+        def control(self, operation, **kwargs):
+            state.controls.append((operation, kwargs))
+            key = "grant" if operation == "grant" else "revoked_grant"
+            return {"ok": True, "result": {key: grant}}
 
     monkeypatch.setattr(wire.BrowserReadClient, "connect", lambda *args: Client())
     monkeypatch.setattr(web, "_paths", lambda args: [Path("unused")])
@@ -345,7 +352,7 @@ def test_reload_on_a_read_grant_refuses_before_dispatch(bridge):
 
 
 def test_revoked_refusal_says_only_a_new_grant_restores_access():
-    with pytest.raises(cli.Refused, match="new explicit user grant") as refused:
+    with pytest.raises(cli.Refused, match="bind the tab again with cu web grant") as refused:
         web._check_response(
             {
                 "ok": False,
@@ -353,3 +360,31 @@ def test_revoked_refusal_says_only_a_new_grant_restores_access():
             }
         )
     assert refused.value.code == exits.BROWSER_READ_REFUSED
+
+
+def test_grant_binds_through_the_interlocks_and_stop_releases(bridge, capsys):
+    assert cli.main(["web", "grant", "--tab", "1", "--no-cursor", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["browser_grant"] is True
+    assert cli.main(["web", "grant", "--read-only", "--json"]) == 0
+    assert cli.main(["web", "stop", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["browser_grant_released"] is True
+    interact = ["read", "interact"]
+    timeout = wire.DEFAULT_TIMEOUT
+    assert bridge.controls == [
+        ("grant", {"tab_id": 1, "capabilities": interact, "cursor": False, "timeout": timeout}),
+        ("grant", {"tab_id": None, "capabilities": ["read"], "cursor": None, "timeout": timeout}),
+        ("release", {"tab_id": None, "timeout": timeout}),
+    ]
+
+
+def test_abort_refuses_a_grant_but_not_a_stop(bridge):
+    flag = config.abort_path()
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.touch()
+    try:
+        assert cli.main(["web", "grant", "--json"]) == exits.ABORTED_BY_USER
+        assert cli.main(["web", "stop", "--json"]) == 0
+    finally:
+        # Only remove the test's isolated flag, never the user's runtime state.
+        flag.unlink()
+    assert [operation for operation, _ in bridge.controls] == ["release"]

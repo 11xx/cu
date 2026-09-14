@@ -1,31 +1,46 @@
 # CU Browser for Firefox
 
-CU Browser provides bounded page evidence and explicitly granted DOM interaction.
-It requests only `activeTab`, `scripting`, and `nativeMessaging`: no all-sites
-permission, TCP listener, or persistent page archive.
+CU Browser gives CU sessions bounded page evidence and DOM interaction. Installing
+it is the standing opt-in: it requests access to all sites, `scripting`,
+`nativeMessaging`, and `storage`, and reads nothing until a CU session binds a
+tab. It has no TCP listener or persistent page archive.
 
 The supported and unsupported slices, their source/test evidence, and bounded
 successor contracts are maintained in the [Firefox capability matrix](../docs/browser-capabilities.md).
 Browser CSS rectangles remain unprojectable into CU frames; the association
 probe and invalidation contract are in [browser-frame-association.md](../docs/browser-frame-association.md).
 
-## Enable a tab
+## Bind a tab
 
 Run `cu web setup`, then temporarily load `browser-extension/manifest.json`
-through Firefox `about:debugging`. Setup registers the native host; neither setup
-nor loading the extension grants a page. The popup offers:
+through Firefox `about:debugging`. Setup registers the native host. Once loaded,
+the extension connects its native host and waits; neither step binds a page.
 
-- **Read current tab**: page observations and condition waits.
-- **Allow page interaction**: observations, DOM actions, and viewport capture.
-  **Show amber browser cursor** optionally marks action targets inside the page.
-- **Stop**: revoke the grant, cancel waits, remove the indicator, and disconnect
-  the native helper.
+A CU session binds and releases tabs from the command line, with no browser click:
 
-A read grant cannot silently acquire interaction authority. Stop it before
-choosing a different mode. Reload, navigation, moving a tab to another window,
-tab closure, and native disconnect revoke the grant. Switching tabs never transfers it. Actions require the granted
-tab to be active in the focused Firefox window; reads can describe a background
-tab and label its activity separately from DOM visibility.
+```sh
+cu web grant --json                 # the active tab, for reads and interaction
+cu web grant --tab 12 --read-only   # a named tab, for reads and waits only
+cu web stop --json
+```
+
+`cu web grant` passes the same abort and locked-session interlocks as other
+acting commands. One tab is bound at a time, and granting while one is bound
+refuses as `session-active`. A read grant cannot silently acquire interaction
+authority: stop it and grant again. `cu web stop` revokes the grant, cancels its
+waits, and removes the indicator; it works after a user abort.
+
+Reload, navigation, moving a tab to another window, tab closure, and native
+disconnect revoke the grant, and nothing carries over to the new document; the
+session binds it again with `cu web grant`. Switching tabs never transfers a
+grant. A named tab can be bound while it is in the background, and reads describe
+it there and label its activity separately from DOM visibility; actions require
+the bound tab to be active in the focused browser window.
+
+The popup shows which tab a session holds and whether the native host is
+unavailable. Its **Show amber browser cursor** setting persists in extension
+storage and is the default for grants that pass neither `--cursor` nor
+`--no-cursor`.
 
 Temporary add-ons last for the Firefox session. Persistent installation requires
 a separate Firefox distribution/signing workflow. No signing, upload, publication,
@@ -49,17 +64,15 @@ cu web setup --browser thorium --user-data-dir PATH
 
 The first form registers in the product's only existing profile root. Then load
 `browser-extension/chromium` unpacked (developer mode on the extensions page, or
-`--load-extension`). Grants, capabilities, Stop, reload and receipts behave as
-described in the rest of this document, with the same permissions and no
-content scripts or host permissions. While the action popup is open the browser
-window is not focused, so actions refuse as `not-current-tab`; close the popup
-before acting.
+`--load-extension`). Grants, capabilities, stop, reload and receipts behave as
+described in the rest of this document. The manifest requests the same access,
+with all sites declared as MV3 host permissions, and no content scripts.
 
 The browser may stop an extension service worker. Grants live only in the
-worker's memory. While a grant is active, its connected native port keeps the
-worker running; if the worker stops anyway, the port closes, the helper exits,
-and every grant ends with it. A restarted worker starts with no grant and never
-restores one, so grant the tab again. The injected collector holds a port to the
+worker's memory. Its connected native port keeps the worker running; if the
+worker stops anyway, the port closes, the helper exits, and every grant ends with
+it. A restarted worker connects its host again and starts with no grant; it never
+restores one, so the session binds the tab again. The injected collector holds a port to the
 worker for the life of its session; when the worker stops, that port closes and
 the collector drops the session and its amber cursor, so the tab can be granted
 again without reloading. The worker keeps each collector port referenced, and if
@@ -138,8 +151,8 @@ the grant first: queued requests refuse with `grant-revoked`, waits are
 cancelled, the in-page collector stops, and the helper is told before one
 `tabs.reload` call reaches that tab. The receipt names the revoked grant and
 reports `new_document_grant: "none"`; it does not claim the page finished
-loading, and the reloaded document has no authority until the user grants it
-again. A tab that stops being current before dispatch, or a reload Firefox
+loading, and the reloaded document has no authority until a session binds it
+again with `cu web grant`. A tab that stops being current before dispatch, or a reload Firefox
 rejects, refuses with `state: "grant-revoked"`. A receipt lost to the
 disconnect that ends the grant is exit 58: inspect the tab, never reload again
 blindly. Cache-bypass reload, navigation, and tab transfer are unsupported.
@@ -183,9 +196,11 @@ revocation, and collector disposal remove it.
 ## Transport and refusals
 
 The extension ID is `cu-browser-read@local`, the native host is `org.cu.read`, and
-the protocol is `cu-browser-read`, version **5**. Extension and host versions must
+the protocol is `cu-browser-read`, version **6**. Extension and host versions must
 match. Frames use native-endian uint32 length plus UTF-8 JSON, bounded at 1 MiB.
-Missing grant capabilities mean read-only, never implicit action authority.
+Session controls that bind (`grant`) and release (`release`) a tab travel the
+same channel as requests. Missing grant capabilities mean read-only, never
+implicit action authority.
 
 The browser-owned helper listens on a private Unix socket under
 `$XDG_RUNTIME_DIR/cu/browser/` (directory `0700`, socket `0600`). It rejects

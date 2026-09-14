@@ -147,7 +147,10 @@ RESPONSE = {
         "The desktop reservation state is unavailable. Do not inject or retry; "
         "the registry must be repaired first."
     ),
-    BROWSER_READ_UNAVAILABLE: "Grant the tab from the CU Browser extension, or use pixel capture.",
+    BROWSER_READ_UNAVAILABLE: (
+        "Load CU Browser, run cu web setup, and bind a tab with cu web grant; "
+        "or use pixel capture."
+    ),
     BROWSER_DOCUMENT_STALE: "Browser document/generation changed. Read again and reconsider.",
     BROWSER_READ_PROTOCOL: "Protocol mismatch. Check extension and native-host versions.",
     BROWSER_READ_TIMEOUT: "Browser observation timed out. Inspect the tab and helper state.",

@@ -148,6 +148,69 @@ def test_native_roundtrip(tmp_path, monkeypatch):
         process.communicate(timeout=2)
 
 
+def test_native_host_forwards_a_session_control_before_any_grant(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    process = subprocess.Popen(
+        [sys.executable, "-m", "cu.browser_read", "host"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            assert selector.select(2), "native host did not send ready"
+        ready = wire.read_frame(process.stdout)
+        envelope = {"protocol": wire.PROTOCOL, "version": wire.VERSION}
+        wire.write_frame(process.stdin, {**envelope, "type": "hello", "grants": []})
+        grant = {
+            "session": "fixture-session",
+            "tab_id": 1,
+            "window_id": 1,
+            "document_id": "fixture-document",
+            "generation": 0,
+            "active": True,
+            "hidden": False,
+            "capabilities": ["read", "interact"],
+        }
+        errors = []
+
+        def browser():
+            try:
+                control = wire.read_frame(process.stdout)
+                assert (control["type"], control["operation"]) == ("control", "grant")
+                wire.write_frame(process.stdin, {**envelope, "type": "grant", "grant": grant})
+                wire.write_frame(
+                    process.stdin,
+                    {
+                        **envelope,
+                        "type": "response",
+                        "id": control["id"],
+                        **{key: grant[key] for key in ("session", "tab_id", "document_id")},
+                        "ok": True,
+                        "result": {"grant": grant},
+                    },
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=browser, daemon=True)
+        thread.start()
+        with wire.BrowserReadClient.connect(ready["socket"]) as client:
+            assert client.metadata["grants"] == []
+            result = client.control("grant", capabilities=["read", "interact"])
+            assert result["result"]["grant"] == grant
+            assert client.metadata["grants"] == [grant]
+        thread.join(2)
+        assert not thread.is_alive() and not errors
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(2) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=2)
+
+
 def test_native_host_cancels_a_disconnected_waiter(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     process = subprocess.Popen(

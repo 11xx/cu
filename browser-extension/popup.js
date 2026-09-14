@@ -1,66 +1,24 @@
 const extension = globalThis.browser || globalThis.chrome;
 const statusElement = document.getElementById("status");
 const capabilitiesElement = document.getElementById("capabilities");
-const readButton = document.getElementById("start-read");
-const interactionButton = document.getElementById("start-interaction");
-const stopButton = document.getElementById("stop");
-
-const messages = {
-  "not-current-tab": "Choose the current tab before starting.",
-  "session-active": "A browser session is already active.",
-  "collector-unavailable": "This tab cannot host CU Browser.",
-  "untrusted-sender": "The session control was refused.",
-  "invalid-ui-message": "The session control was refused.",
-};
-
-function showError(response) {
-  const code = response && response.error && response.error.code;
-  statusElement.textContent = messages[code] || "The session control was refused.";
-  readButton.disabled = false;
-  interactionButton.disabled = false;
-}
+const cursorElement = document.getElementById("cursor");
 
 function render(response) {
+  capabilitiesElement.textContent = "Capabilities: none";
   if (!response || response.ok !== true) {
-    showError(response);
+    statusElement.textContent = "Session status is unavailable.";
     return;
   }
   if (!response.active) {
     statusElement.textContent =
       response.native_error === "native-unavailable"
         ? "The CU native host is unavailable. Run cu web setup for this browser."
-        : "No tab is granted.";
-    capabilitiesElement.textContent = "Capabilities: none";
-    readButton.disabled = false;
-    interactionButton.disabled = false;
-    stopButton.disabled = true;
+        : "No tab is bound. A CU session binds one with cu web grant.";
     return;
   }
   const capabilities = response.grant.capabilities || ["read"];
-  statusElement.textContent = `CU Browser session for tab ${response.grant.tab_id}.`;
+  statusElement.textContent = `A CU session holds tab ${response.grant.tab_id}.`;
   capabilitiesElement.textContent = `Capabilities: ${capabilities.join(", ")}.`;
-  readButton.disabled = true;
-  interactionButton.disabled = true;
-  stopButton.disabled = false;
-}
-
-async function start(type) {
-  readButton.disabled = true;
-  interactionButton.disabled = true;
-  try {
-    render(
-      await extension.runtime.sendMessage({
-        type,
-        ...(type === "start-interaction"
-          ? { cursor: document.getElementById("cursor").checked }
-          : {}),
-      }),
-    );
-  } catch (error) {
-    statusElement.textContent = "The browser session could not be started.";
-    readButton.disabled = false;
-    interactionButton.disabled = false;
-  }
 }
 
 async function refresh() {
@@ -71,20 +29,11 @@ async function refresh() {
   }
 }
 
-readButton.addEventListener("click", () => {
-  void start("start-read");
+void extension.storage.local.get({ cursor: true }).then((stored) => {
+  cursorElement.checked = stored.cursor !== false;
 });
-interactionButton.addEventListener("click", () => {
-  void start("start-interaction");
-});
-stopButton.addEventListener("click", async () => {
-  stopButton.disabled = true;
-  try {
-    render(await extension.runtime.sendMessage({ type: "stop" }));
-  } catch (error) {
-    statusElement.textContent = "The browser session could not be stopped.";
-    stopButton.disabled = false;
-  }
+cursorElement.addEventListener("change", () => {
+  void extension.storage.local.set({ cursor: cursorElement.checked });
 });
 
 void refresh();

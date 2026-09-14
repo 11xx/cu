@@ -586,6 +586,9 @@ BROWSERS
 OPTIONAL FIREFOX CU BROWSER
   cu web setup
   cu web hosts --json
+  cu web grant --json
+  cu web grant --tab 12 --read-only --json
+  cu web stop --json
   cu web read --selector '.result-card' --details --query Port --json
   cu web action click --document DOCUMENT --generation 3 --ref e4 --tab 12
   cu web action select --document DOCUMENT --generation 4 --ref e5 --value two --tab 12
@@ -597,13 +600,16 @@ OPTIONAL FIREFOX CU BROWSER
 
   Temporarily load browser-extension/manifest.json through Firefox about:debugging.
   For Thorium, run `cu web setup --browser thorium` and load browser-extension/chromium
-  unpacked; its service worker holds grants in memory only, so a worker restart
-  ends them and the tab must be granted again.
-  The CU Browser popup offers a read-only grant or an explicit page-interaction
-  grant for the current tab. It shows the capability state and Stop revokes it.
-  Navigation, reload, closure, and native disconnect revoke the grant; switching
-  tabs never transfers it. Setup registers the native host but grants no page.
-  Only activeTab, scripting, and nativeMessaging are requested. Installation is
+  unpacked. Installing the extension is the standing opt-in: it requests all-site
+  host access, scripting, nativeMessaging, and storage, connects its native host,
+  and reads nothing until a session binds a tab. `cu web grant` binds the active
+  tab, or `--tab ID` even in the background, for reads and interaction
+  (`--read-only` for reads only) under the abort and locked-session interlocks;
+  `cu web stop` releases it, even after an abort. No browser click is involved.
+  One tab is bound at a time. Navigation, reload, closure, moving the tab to
+  another window, native disconnect, and a worker restart revoke the grant, and
+  the session binds the new document again; switching tabs never transfers it.
+  The popup shows status and keeps the amber cursor setting. Installation is
   temporary; CU does not sign, publish, or install the extension in Chrome.
 
   Reads return stable per-document element refs. Optional bounded CSS selector
@@ -631,7 +637,7 @@ OPTIONAL FIREFOX CU BROWSER
   tab. An accepted reload revokes that grant before one tabs.reload: queued
   requests refuse as grant-revoked, waits cancel, and the receipt names the
   revoked grant with new_document_grant "none". It never reports page load and
-  never re-grants; the reloaded page needs a new explicit user grant. A tab
+  never re-grants; bind the reloaded page again with `cu web grant`. A tab
   lost before dispatch or a rejected reload stays revoked; exit 58 means the
   receipt was lost, so inspect the tab instead of reloading again.
 
