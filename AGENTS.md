@@ -54,6 +54,10 @@ An explicitly granted Firefox page may own a non-interactive browser-local indic
 - **The gates.** `make check` runs Python and Node tests, `uv run ruff check .`,
   and `uv build`. Tool dependencies are pinned in `pyproject.toml` and
   `package-lock.json`; supported Node versions are declared in `package.json`.
+  The Node gates run `npm ci` only when the lockfiles' content differs from the
+  digest stamped in `node_modules`. A new worktree gets modules by copying an
+  installed checkout's `node_modules`, stamp included, or by letting the gate
+  install them; a symlinked `node_modules` whose stamp does not match is refused.
 - **`make install` is editable**, so the `cu` on PATH follows the checkout and
   never needs refreshing after a change. It does pin to the checkout's path:
   install from the repository, not from a worktree that is about to be removed.
