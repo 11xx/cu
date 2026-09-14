@@ -158,7 +158,10 @@ RESPONSE = {
         "Action may have applied. Inspect fresh evidence; never blindly replay."
     ),
     BROWSER_READ_AMBIGUOUS: "Select an explicit browser helper and granted tab; do not guess.",
-    BROWSER_READ_REFUSED: "Read not authorized/supported. Inspect the grant; do not bypass it.",
+    BROWSER_READ_REFUSED: (
+        "Refused by a missing or read-only grant, an unsupported target, or unmet browser setup. "
+        "Fix what the refusal names; do not bypass it."
+    ),
     BROWSER_READ_BUDGET: "Evidence exceeds its bound. Narrow the query or reduce the limit.",
     NOT_MAPPED: (
         "No known binding for this action in this application. Do not guess a default chord."

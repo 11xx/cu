@@ -214,7 +214,7 @@ overwrite conflicting launcher or manifest files.
 | 53 | Protocol or capture-format mismatch |
 | 54 | Observation/wait timeout |
 | 55 | Ambiguous helper or tab |
-| 56 | Authorization, capability, or target refusal |
+| 56 | Authorization, capability, target, or setup refusal |
 | 57 | Evidence/capture budget exceeded |
 | 58 | Action may have applied; inspect evidence, never blindly replay |
 

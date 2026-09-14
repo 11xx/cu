@@ -661,10 +661,10 @@ OPTIONAL FIREFOX CU BROWSER
   verification; a delivered click is not proof of application success.
   Exit 51: helper unavailable. Exit 52: document, generation, or target changed.
   Exit 53: protocol mismatch. Exit 54: observation/wait timeout.
-  Exit 55: ambiguous helper or tab. Exit 56: authorization, capability, or target
-  refusal. Exit 57: evidence/capture budget. Exit 58: action may have applied;
-  inspect fresh evidence and never blindly replay. Respect site blocks and rate
-  limits: native input is not an evasion fallback.
+  Exit 55: ambiguous helper or tab. Exit 56: authorization, capability, target,
+  or setup refusal. Exit 57: evidence/capture budget. Exit 58: action may have
+  applied; inspect fresh evidence and never blindly replay. Respect site blocks
+  and rate limits: native input is not an evasion fallback.
 
 WHAT EARLIER RUNS LEARNED
   cu know host                   What this machine does differently.

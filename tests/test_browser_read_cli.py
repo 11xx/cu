@@ -80,6 +80,17 @@ def test_setup_command_selects_the_browser(tmp_path, monkeypatch, capsys):
     assert cli.main(["web", "setup", "--user-data-dir", str(root), "--json"]) == exits.USAGE
 
 
+def test_setup_refusal_response_points_at_setup_not_a_grant(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    absent = tmp_path / "absent"
+    args = ["web", "setup", "--browser", "thorium", "--user-data-dir", str(absent)]
+    assert cli.main(args) == exits.BROWSER_READ_REFUSED
+    response = capsys.readouterr().err.splitlines()[-1]
+    assert "setup" in response
+    assert "Inspect the grant" not in response
+
+
 def test_native_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     process = subprocess.Popen(
