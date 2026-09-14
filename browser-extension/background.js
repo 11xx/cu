@@ -10,9 +10,54 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 6;
+  const VERSION = 8;
   const CAPABILITIES = new Set(["read", "interact"]);
-  const READ_OPERATIONS = new Set(["observe", "query", "wait"]);
+  const READ_OPERATIONS = new Set(["observe", "query", "wait", "ax-query", "console", "network"]);
+  // Evidence the worker reads through an attached debugger; collectors never see it.
+  const DEBUGGER_READS = new Set(["ax-query", "console", "network"]);
+  const CONTROL_OPERATIONS = new Set(["grant", "release", "debug-attach", "debug-detach"]);
+  const MAX_DEBUG_ENTRIES = 100;
+  const MAX_DEBUG_TEXT_CHARS = 512;
+  const AX_STATES = new Set([
+    "busy",
+    "checked",
+    "disabled",
+    "expanded",
+    "focusable",
+    "focused",
+    "hidden",
+    "invalid",
+    "modal",
+    "multiselectable",
+    "pressed",
+    "readonly",
+    "required",
+    "selected",
+  ]);
+  // Real input dispatched through an attached debugger rather than page events.
+  const TRUSTED_INPUT = new Set([
+    "trusted-click",
+    "trusted-hover",
+    "trusted-type",
+    "trusted-key",
+    "trusted-scroll",
+  ]);
+  const TRUSTED_KEYS = Object.freeze({
+    Enter: { code: "Enter", keyCode: 13, text: "\r" },
+    Tab: { code: "Tab", keyCode: 9 },
+    Escape: { code: "Escape", keyCode: 27 },
+    Backspace: { code: "Backspace", keyCode: 8 },
+    Delete: { code: "Delete", keyCode: 46 },
+    ArrowUp: { code: "ArrowUp", keyCode: 38 },
+    ArrowDown: { code: "ArrowDown", keyCode: 40 },
+    ArrowLeft: { code: "ArrowLeft", keyCode: 37 },
+    ArrowRight: { code: "ArrowRight", keyCode: 39 },
+    Home: { code: "Home", keyCode: 36 },
+    End: { code: "End", keyCode: 35 },
+    PageUp: { code: "PageUp", keyCode: 33 },
+    PageDown: { code: "PageDown", keyCode: 34 },
+    Space: { code: "Space", keyCode: 32, key: " ", text: " " },
+  });
   const ACTION_OPERATIONS = new Set([
     "click",
     "focus",
@@ -22,6 +67,7 @@
     "select",
     "capture",
     "reload",
+    ...TRUSTED_INPUT,
   ]);
   const OPERATIONS = new Set([...READ_OPERATIONS, ...ACTION_OPERATIONS]);
   const MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -149,7 +195,14 @@
     const value = payload === undefined || payload === null ? {} : payload;
     if (!isRecord(value)) throw new ValidationError("payload must be an object");
     if (operation === "capture") {
-      exactKeys(value, new Set(), new Set(["region"]));
+      exactKeys(value, new Set(), new Set(["region", "full_page"]));
+      if (Object.prototype.hasOwnProperty.call(value, "full_page")) {
+        if (Object.prototype.hasOwnProperty.call(value, "region"))
+          throw new ValidationError("capture takes a region or the full page, not both");
+        if (value.full_page !== true)
+          throw new ValidationError("capture full_page must be true when present");
+        return { full_page: true };
+      }
       return Object.prototype.hasOwnProperty.call(value, "region")
         ? { region: validateCaptureRegion(value.region) }
         : {};
@@ -158,9 +211,34 @@
       exactKeys(value, new Set(), new Set());
       return {};
     }
-    if (operation === "click" || operation === "focus" || operation === "hover") {
+    if (
+      operation === "click" ||
+      operation === "focus" ||
+      operation === "hover" ||
+      operation === "trusted-click" ||
+      operation === "trusted-hover"
+    ) {
       exactKeys(value, new Set(["ref"]), new Set(["ref"]));
       return { ref: validateRef(value.ref) };
+    }
+    if (operation === "trusted-type") {
+      exactKeys(value, new Set(["ref", "text"]), new Set(["ref", "text"]));
+      return { ref: validateRef(value.ref), text: boundedString(value.text, "text", 1024) };
+    }
+    if (operation === "trusted-key") {
+      exactKeys(value, new Set(["key"]), new Set(["key"]));
+      const key = boundedString(value.key, "key", 16);
+      if (!Object.prototype.hasOwnProperty.call(TRUSTED_KEYS, key))
+        throw new ValidationError("key is not a supported named key");
+      return { key };
+    }
+    if (operation === "trusted-scroll") {
+      exactKeys(value, new Set(["dx", "dy"]), new Set(["ref", "dx", "dy"]));
+      return {
+        ...(Object.prototype.hasOwnProperty.call(value, "ref") ? { ref: validateRef(value.ref) } : {}),
+        dx: boundedSignedInteger(value.dx, "dx", 10000),
+        dy: boundedSignedInteger(value.dy, "dy", 10000),
+      };
     }
     if (operation === "select") {
       exactKeys(value, new Set(["ref"]), new Set(["ref", "value", "label"]));
@@ -195,6 +273,36 @@
         ...(target === "element" ? { ref: validateRef(value.ref) } : {}),
         dx: boundedSignedInteger(value.dx === undefined ? 0 : value.dx, "dx", 10000),
         dy: boundedSignedInteger(value.dy === undefined ? 0 : value.dy, "dy", 10000),
+      };
+    }
+    if (operation === "console" || operation === "network") {
+      exactKeys(value, new Set(), new Set(["limit"]));
+      return {
+        limit:
+          value.limit === undefined
+            ? MAX_DEBUG_ENTRIES
+            : boundedInteger(value.limit, "limit", MAX_DEBUG_ENTRIES, 1),
+      };
+    }
+    if (operation === "ax-query") {
+      exactKeys(value, new Set(), new Set(["role", "name", "include_values", "limit"]));
+      return {
+        role:
+          value.role === undefined || value.role === null
+            ? null
+            : boundedString(value.role, "role", MAX_ROLE_CHARS),
+        name:
+          value.name === undefined || value.name === null
+            ? null
+            : boundedString(value.name, "name", MAX_QUERY_CHARS),
+        include_values:
+          value.include_values === undefined
+            ? false
+            : boundedBoolean(value.include_values, "include_values"),
+        limit:
+          value.limit === undefined
+            ? MAX_ELEMENTS
+            : boundedInteger(value.limit, "limit", MAX_ELEMENTS, 1),
       };
     }
     if (operation === "wait") {
@@ -368,17 +476,17 @@
     if (message.protocol !== PROTOCOL || message.version !== VERSION || message.type !== "control")
       throw new ValidationError("unsupported session control envelope");
     if (!validRequestId(message.id)) throw new ValidationError("control id is invalid");
-    if (message.operation !== "grant" && message.operation !== "release")
+    if (!CONTROL_OPERATIONS.has(message.operation))
       throw new ValidationError("operation is not a supported session control");
     if (message.tab_id !== null && (!Number.isSafeInteger(message.tab_id) || message.tab_id < 1))
       throw new ValidationError("tab_id must be a positive integer or null");
     if (message.cursor !== undefined && typeof message.cursor !== "boolean")
       throw new ValidationError("cursor must be a boolean");
     if (
-      message.operation === "release" &&
+      message.operation !== "grant" &&
       (message.capabilities !== undefined || message.cursor !== undefined)
     )
-      throw new ValidationError("release takes no capabilities or cursor");
+      throw new ValidationError(`${message.operation} takes no capabilities or cursor`);
     return {
       id: message.id,
       operation: message.operation,
@@ -501,6 +609,7 @@
       capabilities: validateCapabilities(info.capabilities, grantedCapabilities),
       active: tab.active === true,
       hidden: tab.hidden === true,
+      debugger: false,
     };
   }
   function copyGrant(grant) {
@@ -511,6 +620,62 @@
   }
   function isAction(operation) {
     return ACTION_OPERATIONS.has(operation);
+  }
+  // Query strings and fragments often carry tokens, so debugger evidence keeps
+  // only the scheme, origin and path.
+  function urlWithoutQuery(value) {
+    if (typeof value !== "string" || value.length === 0) return null;
+    try {
+      const url = new URL(value);
+      if (!["http:", "https:", "file:"].includes(url.protocol)) return url.protocol;
+      const origin = url.origin === "null" ? `${url.protocol}//` : url.origin;
+      return `${origin}${url.pathname}`.slice(0, MAX_DEBUG_TEXT_CHARS);
+    } catch (_) {
+      return "unparseable";
+    }
+  }
+  function clippedText(value) {
+    const text = typeof value === "string" ? value : value == null ? "" : String(value);
+    return text.length > MAX_DEBUG_TEXT_CHARS ? text.slice(0, MAX_DEBUG_TEXT_CHARS) : text;
+  }
+  function lineNumber(value) {
+    return Number.isSafeInteger(value) ? value : null;
+  }
+  // Only failures are kept: exceptions, error-level console calls and failed
+  // assertions, and error-level browser log entries.
+  function consoleEntry(method, params) {
+    if (method === "Runtime.exceptionThrown") {
+      const details = params?.exceptionDetails || {};
+      return {
+        kind: "exception",
+        level: "error",
+        text: clippedText(details.exception?.description || details.text),
+        url: urlWithoutQuery(details.url),
+        line: lineNumber(details.lineNumber),
+      };
+    }
+    if (method === "Runtime.consoleAPICalled" && ["error", "assert"].includes(params?.type))
+      return {
+        kind: "console",
+        level: params.type,
+        text: clippedText(
+          (params.args || [])
+            .map((arg) => arg?.description ?? (arg?.value === undefined ? arg?.type : arg.value))
+            .join(" "),
+        ),
+        url: null,
+        line: null,
+      };
+    if (method === "Log.entryAdded" && params?.entry?.level === "error")
+      return {
+        kind: "log",
+        level: "error",
+        source: clippedText(params.entry.source),
+        text: clippedText(params.entry.text),
+        url: urlWithoutQuery(params.entry.url),
+        line: lineNumber(params.entry.lineNumber),
+      };
+    return null;
   }
 
   function pngInfo(dataUrl) {
@@ -661,6 +826,7 @@
       nativeSocket: null,
       nativeError: null,
       nativeRetryAt: 0,
+      debug: null,
       actionQueue: Promise.resolve(),
       jobs: new Map(),
       captureEpoch: 0,
@@ -767,6 +933,7 @@
       state.actionQueue = Promise.resolve();
       for (const job of state.jobs.values()) job.cancelled = true;
       state.jobs.clear();
+      dropDebugger();
       if (port && grant) postNative(revokeMessage(grant, reason), port);
       if (grant && stopCollector && api.tabs?.sendMessage) {
         try {
@@ -885,6 +1052,7 @@
           document_id: request.document_id,
           generation: request.generation,
           ...(region ? { region } : {}),
+          ...(request.payload.full_page ? { full_page: true } : {}),
         });
         if (!reply?.ok)
           throw Object.assign(new ValidationError("capture identity could not be verified"), {
@@ -914,6 +1082,8 @@
           throw new ValidationError("capture grant is no longer current");
       };
       await assertCurrent();
+      if (request.payload.full_page)
+        return captureFullPage(request, grant, snapshot, assertCurrent);
       let before, after, image;
       try {
         before = await snapshot("capture-prep");
@@ -964,7 +1134,88 @@
         limitations: {
           active_tab_only: true,
           region: "bounded-css-viewport",
-          full_page: "unsupported",
+          full_page: "debugger-only",
+          stitching: "unsupported",
+          compositor_frame: "unsupported",
+          atomic_navigation_binding: "unsupported",
+          css_to_compositor: "unsupported",
+        },
+      };
+    }
+    // The debugger renders beyond the viewport in one call, so the document's
+    // size is checked against the pixel budget before anything is rendered.
+    async function captureFullPage(request, grant, snapshot, assertCurrent) {
+      const debug = state.debug;
+      if (!debug || debug.grant !== grant)
+        throw Object.assign(new ValidationError("attach the debugger with cu web debug attach"), {
+          code: "debugger-not-attached",
+        });
+      const send = async (method, params) => {
+        try {
+          return await api.debugger.sendCommand({ tabId: debug.tabId }, method, params);
+        } catch (_) {
+          throw Object.assign(new ValidationError("the debugger did not render the page"), {
+            code: state.debug === debug ? "debugger-command-failed" : "debugger-detached",
+          });
+        }
+      };
+      let before, after, image, content;
+      try {
+        before = await snapshot("capture-prep");
+        await assertCurrent();
+        const size = (await send("Page.getLayoutMetrics", {}))?.cssContentSize;
+        if (
+          !isRecord(size) ||
+          !Number.isFinite(size.width) ||
+          !Number.isFinite(size.height) ||
+          size.width <= 0 ||
+          size.height <= 0
+        )
+          throw Object.assign(new ValidationError("the page reported no content size"), {
+            code: "unsupported-geometry",
+          });
+        content = { width: size.width, height: size.height, space: "css-document" };
+        const ratio = before.viewport.device_pixel_ratio;
+        if (Math.ceil(content.width * ratio) * Math.ceil(content.height * ratio) > MAX_CAPTURE_PIXELS)
+          throw Object.assign(new ValidationError("the full page exceeds the pixel budget"), {
+            code: "capture-budget",
+          });
+        const shot = await send("Page.captureScreenshot", {
+          format: "png",
+          captureBeyondViewport: true,
+          clip: { x: 0, y: 0, width: content.width, height: content.height, scale: 1 },
+        });
+        image = pngInfo(`data:image/png;base64,${shot?.data ?? ""}`);
+        await assertCurrent();
+      } finally {
+        after = await snapshot("capture-finish");
+      }
+      await assertCurrent();
+      if (JSON.stringify(before.viewport) !== JSON.stringify(after.viewport))
+        throw Object.assign(new ValidationError("viewport changed during capture"), {
+          code: "stale-generation",
+        });
+      return {
+        kind: "capture",
+        backend: "debugger",
+        effect: "browser-rendered-full-page",
+        verification: "identity-bracketed",
+        provenance: "browser-rendered, not a CU compositor frame",
+        actionable: false,
+        input_authority: "none",
+        document_id: request.document_id,
+        generation: after.generation,
+        tab_id: request.tab_id,
+        window_id: grant.window_id,
+        viewport: after.viewport,
+        document_size: content,
+        pixels: { width: image.width, height: image.height, space: "image-pixels" },
+        png_base64: image.encoded,
+        bytes: image.bytes,
+        limitations: {
+          active_tab_only: true,
+          region: "unsupported-with-full-page",
+          full_page: "single-debugger-render",
           stitching: "unsupported",
           compositor_frame: "unsupported",
           atomic_navigation_binding: "unsupported",
@@ -1003,6 +1254,7 @@
       state.grant = null;
       state.session = null;
       refuseDetachedJobs(job, port);
+      dropDebugger();
       postNative(revokeMessage(grant, "reload"), port);
       await updateBadge();
       const finish = async (response) => {
@@ -1099,6 +1351,10 @@
         );
         return;
       }
+      if (DEBUGGER_READS.has(request.operation)) {
+        await readDebuggerEvidence(request, grant, port);
+        return;
+      }
       if (isAction(request.operation)) {
         if (!grant.capabilities.includes("interact")) {
           postNative(
@@ -1135,6 +1391,10 @@
         }
       }
       if (job.cancelled || state.grant !== grant || state.nativePort !== port) return;
+      if (TRUSTED_INPUT.has(request.operation)) {
+        await dispatchTrustedInput(request, grant, port, job);
+        return;
+      }
       if (request.operation === "reload") {
         await reloadGrantedTab(request, grant, port, job);
         return;
@@ -1298,6 +1558,367 @@
         if (state.jobs.get(request.id) === job) state.jobs.delete(request.id);
       }
     }
+    // The debugger is attached to one bound tab at a time and never outlives its
+    // grant. Its evidence is buffered from attach onward, bounded, and stripped
+    // of query strings, headers and bodies.
+    function recordDebuggerEvent(source, method, params) {
+      const debug = state.debug;
+      if (!debug || source?.tabId !== debug.tabId) return;
+      const entry = consoleEntry(method, params);
+      if (entry) {
+        debug.console.push(entry);
+        if (debug.console.length > MAX_DEBUG_ENTRIES) {
+          debug.console.shift();
+          debug.dropped.console += 1;
+        }
+        return;
+      }
+      const id = params?.requestId;
+      if (typeof id !== "string") return;
+      let record = debug.requests.get(id);
+      if (method === "Network.requestWillBeSent") {
+        if (record) {
+          record.url = urlWithoutQuery(params.request?.url);
+          return;
+        }
+        record = {
+          method: clippedText(params.request?.method) || null,
+          url: urlWithoutQuery(params.request?.url),
+          type: typeof params.type === "string" ? params.type : null,
+          wall_time: Number.isFinite(params.wallTime) ? params.wallTime : null,
+          status: null,
+          mime_type: null,
+          finished: false,
+          failure: null,
+        };
+        debug.requests.set(id, record);
+        if (debug.requests.size > MAX_DEBUG_ENTRIES) {
+          debug.requests.delete(debug.requests.keys().next().value);
+          debug.dropped.network += 1;
+        }
+        return;
+      }
+      if (!record) return;
+      if (method === "Network.responseReceived") {
+        record.status = lineNumber(params.response?.status);
+        record.mime_type = clippedText(params.response?.mimeType) || null;
+      } else if (method === "Network.loadingFinished") record.finished = true;
+      else if (method === "Network.loadingFailed")
+        record.failure = {
+          error: clippedText(params.errorText),
+          canceled: params.canceled === true,
+          blocked_reason: typeof params.blockedReason === "string" ? params.blockedReason : null,
+        };
+    }
+    function dropDebugger() {
+      const debug = state.debug;
+      if (!debug) return;
+      state.debug = null;
+      if (typeof api.debugger?.detach === "function")
+        Promise.resolve()
+          .then(() => api.debugger.detach({ tabId: debug.tabId }))
+          .catch(() => {});
+    }
+    function handleDebuggerDetach(source, reason) {
+      const debug = state.debug;
+      if (!debug || source?.tabId !== debug.tabId) return false;
+      state.debug = null;
+      state.debuggerDetachReason = typeof reason === "string" ? reason : "detached";
+      if (state.grant === debug.grant) {
+        state.grant.debugger = false;
+        if (state.nativeReady) postNative(grantMessage(), state.nativePort);
+      }
+      return true;
+    }
+    async function attachDebugger(control) {
+      const grant = state.grant;
+      if (!grant || (control.tab_id !== null && control.tab_id !== grant.tab_id))
+        return errorResponse(control.id, "tab-not-granted", "the tab has no active browser grant");
+      if (!grant.capabilities.includes("interact"))
+        return errorResponse(
+          control.id,
+          "interaction-not-granted",
+          "the debugger needs an interaction grant",
+        );
+      if (typeof api.debugger?.attach !== "function")
+        return errorResponse(
+          control.id,
+          "debugger-unsupported",
+          "this browser offers no extension debugger",
+        );
+      if (state.debug)
+        return errorResponse(control.id, "debugger-active", "the debugger is already attached");
+      const debug = {
+        tabId: grant.tab_id,
+        grant,
+        attachedAt: new Date().toISOString(),
+        console: [],
+        requests: new Map(),
+        dropped: { console: 0, network: 0 },
+      };
+      state.debug = debug;
+      try {
+        await api.debugger.attach({ tabId: debug.tabId }, "1.3");
+        for (const method of ["Runtime.enable", "Log.enable", "Network.enable"])
+          await api.debugger.sendCommand({ tabId: debug.tabId }, method, {});
+      } catch (error) {
+        if (state.debug === debug) dropDebugger();
+        return errorResponse(
+          control.id,
+          "debugger-unavailable",
+          clippedText(error?.message || "the debugger could not attach").slice(0, 256),
+        );
+      }
+      if (state.debug !== debug || state.grant !== grant) {
+        if (state.debug === debug) dropDebugger();
+        return revokedResponse(
+          control.id,
+          "grant-revoked",
+          "the grant ended while the debugger attached",
+        );
+      }
+      grant.debugger = true;
+      state.debuggerDetachReason = null;
+      if (state.nativeReady) postNative(grantMessage(), state.nativePort);
+      return null;
+    }
+    async function accessibilityNodes(debug, payload) {
+      const send = (method, params) =>
+        api.debugger.sendCommand({ tabId: debug.tabId }, method, params);
+      let nodes;
+      if (payload.role !== null || payload.name !== null) {
+        const { root } = await send("DOM.getDocument", { depth: 0 });
+        nodes = (
+          await send("Accessibility.queryAXTree", {
+            backendNodeId: root.backendNodeId,
+            ...(payload.role !== null ? { role: payload.role } : {}),
+            ...(payload.name !== null ? { accessibleName: payload.name } : {}),
+          })
+        ).nodes;
+      } else nodes = (await send("Accessibility.getFullAXTree", {})).nodes;
+      const included = (Array.isArray(nodes) ? nodes : []).filter(
+        (node) => isRecord(node) && node.ignored !== true,
+      );
+      return {
+        nodes: included.slice(0, payload.limit).map((node) => ({
+          ax_id: clippedText(node.nodeId),
+          role: clippedText(node.role?.value) || null,
+          name: clippedText(node.name?.value) || null,
+          description: clippedText(node.description?.value) || null,
+          ...(payload.include_values
+            ? { value: node.value === undefined ? null : clippedText(node.value.value) }
+            : {}),
+          states: Object.fromEntries(
+            (Array.isArray(node.properties) ? node.properties : [])
+              .filter((property) => AX_STATES.has(property?.name))
+              .map((property) => [property.name, property.value?.value ?? null]),
+          ),
+          child_count: Array.isArray(node.childIds) ? node.childIds.length : 0,
+        })),
+        total: included.length,
+        truncated: included.length > payload.limit,
+        values: payload.include_values ? "included" : "omitted",
+      };
+    }
+    async function readDebuggerEvidence(request, grant, port) {
+      const debug = state.debug;
+      if (!debug || debug.grant !== grant) {
+        postNative(
+          errorResponse(
+            request.id,
+            "debugger-not-attached",
+            "attach the debugger with cu web debug attach",
+          ),
+          port,
+        );
+        return;
+      }
+      let evidence;
+      try {
+        if (request.operation === "console")
+          evidence = {
+            entries: debug.console.slice(-request.payload.limit),
+            dropped: debug.dropped.console,
+          };
+        else if (request.operation === "network")
+          evidence = {
+            entries: [...debug.requests.values()]
+              .slice(-request.payload.limit)
+              .map((entry) => ({ ...entry })),
+            dropped: debug.dropped.network,
+          };
+        else evidence = await accessibilityNodes(debug, request.payload);
+      } catch (_) {
+        postNative(
+          errorResponse(
+            request.id,
+            state.debug === debug ? "debugger-command-failed" : "debugger-detached",
+            "the debugger did not return evidence",
+          ),
+          port,
+        );
+        return;
+      }
+      if (state.grant !== grant || state.nativePort !== port) return;
+      const response = {
+        protocol: PROTOCOL,
+        version: VERSION,
+        type: "response",
+        id: request.id,
+        session: request.session,
+        tab_id: request.tab_id,
+        document_id: request.document_id,
+        ok: true,
+        result: {
+          kind: "debugger-evidence",
+          evidence: request.operation,
+          backend: "debugger",
+          attached_at: debug.attachedAt,
+          document_id: grant.document_id,
+          generation: grant.generation,
+          ...evidence,
+        },
+      };
+      if (new TextEncoder().encode(JSON.stringify(response)).length > MAX_MESSAGE_BYTES) {
+        postNative(
+          errorResponse(request.id, "observation-too-large", "request a smaller limit"),
+          port,
+        );
+        return;
+      }
+      postNative(response, port);
+    }
+    // Real input goes through the debugger to the point the collector checked,
+    // so DOM actions' freshness, visibility, sensitivity and covering refusals
+    // apply before anything is dispatched.
+    async function dispatchTrustedInput(request, grant, port, job) {
+      const debug = state.debug;
+      if (!debug || debug.grant !== grant) {
+        postNative(
+          errorResponse(
+            request.id,
+            "debugger-not-attached",
+            "attach the debugger with cu web debug attach",
+          ),
+          port,
+        );
+        return;
+      }
+      let point = null;
+      if (request.operation !== "trusted-key") {
+        let located;
+        try {
+          located = await api.tabs.sendMessage(request.tab_id, {
+            type: "target-point",
+            request: { ...request, capabilities: copyGrant(grant).capabilities },
+          });
+          validateCollectorResponse(located);
+        } catch (_) {
+          postNative(
+            errorResponse(
+              request.id,
+              "collector-unavailable",
+              "the bound tab did not locate the target; nothing was dispatched",
+            ),
+            port,
+          );
+          return;
+        }
+        if (!located.ok) {
+          postNative(located, port);
+          return;
+        }
+        point = located.result;
+      }
+      if (job.cancelled || state.debug !== debug || state.grant !== grant) return;
+      const input = (method, params) =>
+        api.debugger.sendCommand({ tabId: debug.tabId }, method, params);
+      const payload = request.payload;
+      let dispatched = false;
+      let effect;
+      try {
+        if (request.operation === "trusted-key") {
+          const key = TRUSTED_KEYS[payload.key];
+          const common = {
+            key: key.key ?? payload.key,
+            code: key.code,
+            windowsVirtualKeyCode: key.keyCode,
+            nativeVirtualKeyCode: key.keyCode,
+          };
+          dispatched = true;
+          await input("Input.dispatchKeyEvent", {
+            type: key.text ? "keyDown" : "rawKeyDown",
+            ...common,
+            ...(key.text ? { text: key.text, unmodifiedText: key.text } : {}),
+          });
+          await input("Input.dispatchKeyEvent", { type: "keyUp", ...common });
+          effect = "key-dispatched";
+        } else if (request.operation === "trusted-scroll") {
+          dispatched = true;
+          await input("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: point.x,
+            y: point.y,
+            deltaX: payload.dx,
+            deltaY: payload.dy,
+          });
+          effect = "wheel-dispatched";
+        } else {
+          const at = { x: point.x, y: point.y };
+          dispatched = true;
+          await input("Input.dispatchMouseEvent", { type: "mouseMoved", ...at, button: "none" });
+          if (request.operation !== "trusted-hover") {
+            const press = { ...at, button: "left", clickCount: 1 };
+            await input("Input.dispatchMouseEvent", { type: "mousePressed", ...press, buttons: 1 });
+            await input("Input.dispatchMouseEvent", { type: "mouseReleased", ...press, buttons: 0 });
+          }
+          if (request.operation === "trusted-type")
+            await input("Input.insertText", { text: payload.text });
+          effect = {
+            "trusted-hover": "pointer-moved",
+            "trusted-click": "click-dispatched",
+            "trusted-type": "text-inserted",
+          }[request.operation];
+        }
+      } catch (_) {
+        postNative(
+          dispatched
+            ? errorResponse(
+                request.id,
+                "action-uncertain",
+                "debugger input may have been partially applied; inspect fresh evidence",
+              )
+            : errorResponse(request.id, "debugger-detached", "the debugger detached first"),
+          port,
+        );
+        return;
+      }
+      if (state.grant !== grant || state.nativePort !== port) return;
+      postNative(
+        {
+          protocol: PROTOCOL,
+          version: VERSION,
+          type: "response",
+          id: request.id,
+          session: request.session,
+          tab_id: request.tab_id,
+          document_id: request.document_id,
+          ok: true,
+          result: {
+            kind: "action",
+            action: request.operation,
+            backend: "debugger",
+            effect,
+            verification: "unverified",
+            ...(payload.ref ? { ref: payload.ref } : {}),
+            ...(point ? { point: { x: point.x, y: point.y, space: "css-viewport" } } : {}),
+            generation: point ? point.generation : grant.generation,
+            document_id: request.document_id,
+          },
+        },
+        port,
+      );
+    }
     async function storedCursor() {
       try {
         const stored = await api.storage?.local?.get({ cursor: true });
@@ -1335,6 +1956,32 @@
           },
           port,
         );
+      if (control.operation === "debug-attach") {
+        const refused = await attachDebugger(control);
+        if (refused) postNative(refused, port);
+        else
+          reply(state.grant, {
+            grant: copyGrant(state.grant),
+            debugger: "attached",
+            attached_at: state.debug.attachedAt,
+          });
+        return;
+      }
+      if (control.operation === "debug-detach") {
+        const grant = state.grant;
+        if (!state.debug || !grant || (control.tab_id !== null && control.tab_id !== grant.tab_id)) {
+          postNative(
+            errorResponse(control.id, "debugger-not-attached", "no debugger is attached to that tab"),
+            port,
+          );
+          return;
+        }
+        dropDebugger();
+        grant.debugger = false;
+        if (state.nativeReady) postNative(grantMessage(), port);
+        reply(grant, { grant: copyGrant(grant), debugger: "detached" });
+        return;
+      }
       if (control.operation === "release") {
         const grant = state.grant;
         if (!grant || (control.tab_id !== null && control.tab_id !== grant.tab_id)) {
@@ -1438,6 +2085,8 @@
         grant: copyGrant(state.grant),
         native: state.nativePort ? (state.nativeReady ? "ready" : "starting") : "unavailable",
         native_error: state.nativeError,
+        debugger: state.debug ? "attached" : "detached",
+        debugger_detach_reason: state.debuggerDetachReason ?? null,
       };
     }
     async function handleUiMessage(message, sender) {
@@ -1460,6 +2109,8 @@
       startCurrent,
       stop: () => revokeGrant("client-stop", true),
       connectNative,
+      handleDebuggerEvent: recordDebuggerEvent,
+      handleDebuggerDetach,
       handleNativeMessage,
       handleTabUpdated,
       handleTabRemoved,
@@ -1474,6 +2125,12 @@
     const controller = createController(api, options);
     controller.connectNative();
     api.tabs.onActivated?.addListener(() => controller.connectNative());
+    api.debugger?.onEvent?.addListener((source, method, params) =>
+      controller.handleDebuggerEvent(source, method, params),
+    );
+    api.debugger?.onDetach?.addListener((source, reason) =>
+      controller.handleDebuggerDetach(source, reason),
+    );
     api.tabs.onUpdated.addListener((tabId, changeInfo) => {
       void controller.handleTabUpdated(tabId, changeInfo);
     });

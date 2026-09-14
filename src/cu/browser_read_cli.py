@@ -122,11 +122,21 @@ def configure(parser: argparse.ArgumentParser) -> None:
     action.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     _common(action)
     action.set_defaults(injects=True)
-    action.add_argument("action", choices=sorted(transport.ACTION_OPERATIONS - {"capture"}))
+    action.add_argument(
+        "action",
+        choices=("click", "fill", "focus", "hover", "key", "reload", "scroll", "select", "type"),
+    )
+    action.add_argument(
+        "--input",
+        choices=("dom", "debugger"),
+        default="dom",
+        help="dom dispatches page events; debugger sends real input through an attached debugger",
+    )
     action.add_argument("--ref", help="Stable ref from a prior observation")
     action.add_argument(
-        "--value", help="Replacement value for fill or exact option value for select"
+        "--value", help="Value for fill, text for type, or exact option value for select"
     )
+    action.add_argument("--key", choices=sorted(transport.TRUSTED_KEYS), help="Named key for key")
     action.add_argument("--label", help="Visible option label for select")
     action.add_argument("--target", choices=("document", "element"), default="element")
     action.add_argument("--dx", type=int, default=0)
@@ -155,8 +165,8 @@ def configure(parser: argparse.ArgumentParser) -> None:
 
     capture = commands.add_parser(
         "capture",
-        help="Capture the explicitly granted active tab viewport as PNG",
-        description="Capture the explicitly granted active tab viewport as PNG",
+        help="Capture the explicitly granted active tab as PNG",
+        description="Capture the explicitly granted active tab's viewport, a region, or full page",
     )
     capture.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     _common(capture)
@@ -164,6 +174,24 @@ def configure(parser: argparse.ArgumentParser) -> None:
         "--region",
         help="CSS viewport rectangle as 'x,y wxh' or 'x,y,w,h'; never a desktop coordinate",
     )
+    capture.add_argument(
+        "--full-page",
+        action="store_true",
+        help="Render the whole document through the attached Chromium debugger",
+    )
+
+    debug = commands.add_parser(
+        "debug",
+        help="Attach the Chromium debugger to the bound tab and read its evidence",
+        description="Attach the Chromium debugger to the bound tab and read its evidence",
+    )
+    debug.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    _common(debug)
+    debug.add_argument("debug_command", choices=("attach", "detach", "console", "network", "ax"))
+    debug.add_argument("--limit", type=int, help="Most recent entries or nodes to return")
+    debug.add_argument("--role", help="Accessibility role to match (ax only)")
+    debug.add_argument("--name", help="Accessible name to match (ax only)")
+    debug.add_argument("--values", action="store_true", help="Include accessible values (ax only)")
     for child in commands.choices.values():
         _context(child)
 
@@ -347,11 +375,30 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
     safety.check_abort()
     safety.check_session()
     safety.check_denylist(config.load(), observe.focused())
+    operation = args.action
+    if args.input == "debugger":
+        if args.action not in {"click", "hover", "scroll", "type", "key"}:
+            raise ValueError(f"{args.action} has no debugger input; use --input dom")
+        operation = f"trusted-{args.action}"
+    elif args.action in {"type", "key"}:
+        raise ValueError(f"{args.action} needs --input debugger")
     payload: dict[str, Any]
-    if args.action in {"click", "focus", "hover"}:
+    if operation in {"click", "focus", "hover", "trusted-click", "trusted-hover"}:
         if not args.ref:
             raise ValueError(f"{args.action} requires --ref")
         payload = {"ref": args.ref}
+    elif operation == "trusted-type":
+        if args.ref is None or args.value is None:
+            raise ValueError("type requires --ref and --value")
+        payload = {"ref": args.ref, "text": args.value}
+    elif operation == "trusted-key":
+        if args.key is None or args.ref:
+            raise ValueError("key requires --key and targets the focused element, not --ref")
+        payload = {"key": args.key}
+    elif operation == "trusted-scroll":
+        if args.target == "element" and not args.ref:
+            raise ValueError("element scroll requires --ref")
+        payload = {"dx": args.dx, "dy": args.dy, **({"ref": args.ref} if args.ref else {})}
     elif args.action == "select":
         if not args.ref:
             raise ValueError("select requires --ref")
@@ -388,7 +435,7 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
                 "the current browser grant is read-only; bind the tab again with cu web grant",
             )
         result = client.action(
-            args.action,
+            operation,
             **_identity(grant),
             generation=args.generation,
             payload=payload,
@@ -399,7 +446,7 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
     safety.record(
         config.load(),
         {
-            "action": f"browser-{args.action}",
+            "action": f"browser-{operation}",
             "backend": receipt.get("backend"),
             "verification": receipt.get("verification"),
             "tab_id": grant["tab_id"],
@@ -449,6 +496,40 @@ def _release(args: argparse.Namespace) -> dict[str, Any]:
         },
     )
     return {"browser_grant_released": True, **result}
+
+
+def _debug(args: argparse.Namespace) -> dict[str, Any]:
+    if args.debug_command in {"attach", "detach"}:
+        if args.debug_command == "attach":
+            safety.check_abort()
+            safety.check_session()
+        with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
+            result = client.control(
+                f"debug-{args.debug_command}", tab_id=args.tab, timeout=args.timeout
+            )
+        _check_response(result)
+        grant = result["result"]["grant"]
+        safety.record(
+            config.load(),
+            {
+                "action": f"browser-debug-{args.debug_command}",
+                "tab_id": grant["tab_id"],
+                "document_id": grant["document_id"],
+            },
+        )
+        return {"browser_debugger": result["result"]["debugger"], **result}
+    operation = "ax-query" if args.debug_command == "ax" else args.debug_command
+    payload: dict[str, Any] = {} if args.limit is None else {"limit": args.limit}
+    if operation == "ax-query":
+        payload.update({"role": args.role, "name": args.name, "include_values": args.values})
+    elif args.role or args.name or args.values:
+        raise ValueError("--role, --name and --values apply only to debug ax")
+    payload = transport.validate_payload(operation, payload)
+    with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
+        grant = _grant(args, client)
+        result = client.request(operation, **_identity(grant), payload=payload)
+    _check_response(result)
+    return {"evidence_only": True, "untrusted_page_content": True, **result}
 
 
 def _wait(args: argparse.Namespace) -> dict[str, Any]:
@@ -516,6 +597,7 @@ def _capture(args: argparse.Namespace) -> dict[str, Any]:
         )
     safety.check_abort()
     region = _parse_region(args.region) if args.region else None
+    payload = transport.capture_payload(region, args.full_page)
     with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
         grant = _grant(args, client)
         if "interact" not in grant.get("capabilities", ["read"]):
@@ -529,6 +611,7 @@ def _capture(args: argparse.Namespace) -> dict[str, Any]:
             **_identity(grant),
             generation=args.generation,
             region=region,
+            full_page=args.full_page,
             timeout=args.timeout,
         )
     _check_response(result)
@@ -538,7 +621,7 @@ def _capture(args: argparse.Namespace) -> dict[str, Any]:
         tab_id=grant["tab_id"],
         document_id=grant["document_id"],
         generation=args.generation,
-        payload={} if region is None else {"region": region},
+        payload=payload,
     )
     try:
         result = transport.normalize_capture_response(result, request)
@@ -604,6 +687,8 @@ def run(args: argparse.Namespace) -> int:
             result = _bind(args)
         elif args.web_command == "stop":
             result = _release(args)
+        elif args.web_command == "debug":
+            result = _debug(args)
         elif args.web_command == "read":
             result = _read(args)
         elif args.web_command == "action":

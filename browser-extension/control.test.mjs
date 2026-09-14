@@ -342,6 +342,28 @@ test("cursor ownership excludes only the indicator; hiding it does not invalidat
   assert.equal(overlay.isConnected, false);
 });
 
+test("a full-page render's own resize and scroll do not advance the generation", async (t) => {
+  const { window, document, collector, read } = fixture(t, "<button>Act</button>");
+  const generation = read("button").result.generation;
+  const identity = { session: "session-1", document_id: "document-1", generation };
+  const refused = await collector.handle({ type: "capture-prep", ...identity, full_page: false });
+  assert.equal(refused.error.code, "invalid-message");
+  const prepared = await collector.handle({ type: "capture-prep", ...identity, full_page: true });
+  assert.equal(prepared.ok, true);
+  window.dispatchEvent(new window.Event("resize"));
+  window.dispatchEvent(new window.Event("scroll"));
+  assert.equal(collector.handle({ type: "capture-finish", ...identity, full_page: true }).ok, true);
+  assert.equal(collector.generation, generation);
+  window.dispatchEvent(new window.Event("resize"));
+  assert.equal(collector.generation, generation + 1);
+
+  const next = { ...identity, generation: generation + 1 };
+  assert.equal((await collector.handle({ type: "capture-prep", ...next, full_page: true })).ok, true);
+  document.querySelector("button").textContent = "Changed";
+  const finished = collector.handle({ type: "capture-finish", ...next, full_page: true });
+  assert.equal(finished.error.code, "stale-generation");
+});
+
 test("an offscreen ref can be scrolled into view but cannot be clicked", (t) => {
   const { document, act } = fixture(t, '<button id="far">Distant target</button>');
   const button = document.querySelector("button");

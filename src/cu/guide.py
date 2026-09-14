@@ -589,6 +589,10 @@ OPTIONAL FIREFOX CU BROWSER
   cu web grant --json
   cu web grant --tab 12 --read-only --json
   cu web stop --json
+  cu web debug attach --json
+  cu web debug console --json
+  cu web debug ax --role button --name Submit --json
+  cu web action click --input debugger --ref e4 --document DOCUMENT --generation 3
   cu web read --selector '.result-card' --details --query Port --json
   cu web action click --document DOCUMENT --generation 3 --ref e4 --tab 12
   cu web action select --document DOCUMENT --generation 4 --ref e5 --value two --tab 12
@@ -611,6 +615,21 @@ OPTIONAL FIREFOX CU BROWSER
   the session binds the new document again; switching tabs never transfers it.
   The popup shows status and keeps the amber cursor setting. Installation is
   temporary; CU does not sign, publish, or install the extension in Chrome.
+
+  In Chromium-family browsers `cu web debug attach` attaches the extension
+  debugger to the bound tab (interaction grant, same interlocks), and the browser
+  shows its debugging banner. `debug console`, `debug network`, and `debug ax`
+  return bounded evidence buffered since attach (browser error log entries include
+  ones already recorded for the page): failures only, request metadata
+  without query strings, headers, or bodies, and accessibility roles, names, and
+  states with values omitted unless `--values`. Any end of the grant, `debug
+  detach`, or a detach from the banner ends the attachment. Firefox refuses these
+  commands. With it attached, `cu web action click|hover|type|key|scroll --input
+  debugger` sends real input to the point the collector checked (the same
+  freshness, visibility, sensitivity, and covering refusals), so pages see trusted
+  events and CSS :hover. `key` takes named keys only. Receipts name backend
+  debugger and stay unverified; an interrupted dispatch is uncertain (exit 58).
+  Input never falls back between dom and debugger.
 
   Reads return stable per-document element refs. Optional bounded CSS selector
   scopes are data, never eval. `--details` returns bounded links and time-like
@@ -650,8 +669,10 @@ OPTIONAL FIREFOX CU BROWSER
   the full browser viewport is captured, its image/viewport scale is validated,
   and the native host crops that rectangle while retaining requested and
   pixel-quantized returned coverage. The result is browser-rendered provenance,
-  not a CU frame, and it has no native-input authority. Full-page capture and
-  stitching are unsupported. The optional owned amber browser arrowhead is
+  not a CU frame, and it has no native-input authority. With the Chromium
+  debugger attached, `--full-page` renders the whole document as one image,
+  refusing before rendering when it would exceed the pixel budget; stitching is
+  unsupported. The optional owned amber browser arrowhead is
   selected in the popup, pointer-events-none, excluded from reads and capture,
   and never claims to move the OS cursor. Capture bounds are 512 KiB PNG and 16
   megapixels; at most 60 private runtime captures are kept.

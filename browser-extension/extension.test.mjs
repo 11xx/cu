@@ -612,6 +612,51 @@ test("interaction actions reject a detached ref and preserve capability boundari
   collector.dispose();
 });
 
+test("the collector locates debugger input targets and never dispatches that input", () => {
+  const button = new Element("button", {
+    text: "Run",
+    rect: { x: 10, y: 20, width: 40, height: 10 },
+  });
+  const secret = new Element("input", {
+    attrs: { type: "password", name: "password" },
+    value: "hunter2",
+  });
+  const field = new Element("input", { attrs: { type: "text", name: "notes" }, value: "" });
+  const doc = new Document([button, secret, field]);
+  const collector = createCollector(doc, { idFactory: () => "document-1" });
+  collector.handle({ type: "start", session: "session-1", capabilities: ["read", "interact"] });
+  const observed = collector.handle({
+    type: "read-request",
+    request: request("observe", { payload: { include_values: false, limit: 10 } }),
+  });
+  assert.equal(observed.result.elements.items.length, 3);
+  const [runRef, secretRef, notesRef] = observed.result.elements.items.map((item) => item.ref);
+  const pick = (name) => ({ Run: runRef, password: secretRef, notes: notesRef })[name];
+  const message = (type, operation, payload) => ({
+    type,
+    request: request(operation, {
+      generation: observed.result.generation,
+      capabilities: ["read", "interact"],
+      payload,
+    }),
+  });
+  const located = collector.handle(message("target-point", "trusted-click", { ref: pick("Run") }));
+  assert.equal(located.ok, true, JSON.stringify(located));
+  assert.deepEqual([located.result.x, located.result.y], [30, 25]);
+  const secretType = message("target-point", "trusted-type", { ref: pick("password"), text: "x" });
+  assert.equal(collector.handle(secretType).error.code, "sensitive-target");
+  const notesType = message("target-point", "trusted-type", { ref: pick("notes"), text: "x" });
+  assert.equal(collector.handle(notesType).ok, true);
+  const dispatched = message("read-request", "trusted-click", { ref: pick("Run") });
+  assert.equal(collector.handle(dispatched).error.code, "unsupported-action");
+  const domPoint = message("target-point", "click", { ref: pick("Run") });
+  assert.equal(collector.handle(domPoint).error.code, "unsupported-action");
+  button.parentElement = null;
+  const stale = message("target-point", "trusted-hover", { ref: pick("Run") });
+  assert.equal(collector.handle(stale).error.code, "stale-element");
+  collector.dispose();
+});
+
 test("media reads and bounded card details label text metadata honestly", () => {
   const link = new Element("a", {
     text: "Story",
@@ -1230,6 +1275,440 @@ test("a lost native host is retried no sooner than the retry interval", () => {
   }
   assert.equal(ports.length, 2);
   assert.equal(ports[1].messages[0].type, "hello");
+});
+
+function debuggerFake(api, responses = {}) {
+  const calls = [];
+  api.debugger = {
+    attach: async (target, version) => calls.push(["attach", target.tabId, version]),
+    detach: async (target) => calls.push(["detach", target.tabId]),
+    sendCommand: async (target, method, params) => {
+      calls.push(["send", method, params]);
+      return responses[method] || {};
+    },
+  };
+  return calls;
+}
+
+async function grantWithDebugger(controller, port, id = "debug") {
+  await controller.handleNativeMessage(
+    control("grant", { id: `grant-${id}`, capabilities: ["read", "interact"] }),
+    port,
+  );
+  const session = port.messages.at(-1).result.grant.session;
+  await controller.handleNativeMessage(control("debug-attach", { id: `attach-${id}` }), port);
+  assert.equal(port.messages.at(-1).ok, true, JSON.stringify(port.messages.at(-1)));
+  return session;
+}
+
+test("debug attach needs an interaction grant and enables the evidence domains", async () => {
+  const { api, port } = fakeApi();
+  const calls = debuggerFake(api);
+  const controller = createController(api);
+  controller.connectNative();
+  await controller.handleNativeMessage(readyMessage(), port);
+  await controller.handleNativeMessage(control("grant", { capabilities: ["read"] }), port);
+  await controller.handleNativeMessage(control("debug-attach", { id: "attach-read" }), port);
+  assert.equal(port.messages.at(-1).error.code, "interaction-not-granted");
+  await controller.stop();
+  await grantWithDebugger(controller, port);
+  const attached = port.messages.at(-1);
+  assert.equal(attached.result.debugger, "attached");
+  assert.equal(attached.result.grant.debugger, true);
+  assert.equal(port.messages.at(-2).type, "grant");
+  assert.equal(port.messages.at(-2).grant.debugger, true);
+  assert.deepEqual(calls, [
+    ["attach", 7, "1.3"],
+    ["send", "Runtime.enable", {}],
+    ["send", "Log.enable", {}],
+    ["send", "Network.enable", {}],
+  ]);
+  await controller.handleNativeMessage(control("debug-attach", { id: "attach-again" }), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-active");
+  await controller.handleNativeMessage(control("debug-detach", { id: "detach" }), port);
+  assert.equal(port.messages.at(-1).result.debugger, "detached");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.at(-1), ["detach", 7]);
+  assert.equal(controller.status().grant.debugger, false);
+});
+
+test("debugger evidence keeps failures and request metadata without queries or headers", async () => {
+  const { api, port } = fakeApi();
+  debuggerFake(api);
+  const controller = createController(api);
+  controller.connectNative();
+  const session = await grantWithDebugger(controller, port);
+  const tab = { tabId: 7 };
+  const log = (value) => ({ type: "string", value });
+  controller.handleDebuggerEvent(tab, "Runtime.consoleAPICalled", { type: "log", args: [log("no")] });
+  controller.handleDebuggerEvent(tab, "Runtime.consoleAPICalled", {
+    type: "error",
+    args: [log("boom"), { type: "number", value: 3 }],
+  });
+  controller.handleDebuggerEvent(tab, "Runtime.exceptionThrown", {
+    exceptionDetails: {
+      text: "Uncaught",
+      exception: { description: "TypeError: x" },
+      url: "http://127.0.0.1/app.js?token=secret#frag",
+      lineNumber: 4,
+    },
+  });
+  controller.handleDebuggerEvent(tab, "Log.entryAdded", {
+    entry: { level: "warning", source: "network", text: "slow" },
+  });
+  controller.handleDebuggerEvent({ tabId: 8 }, "Runtime.consoleAPICalled", {
+    type: "error",
+    args: [log("another tab")],
+  });
+  controller.handleDebuggerEvent(tab, "Network.requestWillBeSent", {
+    requestId: "r1",
+    request: {
+      method: "POST",
+      url: "https://example.test/api/save?session=abc#x",
+      headers: { Cookie: "c" },
+      postData: "body",
+    },
+    type: "Fetch",
+    wallTime: 1,
+  });
+  controller.handleDebuggerEvent(tab, "Network.responseReceived", {
+    requestId: "r1",
+    response: { status: 201, mimeType: "application/json", headers: { "Set-Cookie": "c" } },
+  });
+  controller.handleDebuggerEvent(tab, "Network.loadingFinished", { requestId: "r1" });
+  controller.handleDebuggerEvent(tab, "Network.requestWillBeSent", {
+    requestId: "r2",
+    request: { method: "GET", url: "http://127.0.0.1:47620/media.webm" },
+    type: "Media",
+  });
+  controller.handleDebuggerEvent(tab, "Network.loadingFailed", {
+    requestId: "r2",
+    errorText: "net::ERR_ABORTED",
+    canceled: true,
+  });
+
+  await controller.handleNativeMessage(request("console", { id: "c1", session, payload: {} }), port);
+  const evidence = port.messages.at(-1).result;
+  assert.equal(evidence.backend, "debugger");
+  assert.deepEqual(
+    evidence.entries.map((entry) => [entry.kind, entry.text]),
+    [
+      ["console", "boom 3"],
+      ["exception", "TypeError: x"],
+    ],
+  );
+  assert.equal(evidence.entries[1].url, "http://127.0.0.1/app.js");
+  await controller.handleNativeMessage(
+    request("network", { id: "n1", session, payload: { limit: 5 } }),
+    port,
+  );
+  const network = port.messages.at(-1).result.entries;
+  assert.deepEqual(network[0], {
+    method: "POST",
+    url: "https://example.test/api/save",
+    type: "Fetch",
+    wall_time: 1,
+    status: 201,
+    mime_type: "application/json",
+    finished: true,
+    failure: null,
+  });
+  assert.deepEqual(network[1].failure, {
+    error: "net::ERR_ABORTED",
+    canceled: true,
+    blocked_reason: null,
+  });
+  assert.equal(/abc|Cookie|body/.test(JSON.stringify(network)), false);
+});
+
+test("accessibility evidence queries by role and name and omits values unless asked", async () => {
+  const { api, port } = fakeApi();
+  const calls = debuggerFake(api, {
+    "DOM.getDocument": { root: { backendNodeId: 1 } },
+    "Accessibility.queryAXTree": {
+      nodes: [
+        {
+          nodeId: "10",
+          ignored: false,
+          role: { value: "button" },
+          name: { value: "Apply once" },
+          value: { value: "hidden value" },
+          properties: [
+            { name: "disabled", value: { value: false } },
+            { name: "url", value: { value: "x" } },
+          ],
+          childIds: ["11"],
+        },
+        { nodeId: "12", ignored: true, role: { value: "generic" } },
+      ],
+    },
+    "Accessibility.getFullAXTree": {
+      nodes: [{ nodeId: "20", ignored: false, role: { value: "textbox" }, value: { value: "typed" } }],
+    },
+  });
+  const controller = createController(api);
+  controller.connectNative();
+  const session = await grantWithDebugger(controller, port);
+  await controller.handleNativeMessage(
+    request("ax-query", { id: "ax1", session, payload: { role: "button", name: "Apply once" } }),
+    port,
+  );
+  const matched = port.messages.at(-1).result;
+  assert.deepEqual(matched.nodes, [
+    {
+      ax_id: "10",
+      role: "button",
+      name: "Apply once",
+      description: null,
+      states: { disabled: false },
+      child_count: 1,
+    },
+  ]);
+  assert.equal(matched.values, "omitted");
+  assert.deepEqual(calls.find((call) => call[1] === "Accessibility.queryAXTree")[2], {
+    backendNodeId: 1,
+    role: "button",
+    accessibleName: "Apply once",
+  });
+  await controller.handleNativeMessage(
+    request("ax-query", { id: "ax2", session, payload: { include_values: true } }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).result.nodes[0].value, "typed");
+});
+
+test("full-page capture renders through the attached debugger and checks its budget first", async () => {
+  const { api, port } = fakeApi();
+  const calls = debuggerFake(api);
+  let content = { x: 0, y: 0, width: 2, height: 1 };
+  const send = api.debugger.sendCommand;
+  api.debugger.sendCommand = async (target, method, params) => {
+    await send(target, method, params);
+    if (method === "Page.getLayoutMetrics") return { cssContentSize: content };
+    if (method === "Page.captureScreenshot")
+      return {
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8DwH4QBEfcD/ePF9e8AAAAASUVORK5CYII=",
+      };
+    return {};
+  };
+  const original = api.tabs.sendMessage;
+  api.tabs.sendMessage = async (tab, message) => {
+    if (!message.type.startsWith("capture-")) return original(tab, message);
+    assert.equal(message.full_page, true);
+    return {
+      ok: true,
+      document_id: "document-1",
+      generation: 0,
+      viewport: { width: 800, height: 600, device_pixel_ratio: 2, space: "css-viewport" },
+    };
+  };
+  const controller = createController(api);
+  controller.connectNative();
+  const fullPage = (id, session, payload = { full_page: true }) =>
+    request("capture", { id, session, generation: 0, payload });
+
+  await controller.handleNativeMessage(
+    control("grant", { id: "grant-plain", capabilities: ["read", "interact"] }),
+    port,
+  );
+  const plain = port.messages.at(-1).result.grant.session;
+  await controller.handleNativeMessage(fullPage("unattached", plain), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-not-attached");
+  await controller.stop();
+
+  const session = await grantWithDebugger(controller, port);
+  await controller.handleNativeMessage(fullPage("full", session), port);
+  const captured = port.messages.at(-1);
+  assert.equal(captured.ok, true, JSON.stringify(captured));
+  assert.equal(captured.result.backend, "debugger");
+  assert.equal(captured.result.effect, "browser-rendered-full-page");
+  assert.deepEqual(captured.result.pixels, { width: 2, height: 1, space: "image-pixels" });
+  assert.deepEqual(captured.result.document_size, { width: 2, height: 1, space: "css-document" });
+  assert.deepEqual(calls.at(-1), [
+    "send",
+    "Page.captureScreenshot",
+    {
+      format: "png",
+      captureBeyondViewport: true,
+      clip: { x: 0, y: 0, width: 2, height: 1, scale: 1 },
+    },
+  ]);
+
+  const rendered = calls.filter((call) => call[1] === "Page.captureScreenshot").length;
+  content = { x: 0, y: 0, width: 2100, height: 2000 };
+  await controller.handleNativeMessage(fullPage("over-budget", session), port);
+  assert.equal(port.messages.at(-1).error.code, "capture-budget");
+  assert.equal(calls.filter((call) => call[1] === "Page.captureScreenshot").length, rendered);
+
+  const region = { x: 0, y: 0, width: 1, height: 1, space: "css-viewport" };
+  await controller.handleNativeMessage(
+    fullPage("both", session, { full_page: true, region }),
+    port,
+  );
+  assert.equal(port.messages.at(-1).error.code, "invalid-request");
+});
+
+test("navigation and a detach from the browser both end the debugger", async () => {
+  const { api, port } = fakeApi();
+  const calls = debuggerFake(api);
+  const controller = createController(api);
+  controller.connectNative();
+  await grantWithDebugger(controller, port, "first");
+  await controller.handleTabUpdated(7, { status: "loading" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.at(-1), ["detach", 7]);
+  assert.equal(controller.status().debugger, "detached");
+
+  const session = await grantWithDebugger(controller, port, "second");
+  assert.equal(controller.handleDebuggerDetach({ tabId: 7 }, "canceled_by_user"), true);
+  assert.equal(controller.status().grant.debugger, false);
+  assert.equal(controller.status().debugger_detach_reason, "canceled_by_user");
+  await controller.handleNativeMessage(request("console", { id: "c", session, payload: {} }), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-not-attached");
+  await controller.handleNativeMessage(control("debug-detach", { id: "d" }), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-not-attached");
+});
+
+test("a browser without an extension debugger refuses debugger mode", async () => {
+  const { api, port } = fakeApi();
+  const controller = createController(api);
+  controller.connectNative();
+  await controller.handleNativeMessage(
+    control("grant", { capabilities: ["read", "interact"] }),
+    port,
+  );
+  const session = port.messages.at(-1).result.grant.session;
+  await controller.handleNativeMessage(control("debug-attach", { id: "attach" }), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-unsupported");
+  await controller.handleNativeMessage(request("network", { id: "n", session, payload: {} }), port);
+  assert.equal(port.messages.at(-1).error.code, "debugger-not-attached");
+});
+
+function pointReply(api, result) {
+  const original = api.tabs.sendMessage;
+  const located = [];
+  api.tabs.sendMessage = async (tabId, message) => {
+    if (message.type !== "target-point") return original(tabId, message);
+    located.push(message.request.operation);
+    const envelope = {
+      protocol: PROTOCOL,
+      version: VERSION,
+      type: "response",
+      id: message.request.id,
+      session: message.request.session,
+      tab_id: tabId,
+      document_id: "document-1",
+    };
+    return result.ok === false
+      ? { ...envelope, ok: false, error: result.error }
+      : {
+          ...envelope,
+          ok: true,
+          result: { kind: "target-point", generation: 0, document_id: "document-1", ...result },
+        };
+  };
+  return located;
+}
+
+test("debugger input dispatches real mouse, text and key events at the located point", async () => {
+  const { api, port } = fakeApi();
+  const calls = debuggerFake(api);
+  const located = pointReply(api, { x: 40, y: 50, ref: "e1" });
+  const controller = createController(api);
+  controller.connectNative();
+  const session = await grantWithDebugger(controller, port);
+  const act = async (id, operation, payload) => {
+    calls.length = 0;
+    await controller.handleNativeMessage(
+      request(operation, { id, session, generation: 0, payload }),
+      port,
+    );
+    return port.messages.at(-1);
+  };
+  const clicked = await act("click", "trusted-click", { ref: "e1" });
+  assert.equal(clicked.ok, true, JSON.stringify(clicked));
+  assert.equal(clicked.result.backend, "debugger");
+  assert.equal(clicked.result.effect, "click-dispatched");
+  assert.equal(clicked.result.ref, "e1");
+  assert.deepEqual(clicked.result.point, { x: 40, y: 50, space: "css-viewport" });
+  assert.deepEqual(
+    calls.map((call) => [call[1], call[2].type, call[2].x, call[2].y]),
+    [
+      ["Input.dispatchMouseEvent", "mouseMoved", 40, 50],
+      ["Input.dispatchMouseEvent", "mousePressed", 40, 50],
+      ["Input.dispatchMouseEvent", "mouseReleased", 40, 50],
+    ],
+  );
+  const typed = await act("type", "trusted-type", { ref: "e1", text: "hello" });
+  assert.equal(typed.result.effect, "text-inserted");
+  assert.deepEqual(calls.at(-1), ["send", "Input.insertText", { text: "hello" }]);
+  const key = await act("key", "trusted-key", { key: "Enter" });
+  assert.equal(key.result.effect, "key-dispatched");
+  assert.deepEqual(
+    calls.map((call) => [call[2].type, call[2].key, call[2].text]),
+    [
+      ["keyDown", "Enter", "\r"],
+      ["keyUp", "Enter", undefined],
+    ],
+  );
+  assert.deepEqual(located, ["trusted-click", "trusted-type"]);
+  const badKey = await act("bad-key", "trusted-key", { key: "F5" });
+  assert.equal(badKey.error.code, "invalid-request");
+  assert.deepEqual(calls, []);
+});
+
+test("debugger input refuses before dispatch and reports a partial dispatch as uncertain", async () => {
+  {
+    const { api, port } = fakeApi();
+    const calls = debuggerFake(api);
+    pointReply(api, {
+      ok: false,
+      error: { code: "target-covered", state: "unsupported", message: "covered" },
+    });
+    const controller = createController(api);
+    controller.connectNative();
+    const session = await grantWithDebugger(controller, port);
+    calls.length = 0;
+    await controller.handleNativeMessage(
+      request("trusted-click", { id: "covered", session, generation: 0, payload: { ref: "e1" } }),
+      port,
+    );
+    assert.equal(port.messages.at(-1).error.code, "target-covered");
+    assert.deepEqual(calls, []);
+  }
+  {
+    const { api, port } = fakeApi();
+    debuggerFake(api);
+    pointReply(api, { x: 1, y: 2 });
+    const controller = createController(api);
+    controller.connectNative();
+    const session = await grantWithDebugger(controller, port);
+    const send = api.debugger.sendCommand;
+    api.debugger.sendCommand = async (target, method, params) => {
+      if (params?.type === "mousePressed") throw new Error("Debugger is not attached");
+      return send(target, method, params);
+    };
+    await controller.handleNativeMessage(
+      request("trusted-click", { id: "partial", session, generation: 0, payload: { ref: "e1" } }),
+      port,
+    );
+    assert.equal(port.messages.at(-1).error.code, "action-uncertain");
+  }
+  {
+    const { api, port } = fakeApi();
+    const controller = createController(api);
+    controller.connectNative();
+    await controller.handleNativeMessage(
+      control("grant", { capabilities: ["read", "interact"] }),
+      port,
+    );
+    const session = port.messages.at(-1).result.grant.session;
+    await controller.handleNativeMessage(
+      request("trusted-hover", { id: "detached", session, generation: 0, payload: { ref: "e1" } }),
+      port,
+    );
+    assert.equal(port.messages.at(-1).error.code, "debugger-not-attached");
+  }
 });
 
 test("a callback-mode collector answers through sendResponse", async () => {

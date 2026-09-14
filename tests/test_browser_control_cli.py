@@ -24,7 +24,7 @@ def bridge(monkeypatch):
         "capabilities": ["read", "interact"],
     }
     state = SimpleNamespace(
-        calls=0, grant=grant, failure=None, capture=None, payloads=[], controls=[]
+        calls=0, grant=grant, failure=None, capture=None, payloads=[], controls=[], requests=[]
     )
 
     class Client:
@@ -47,12 +47,20 @@ def bridge(monkeypatch):
             return {"ok": True, "result": {"kind": "action", "verification": "unverified"}}
 
         def capture(self, **kwargs):
+            state.requests.append(("capture", kwargs))
             return {"ok": True, "result": dict(state.capture)}
 
         def control(self, operation, **kwargs):
             state.controls.append((operation, kwargs))
+            if operation.startswith("debug-"):
+                attached = "attached" if operation == "debug-attach" else "detached"
+                return {"ok": True, "result": {"grant": grant, "debugger": attached}}
             key = "grant" if operation == "grant" else "revoked_grant"
             return {"ok": True, "result": {key: grant}}
+
+        def request(self, operation, **kwargs):
+            state.requests.append((operation, kwargs["payload"]))
+            return {"ok": True, "result": {"kind": "debugger-evidence", "evidence": operation}}
 
     monkeypatch.setattr(wire.BrowserReadClient, "connect", lambda *args: Client())
     monkeypatch.setattr(web, "_paths", lambda args: [Path("unused")])
@@ -126,6 +134,8 @@ def test_select_action_requires_one_option_identity_and_forwards_value(bridge, c
         web._action(
             SimpleNamespace(
                 action="select",
+                input="dom",
+                key=None,
                 document="fixture-document",
                 generation=0,
                 ref="e1",
@@ -177,6 +187,29 @@ def test_browser_capture_validates_pixels_and_writes_a_private_nonframe(bridge, 
     bridge.capture["pixels"]["width"] = 3
     assert cli.main(args) == exits.BROWSER_READ_PROTOCOL
     assert list(path.parent.glob("*.png")) == [path]
+
+
+def test_browser_full_page_capture_asks_for_the_debugger_render(bridge, capsys):
+    image = png.encode(2, 3, bytes([0, 0, 255, 255]) * 6)
+    bridge.capture = {
+        "kind": "capture",
+        "backend": "debugger",
+        "png_base64": base64.b64encode(image).decode(),
+        "pixels": {"width": 2, "height": 3, "space": "image-pixels"},
+        "document_id": "fixture-document",
+        "tab_id": 1,
+        "generation": 0,
+        "document_size": {"width": 2, "height": 3, "space": "css-document"},
+        "actionable": False,
+    }
+    args = ["web", "capture", "--document", "fixture-document", "--generation", "0"]
+    assert cli.main([*args, "--full-page", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert Path(result["path"]).read_bytes() == image
+    assert bridge.requests[-1][1]["full_page"] is True
+    assert bridge.requests[-1][1]["region"] is None
+    assert cli.main([*args, "--full-page", "--region", "0,0 1x1", "--json"]) == exits.USAGE
+    assert len(bridge.requests) == 1
 
 
 def test_browser_region_capture_crops_a_known_pattern_and_preserves_coverage(bridge, capsys):
@@ -388,3 +421,52 @@ def test_abort_refuses_a_grant_but_not_a_stop(bridge):
         # Only remove the test's isolated flag, never the user's runtime state.
         flag.unlink()
     assert [operation for operation, _ in bridge.controls] == ["release"]
+
+
+def test_debug_attach_passes_the_interlocks_and_detach_does_not(bridge):
+    flag = config.abort_path()
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.touch()
+    try:
+        assert cli.main(["web", "debug", "attach", "--json"]) == exits.ABORTED_BY_USER
+        assert cli.main(["web", "debug", "detach", "--json"]) == 0
+    finally:
+        # Only remove the test's isolated flag, never the user's runtime state.
+        flag.unlink()
+    assert cli.main(["web", "debug", "attach", "--tab", "1", "--json"]) == 0
+    assert [(operation, kwargs["tab_id"]) for operation, kwargs in bridge.controls] == [
+        ("debug-detach", None),
+        ("debug-attach", 1),
+    ]
+
+
+def test_debug_reads_forward_bounded_payloads(bridge, capsys):
+    assert cli.main(["web", "debug", "console", "--limit", "5", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["untrusted_page_content"] is True
+    ax = ["web", "debug", "ax", "--role", "button", "--name", "Apply once", "--json"]
+    assert cli.main(ax) == 0
+    assert cli.main(["web", "debug", "network", "--role", "button", "--json"]) == exits.USAGE
+    ax_payload = {"role": "button", "name": "Apply once", "include_values": False, "limit": 128}
+    assert bridge.requests == [("console", {"limit": 5}), ("ax-query", ax_payload)]
+
+
+def debugger_action(*extra):
+    return ["web", "action", *extra, "--document", "fixture-document", "--generation", "0"]
+
+
+def test_debugger_input_maps_actions_and_never_falls_back(bridge):
+    assert cli.main(debugger_action("click", "--input", "debugger", "--ref", "e1")) == 0
+    typed = debugger_action("type", "--input", "debugger", "--ref", "e2", "--value", "hi")
+    assert cli.main(typed) == 0
+    assert cli.main(debugger_action("key", "--input", "debugger", "--key", "Enter")) == 0
+    scroll = debugger_action("scroll", "--input", "debugger", "--target", "document", "--dy", "300")
+    assert cli.main(scroll) == 0
+    assert cli.main(debugger_action("type", "--ref", "e2", "--value", "hi")) == exits.USAGE
+    select = debugger_action("select", "--input", "debugger", "--ref", "e3", "--value", "x")
+    assert cli.main(select) == exits.USAGE
+    assert bridge.payloads == [
+        ("trusted-click", {"ref": "e1"}),
+        ("trusted-type", {"ref": "e2", "text": "hi"}),
+        ("trusted-key", {"key": "Enter"}),
+        ("trusted-scroll", {"dx": 0, "dy": 300}),
+    ]

@@ -32,7 +32,7 @@ from typing import Any, BinaryIO, Self
 from . import png
 
 PROTOCOL = "cu-browser-read"
-VERSION = 6
+VERSION = 8
 MAX_MESSAGE_BYTES = 1 << 20
 MAX_RECV_CHUNK_BYTES = 64 << 10
 MAX_PENDING_REQUESTS = 64
@@ -56,22 +56,48 @@ MAX_CAPTURE_PIXELS = 16 * 1024 * 1024
 MAX_ACTION_VALUE_CHARS = 1024
 MAX_WAIT_MS = 10_000
 MAX_WAIT_POLL_MS = 1_000
+MAX_DEBUG_ENTRIES = 100
 MAX_ERROR_CODE_CHARS = 64
 MAX_ERROR_MESSAGE_CHARS = 256
 SOCKET_PREFIX = "helper-"
 SOCKET_SUFFIX = ".sock"
 
-READ_OPERATIONS = frozenset({"observe", "query", "wait"})
-ACTION_OPERATIONS = frozenset(
-    {"click", "focus", "fill", "scroll", "hover", "select", "capture", "reload"}
+READ_OPERATIONS = frozenset({"observe", "query", "wait", "ax-query", "console", "network"})
+# Evidence read through an attached Chromium debugger rather than the page collector.
+DEBUGGER_READS = frozenset({"ax-query", "console", "network"})
+# Real input sent through an attached Chromium debugger rather than page events.
+TRUSTED_INPUT = frozenset(
+    {"trusted-click", "trusted-hover", "trusted-type", "trusted-key", "trusted-scroll"}
+)
+TRUSTED_KEYS = frozenset(
+    {
+        "Enter",
+        "Tab",
+        "Escape",
+        "Backspace",
+        "Delete",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+        "Home",
+        "End",
+        "PageUp",
+        "PageDown",
+        "Space",
+    }
+)
+ACTION_OPERATIONS = (
+    frozenset({"click", "focus", "fill", "scroll", "hover", "select", "capture", "reload"})
+    | TRUSTED_INPUT
 )
 # A receipt from any other backend does not describe the operation that was sent.
-_ACTION_BACKENDS = {"reload": "tabs"}
+_ACTION_BACKENDS = {"reload": "tabs", **dict.fromkeys(TRUSTED_INPUT, "debugger")}
 OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
-CONTROL_OPERATIONS = frozenset({"grant", "release"})
+CONTROL_OPERATIONS = frozenset({"grant", "release", "debug-attach", "debug-detach"})
 CAPABILITIES = frozenset({"read", "interact"})
 _OBSERVE_FIELDS = frozenset({"include_values", "limit", "selector", "include_details"})
-_CAPTURE_FIELDS = frozenset({"region"})
+_CAPTURE_FIELDS = frozenset({"region", "full_page"})
 _QUERY_FIELDS = frozenset(
     {
         "search",
@@ -387,12 +413,26 @@ def _capture_region(value: Any) -> dict[str, Any]:
     return result
 
 
+def capture_payload(region: Mapping[str, Any] | None, full_page: bool) -> dict[str, Any]:
+    if region is not None and full_page:
+        raise ValueError("a capture takes a region or the full page, not both")
+    if full_page:
+        return {"full_page": True}
+    return {} if region is None else {"region": dict(region)}
+
+
 def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
     if not isinstance(operation, str) or operation not in OPERATIONS:
         raise ProtocolError("operation is not a supported passive read or browser action")
     payload_object = _object({} if payload is None else payload, "payload")
     if operation == "capture":
         _exact_fields(payload_object, set(), set(_CAPTURE_FIELDS))
+        if "full_page" in payload_object:
+            if "region" in payload_object:
+                raise ProtocolError("capture takes a region or the full page, not both")
+            if payload_object["full_page"] is not True:
+                raise ProtocolError("capture full_page must be true when present")
+            return {"full_page": True}
         return (
             {"region": _capture_region(payload_object["region"])}
             if "region" in payload_object
@@ -401,9 +441,28 @@ def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
     if operation == "reload":
         _exact_fields(payload_object, set(), set())
         return {}
-    if operation in {"click", "focus", "hover"}:
+    if operation in {"click", "focus", "hover", "trusted-click", "trusted-hover"}:
         _exact_fields(payload_object, {"ref"}, {"ref"})
         return {"ref": _ref(payload_object["ref"])}
+    if operation == "trusted-type":
+        _exact_fields(payload_object, {"ref", "text"}, {"ref", "text"})
+        return {
+            "ref": _ref(payload_object["ref"]),
+            "text": _bounded_string(payload_object["text"], "text", MAX_ACTION_VALUE_CHARS),
+        }
+    if operation == "trusted-key":
+        _exact_fields(payload_object, {"key"}, {"key"})
+        key = _bounded_string(payload_object["key"], "key", 16)
+        if key not in TRUSTED_KEYS:
+            raise ProtocolError("key is not a supported named key")
+        return {"key": key}
+    if operation == "trusted-scroll":
+        _exact_fields(payload_object, {"dx", "dy"}, {"ref", "dx", "dy"})
+        return {
+            **({"ref": _ref(payload_object["ref"])} if "ref" in payload_object else {}),
+            "dx": _bounded_signed_int(payload_object["dx"], "dx", 10000),
+            "dy": _bounded_signed_int(payload_object["dy"], "dy", 10000),
+        }
     if operation == "select":
         _exact_fields(payload_object, {"ref"}, {"ref", "value", "label"})
         has_value = "value" in payload_object
@@ -439,6 +498,30 @@ def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
             **({"ref": _ref(payload_object["ref"])} if target == "element" else {}),
             "dx": _bounded_signed_int(payload_object.get("dx", 0), "dx", 10000),
             "dy": _bounded_signed_int(payload_object.get("dy", 0), "dy", 10000),
+        }
+    if operation in {"console", "network"}:
+        _exact_fields(payload_object, set(), {"limit"})
+        return {
+            "limit": _bounded_int(
+                payload_object.get("limit", MAX_DEBUG_ENTRIES),
+                "limit",
+                MAX_DEBUG_ENTRIES,
+                minimum=1,
+            )
+        }
+    if operation == "ax-query":
+        _exact_fields(payload_object, set(), {"role", "name", "include_values", "limit"})
+        role = payload_object.get("role")
+        name = payload_object.get("name")
+        return {
+            "role": None if role is None else _bounded_string(role, "role", MAX_ROLE_CHARS),
+            "name": None if name is None else _bounded_string(name, "name", MAX_QUERY_CHARS),
+            "include_values": _bounded_bool(
+                payload_object.get("include_values", False), "include_values"
+            ),
+            "limit": _bounded_int(
+                payload_object.get("limit", MAX_ELEMENTS), "limit", MAX_ELEMENTS, minimum=1
+            ),
         }
     if operation == "wait":
         allowed = {"ref", "selector", "state", "text", "value", "timeout_ms", "poll_ms"}
@@ -829,9 +912,9 @@ def validate_control(message: Mapping[str, Any]) -> dict[str, Any]:
         "operation": operation,
         "tab_id": None if tab_id is None else _bounded_int(tab_id, "tab_id", 2**31 - 1, minimum=1),
     }
-    if operation == "release":
+    if operation != "grant":
         if "capabilities" in control or "cursor" in control:
-            raise ProtocolError("release takes no capabilities or cursor")
+            raise ProtocolError(f"{operation} takes no capabilities or cursor")
         return result
     result["capabilities"] = _capabilities(control.get("capabilities"))
     if "cursor" in control:
@@ -873,6 +956,7 @@ def _validate_grant(grant: Mapping[str, Any]) -> dict[str, Any]:
         "capabilities",
         "active",
         "hidden",
+        "debugger",
     }
     _exact_fields(
         value,
@@ -896,6 +980,11 @@ def _validate_grant(grant: Mapping[str, Any]) -> dict[str, Any]:
         "capabilities": capabilities,
         "active": active,
         "hidden": hidden,
+        **(
+            {"debugger": _bounded_bool(value["debugger"], "grant debugger")}
+            if "debugger" in value
+            else {}
+        ),
     }
 
 
@@ -1417,6 +1506,7 @@ class BrowserReadClient:
         document_id: str,
         generation: int,
         region: Mapping[str, Any] | None = None,
+        full_page: bool = False,
         timeout: float | None = None,
     ) -> dict[str, Any]:
         return self.request(
@@ -1425,7 +1515,7 @@ class BrowserReadClient:
             tab_id=tab_id,
             document_id=document_id,
             generation=generation,
-            payload={} if region is None else {"region": dict(region)},
+            payload=capture_payload(region, full_page),
             timeout=timeout,
         )
 

@@ -184,7 +184,8 @@ The result distinguishes CSS viewport metadata from PNG image pixels. The CLI
 validates PNG structure/dimensions and writes a private runtime file, retaining at
 most 60 captures. Bounds are 512 KiB encoded PNG and 16 megapixels; oversized
 source or cropped captures refuse rather than stream or silently change
-resolution. Full-page and stitched capture are unsupported. A browser PNG has
+resolution. Full-page capture needs the Chromium debugger (see below); stitched
+capture is unsupported. A browser PNG has
 no CU frame ID, reports `actionable: false` and `input_authority: "none"`, and
 cannot authorize native coordinate input.
 
@@ -193,13 +194,81 @@ The optional cursor is an original 36-pixel amber dart: non-focusable,
 It marks the latest DOM action target, not an OS-pointer movement. Stop,
 revocation, and collector disposal remove it.
 
+## Chromium debugger mode
+
+In Chromium-family browsers, a session can attach the extension debugger to its
+bound tab for evidence the page collector cannot give:
+
+```sh
+cu web debug attach --json
+cu web debug console --limit 20 --json
+cu web debug network --limit 50 --json
+cu web debug ax --role button --name Submit --json
+cu web debug detach --json
+```
+
+Attaching needs an interaction grant and passes the abort and locked-session
+interlocks; detaching does not. While attached, the browser shows its own
+"started debugging this browser" banner; CU never changes browser flags to hide
+it. The attachment ends with `cu web debug detach`, with any end of the grant
+(stop, reload, navigation, closure, a worker restart), and when the browser or the
+user detaches it, for example from the banner.
+
+Evidence is buffered from attach onward and bounded to the 100 most recent
+entries; enabling browser logging also replays error log entries the browser had
+already recorded for the page, such as resources that failed to load. `console` keeps exceptions, error-level console calls, failed assertions,
+and error-level browser log entries, with text clipped. `network` keeps method,
+resource type, URL without query string or fragment, status, MIME type, completion
+and failure; never headers, bodies or cookies. `ax` returns accessibility roles,
+names, descriptions and states from the browser's own tree, filtered by role and
+accessible name, with values omitted unless `--values` is given. All of it is
+untrusted page evidence. Firefox has no extension debugger, so these commands
+refuse there as `debugger-unsupported`.
+
+With the debugger attached, `--input debugger` sends real input instead of page
+events:
+
+```sh
+cu web action click --input debugger --ref e4 --document DOCUMENT --generation 3
+cu web action hover --input debugger --ref e7 --document DOCUMENT --generation 3
+cu web action type --input debugger --ref e5 --value 'ordinary text' --document DOCUMENT --generation 4
+cu web action key --input debugger --key Enter --document DOCUMENT --generation 5
+cu web action scroll --input debugger --target document --dy 400 --document DOCUMENT --generation 5
+```
+
+The collector first checks the target as it would for a DOM action (fresh ref and
+generation, visible, enabled, not sensitive, not covered) and returns its viewport
+point; the worker then sends mouse movement and presses, a wheel scroll, text
+insertion, or a named key through the debugger. Pages receive trusted events, so
+CSS `:hover` and handlers that ignore synthetic events respond. `type` clicks the
+field before inserting text; `key` goes to whatever has focus and accepts only
+Enter, Tab, Escape, Backspace, Delete, the arrow keys, Home, End, PageUp, PageDown
+and Space. Receipts name backend `debugger` and stay `unverified`, and a failure
+after input started is uncertain (exit 58). Input never falls back between `dom`
+and `debugger`, and actions still require the bound tab to be active in the
+focused window.
+
+```sh
+cu web capture --full-page --document DOCUMENT --generation 6 --json
+```
+
+`--full-page` renders the document's CSS content size, beyond the viewport, as
+one PNG through the debugger. The collector brackets it with the same document
+and generation checks as a viewport capture; the render's own resize and scroll
+events do not advance the generation, while page changes during it still refuse. The page's device-pixel size is
+checked against the 16-megapixel bound before rendering, and the encoded PNG
+against 512 KiB after. The receipt names backend `debugger`, carries the
+`document_size` in CSS pixels, and has no native-input authority. It cannot be
+combined with `--region`.
+
 ## Transport and refusals
 
 The extension ID is `cu-browser-read@local`, the native host is `org.cu.read`, and
-the protocol is `cu-browser-read`, version **6**. Extension and host versions must
+the protocol is `cu-browser-read`, version **8**. Extension and host versions must
 match. Frames use native-endian uint32 length plus UTF-8 JSON, bounded at 1 MiB.
-Session controls that bind (`grant`) and release (`release`) a tab travel the
-same channel as requests. Missing grant capabilities mean read-only, never
+Session controls that bind (`grant`) and release (`release`) a tab, and attach
+(`debug-attach`) or detach (`debug-detach`) the debugger, travel the same channel
+as requests. Missing grant capabilities mean read-only, never
 implicit action authority.
 
 The browser-owned helper listens on a private Unix socket under
