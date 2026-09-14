@@ -10,7 +10,7 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 5;
+  const VERSION = 6;
   const CAPABILITIES = new Set(["read", "interact"]);
   const READ_OPERATIONS = new Set(["observe", "query", "wait"]);
   const ACTION_OPERATIONS = new Set([
@@ -359,6 +359,34 @@
   function validRequestId(value) {
     return typeof value === "string" && value.length > 0 && value.length <= MAX_REQUEST_ID_CHARS;
   }
+  function validateControl(message) {
+    exactKeys(
+      message,
+      new Set(["protocol", "version", "type", "id", "operation", "tab_id"]),
+      new Set(["protocol", "version", "type", "id", "operation", "tab_id", "capabilities", "cursor"]),
+    );
+    if (message.protocol !== PROTOCOL || message.version !== VERSION || message.type !== "control")
+      throw new ValidationError("unsupported session control envelope");
+    if (!validRequestId(message.id)) throw new ValidationError("control id is invalid");
+    if (message.operation !== "grant" && message.operation !== "release")
+      throw new ValidationError("operation is not a supported session control");
+    if (message.tab_id !== null && (!Number.isSafeInteger(message.tab_id) || message.tab_id < 1))
+      throw new ValidationError("tab_id must be a positive integer or null");
+    if (message.cursor !== undefined && typeof message.cursor !== "boolean")
+      throw new ValidationError("cursor must be a boolean");
+    if (
+      message.operation === "release" &&
+      (message.capabilities !== undefined || message.cursor !== undefined)
+    )
+      throw new ValidationError("release takes no capabilities or cursor");
+    return {
+      id: message.id,
+      operation: message.operation,
+      tab_id: message.tab_id,
+      capabilities: validateCapabilities(message.capabilities),
+      cursor: message.cursor,
+    };
+  }
   function errorResponse(id, code, message, extra = {}) {
     const response = {
       protocol: PROTOCOL,
@@ -632,6 +660,7 @@
       nativeReady: false,
       nativeSocket: null,
       nativeError: null,
+      nativeRetryAt: 0,
       actionQueue: Promise.resolve(),
       jobs: new Map(),
       captureEpoch: 0,
@@ -670,6 +699,14 @@
         grants: state.grant ? [copyGrant(state.grant)] : [],
       };
     }
+    function grantMessage() {
+      return {
+        protocol: PROTOCOL,
+        version: VERSION,
+        type: "grant",
+        grant: copyGrant(state.grant),
+      };
+    }
     function revokeMessage(grant, reason) {
       return {
         protocol: PROTOCOL,
@@ -681,16 +718,17 @@
         reason,
       };
     }
+    // The worker holds its native connection while it runs, so a CU session can
+    // reach it without any page being bound. A host that is missing or refused
+    // disconnects at once; later browser events retry it, at most this often.
+    const NATIVE_RETRY_MS = 5000;
     function connectNative() {
-      if (
-        !state.grant ||
-        state.nativePort ||
-        !api.runtime ||
-        typeof api.runtime.connectNative !== "function"
-      ) {
-        if (state.grant && !api.runtime?.connectNative) state.nativeError = "native-unavailable";
+      if (state.nativePort) return;
+      if (!api.runtime || typeof api.runtime.connectNative !== "function") {
+        state.nativeError = "native-unavailable";
         return;
       }
+      if (Date.now() < state.nativeRetryAt) return;
       let port;
       try {
         port = api.runtime.connectNative("org.cu.read");
@@ -710,6 +748,7 @@
         state.nativeReady = false;
         state.nativeSocket = null;
         state.nativeError = "native-unavailable";
+        state.nativeRetryAt = Date.now() + NATIVE_RETRY_MS;
         void revokeGrant("native-disconnect", true);
       });
       if (!postNative(helloMessage(), port)) {
@@ -728,16 +767,7 @@
       state.actionQueue = Promise.resolve();
       for (const job of state.jobs.values()) job.cancelled = true;
       state.jobs.clear();
-      state.nativePort = null;
-      state.nativeReady = false;
-      state.nativeSocket = null;
-      state.nativeError = reason === "native-disconnect" ? "native-unavailable" : null;
-      if (port) {
-        if (grant) postNative(revokeMessage(grant, reason), port);
-        try {
-          port.disconnect();
-        } catch (_) {}
-      }
+      if (port && grant) postNative(revokeMessage(grant, reason), port);
       if (grant && stopCollector && api.tabs?.sendMessage) {
         try {
           await api.tabs.sendMessage(grant.tab_id, {
@@ -750,12 +780,8 @@
       return { ...status(), reason };
     }
     async function start(tab, requestedCapabilities = ["read"], cursor = false) {
-      if (!tab || !Number.isSafeInteger(tab.id) || tab.id < 1 || tab.active !== true)
-        return errorResponse(
-          null,
-          "not-current-tab",
-          "browser sessions start only for the current tab",
-        );
+      if (!tab || !Number.isSafeInteger(tab.id) || tab.id < 1)
+        return errorResponse(null, "tab-unavailable", "the browser tab could not be identified");
       if (state.grant || state.pendingStart || state.transition)
         return errorResponse(null, "session-active", "stop the current browser session first");
       if (!api.scripting || typeof api.scripting.executeScript !== "function")
@@ -806,14 +832,14 @@
       state.pendingStart = null;
       state.session = session;
       state.grant = grantFor(tab, session, info, grantedCapabilities);
-      state.nativeError = null;
       await updateBadge();
-      connectNative();
+      if (state.nativeReady) postNative(grantMessage(), state.nativePort);
+      else connectNative();
       return {
         ok: true,
         active: true,
         grant: copyGrant(state.grant),
-        native: state.nativePort ? "starting" : "unavailable",
+        native: state.nativeReady ? "ready" : state.nativePort ? "starting" : "unavailable",
       };
     }
     api.tabs.onActivated?.addListener(() => {
@@ -962,7 +988,7 @@
     }
     // Reload ends the grant before it reaches the tab: the old document's refs,
     // queued actions, and waits cannot outlive it, and the new document receives
-    // nothing until the user grants it again.
+    // nothing until a session grants it again.
     async function reloadGrantedTab(request, grant, port, job) {
       if (typeof api.tabs?.reload !== "function") {
         postNative(
@@ -981,16 +1007,7 @@
       await updateBadge();
       const finish = async (response) => {
         if (state.transition === transition) state.transition = null;
-        if (state.nativePort === port) {
-          postNative(response, port);
-          state.nativePort = null;
-          state.nativeReady = false;
-          state.nativeSocket = null;
-          state.nativeError = null;
-          try {
-            port.disconnect();
-          } catch (_) {}
-        }
+        if (state.nativePort === port) postNative(response, port);
         await updateBadge();
       };
       const abandoned = () => job.cancelled || state.nativePort !== port;
@@ -1247,15 +1264,7 @@
       }
       if (Number.isSafeInteger(result.generation)) {
         state.grant.generation = result.generation;
-        postNative(
-          {
-            protocol: PROTOCOL,
-            version: VERSION,
-            type: "grant",
-            grant: copyGrant(state.grant),
-          },
-          port,
-        );
+        postNative(grantMessage(), port);
       }
       postNative(response, port);
     }
@@ -1289,8 +1298,76 @@
         if (state.jobs.get(request.id) === job) state.jobs.delete(request.id);
       }
     }
+    async function storedCursor() {
+      try {
+        const stored = await api.storage?.local?.get({ cursor: true });
+        return stored?.cursor !== false;
+      } catch (_) {
+        return true;
+      }
+    }
+    // A CU session binds and releases tabs over the helper socket, which only
+    // the local user can reach; installing the extension is the standing opt-in.
+    async function handleNativeControl(message, port) {
+      let control;
+      try {
+        control = validateControl(message);
+      } catch (_) {
+        if (validRequestId(message?.id))
+          postNative(
+            errorResponse(message.id, "invalid-request", "the session control was refused"),
+            port,
+          );
+        return;
+      }
+      const reply = (grant, result) =>
+        postNative(
+          {
+            protocol: PROTOCOL,
+            version: VERSION,
+            type: "response",
+            id: control.id,
+            session: grant.session,
+            tab_id: grant.tab_id,
+            document_id: grant.document_id,
+            ok: true,
+            result,
+          },
+          port,
+        );
+      if (control.operation === "release") {
+        const grant = state.grant;
+        if (!grant || (control.tab_id !== null && control.tab_id !== grant.tab_id)) {
+          postNative(
+            errorResponse(control.id, "tab-not-granted", "the tab has no active browser grant"),
+            port,
+          );
+          return;
+        }
+        const revoked = copyGrant(grant);
+        await revokeGrant("client-stop", true);
+        reply(revoked, { revoked_grant: revoked });
+        return;
+      }
+      const cursor = control.cursor ?? (await storedCursor());
+      let started;
+      if (control.tab_id === null) started = await startCurrent(null, control.capabilities, cursor);
+      else {
+        const tab = await api.tabs.get(control.tab_id).catch(() => null);
+        started = await start(tab, control.capabilities, cursor);
+      }
+      if (!started.ok) {
+        postNative(errorResponse(control.id, started.error.code, started.error.message), port);
+        return;
+      }
+      reply(started.grant, { grant: started.grant, native: started.native });
+    }
     async function handleNativeMessage(message, port = state.nativePort) {
       if (port !== state.nativePort) return;
+      if (message?.type === "control") {
+        await handleNativeControl(message, port);
+        return;
+      }
       if (
         message?.type === "cancel" &&
         message.protocol === PROTOCOL &&
@@ -1372,11 +1449,6 @@
         );
       if (!isRecord(message))
         return errorResponse(null, "invalid-ui-message", "unsupported extension control message");
-      if (message.type === "start-current" || message.type === "start-read")
-        return startCurrent(null, ["read"]);
-      if (message.type === "start-interaction")
-        return startCurrent(null, ["read", "interact"], message.cursor === true);
-      if (message.type === "stop") return revokeGrant("user-stop", true);
       if (message.type === "status") return status();
       return errorResponse(null, "invalid-ui-message", "unsupported extension control message");
     }
@@ -1386,7 +1458,8 @@
     return {
       start,
       startCurrent,
-      stop: () => revokeGrant("user-stop", true),
+      stop: () => revokeGrant("client-stop", true),
+      connectNative,
       handleNativeMessage,
       handleTabUpdated,
       handleTabRemoved,
@@ -1399,9 +1472,8 @@
   // browsers deliver nothing for it, so their entry asks for sendResponse.
   function install(api, options = {}) {
     const controller = createController(api, options);
-    (api.browserAction || api.action)?.onClicked?.addListener((tab) => {
-      void controller.startCurrent(tab, ["read"]);
-    });
+    controller.connectNative();
+    api.tabs.onActivated?.addListener(() => controller.connectNative());
     api.tabs.onUpdated.addListener((tabId, changeInfo) => {
       void controller.handleTabUpdated(tabId, changeInfo);
     });

@@ -22,6 +22,7 @@ from cu.browser_read import (
     ProtocolError,
     StaleHelper,
     encode_frame,
+    make_control,
     make_request,
     protocol_limits,
     read_frame,
@@ -29,7 +30,7 @@ from cu.browser_read import (
     write_frame,
 )
 
-PROTOCOL = {"protocol": "cu-browser-read", "version": 5}
+PROTOCOL = {"protocol": "cu-browser-read", "version": 6}
 
 
 def response(request: dict[str, object], *, response_id: str | None = None) -> dict[str, object]:
@@ -384,6 +385,79 @@ def test_reload_payload_names_no_element_and_requires_generation():
         validate_payload("reload", {"ref": "e1"})
     with pytest.raises(ProtocolError, match="passive read"):
         make_request("reload", session="session-1", tab_id=7, document_id="document-1")
+
+
+def test_session_controls_bind_or_release_without_page_identity():
+    grant = make_control("grant", tab_id=7, capabilities=["read", "interact"], cursor=False)
+    assert grant["tab_id"] == 7
+    assert grant["capabilities"] == ["read", "interact"]
+    assert grant["cursor"] is False
+    assert make_control("grant")["capabilities"] == ["read"]
+    release = make_control("release")
+    assert release["tab_id"] is None
+    assert "capabilities" not in release and "cursor" not in release
+    with pytest.raises(ProtocolError, match="session control"):
+        make_control("transfer")
+    with pytest.raises(ProtocolError, match="release takes no"):
+        make_control("release", capabilities=["read"])
+    with pytest.raises(ProtocolError):
+        make_control("grant", tab_id=0)
+
+
+def test_client_control_tracks_the_grant_the_helper_announces():
+    helper = HelperSocket.create()
+    grant = {
+        "session": "session-1",
+        "tab_id": 7,
+        "window_id": 1,
+        "document_id": "document-1",
+        "generation": 0,
+        "active": False,
+        "hidden": False,
+        "capabilities": ["read", "interact"],
+    }
+    errors: list[BaseException] = []
+
+    def serve() -> None:
+        try:
+            connection, _ = helper.listener.accept()
+            with connection:
+                write_frame(connection, hello(str(helper.path)))
+                control = read_frame(connection)
+                assert control is not None
+                assert (control["type"], control["operation"], control["tab_id"]) == (
+                    "control",
+                    "grant",
+                    7,
+                )
+                write_frame(connection, {**PROTOCOL, "type": "grant", "grant": grant})
+                write_frame(
+                    connection,
+                    {
+                        **PROTOCOL,
+                        "type": "response",
+                        "id": control["id"],
+                        "ok": True,
+                        "session": grant["session"],
+                        "tab_id": grant["tab_id"],
+                        "document_id": grant["document_id"],
+                        "result": {"grant": grant},
+                    },
+                )
+        except BaseException as error:  # surfaced after the client assertion
+            errors.append(error)
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        with BrowserReadClient.connect(helper.path, timeout=0.5) as client:
+            result = client.control("grant", tab_id=7, capabilities=["read", "interact"])
+            assert result["result"]["grant"] == grant
+            assert client.metadata["grants"] == [grant]
+    finally:
+        thread.join(timeout=1)
+        helper.close()
+    assert errors == []
 
 
 def test_reload_receipt_names_the_revoked_grant_and_tracks_the_revocation():

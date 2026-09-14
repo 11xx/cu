@@ -18,9 +18,8 @@ p {
   min-height: 2.5rem;
 }
 
-.controls {
-  display: grid;
-  gap: 0.5rem;
+label {
+  display: block;
 }
 
 #capabilities {

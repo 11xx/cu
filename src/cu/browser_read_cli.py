@@ -70,6 +70,33 @@ def configure(parser: argparse.ArgumentParser) -> None:
     )
     hosts.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
 
+    grant = commands.add_parser(
+        "grant",
+        help="Bind a browser tab to this CU session; no browser click is involved",
+        description="Bind a browser tab to this CU session; no browser click is involved",
+    )
+    grant.add_argument("--helper", help="Socket path from hosts; required if several exist")
+    grant.add_argument("--tab", type=int, help="Browser tab ID; defaults to the active tab")
+    grant.add_argument("--read-only", action="store_true", help="Bind for reads and waits only")
+    grant.add_argument(
+        "--cursor",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Show the amber browser cursor; defaults to the extension's setting",
+    )
+    grant.add_argument("--timeout", type=float, default=transport.DEFAULT_TIMEOUT)
+    grant.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+
+    stop = commands.add_parser(
+        "stop",
+        help="Release the bound browser tab, cancelling its pending work",
+        description="Release the bound browser tab, cancelling its pending work",
+    )
+    stop.add_argument("--helper", help="Socket path from hosts; required if several exist")
+    stop.add_argument("--tab", type=int, help="Bound tab ID; defaults to the current binding")
+    stop.add_argument("--timeout", type=float, default=transport.DEFAULT_TIMEOUT)
+    stop.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+
     read = commands.add_parser(
         "read",
         help="Read bounded page evidence from an explicitly granted tab",
@@ -225,7 +252,7 @@ def install_host(browser_name: str = "firefox", user_data_dir: str | None = None
 def _paths(args: argparse.Namespace) -> list[Path]:
     paths = [Path(args.helper)] if args.helper else transport.discover_socket_paths()
     if not paths:
-        raise transport.StaleHelper("grant a tab in the CU Browser extension first")
+        raise transport.StaleHelper("no CU Browser helper is running; load the extension")
     if len(paths) != 1:
         raise Refused(exits.BROWSER_READ_AMBIGUOUS, "use web hosts and select --helper")
     return paths
@@ -238,7 +265,9 @@ def _grant(args: argparse.Namespace, client: transport.BrowserReadClient) -> dic
         if args.tab is None or grant["tab_id"] == args.tab
     ]
     if not grants:
-        raise Refused(exits.BROWSER_READ_REFUSED, "the requested tab has no browser grant")
+        raise Refused(
+            exits.BROWSER_READ_REFUSED, "the requested tab has no browser grant; use cu web grant"
+        )
     if len(grants) != 1:
         raise Refused(exits.BROWSER_READ_AMBIGUOUS, "select one granted --tab")
     grant = grants[0]
@@ -270,7 +299,7 @@ def _check_response(result: dict[str, Any]) -> dict[str, Any]:
     )
     detail = f"browser request refused: {reason}"
     if result["error"].get("state") == "grant-revoked":
-        detail += "; the grant is revoked and only a new explicit user grant restores access"
+        detail += "; the grant is revoked; bind the tab again with cu web grant"
     raise Refused(code, detail)
 
 
@@ -356,7 +385,7 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
         if "interact" not in grant.get("capabilities", ["read"]):
             raise Refused(
                 exits.BROWSER_READ_REFUSED,
-                "the current browser grant is read-only; choose page interaction in CU Browser",
+                "the current browser grant is read-only; bind the tab again with cu web grant",
             )
         result = client.action(
             args.action,
@@ -378,6 +407,48 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
         },
     )
     return {"browser_action": True, "dispatch_completed": True, **result}
+
+
+def _bind(args: argparse.Namespace) -> dict[str, Any]:
+    safety.check_abort()
+    safety.check_session()
+    capabilities = ["read"] if args.read_only else ["read", "interact"]
+    with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
+        result = client.control(
+            "grant",
+            tab_id=args.tab,
+            capabilities=capabilities,
+            cursor=args.cursor,
+            timeout=args.timeout,
+        )
+    _check_response(result)
+    grant = result["result"]["grant"]
+    safety.record(
+        config.load(),
+        {
+            "action": "browser-grant",
+            "tab_id": grant["tab_id"],
+            "document_id": grant["document_id"],
+            "capabilities": grant["capabilities"],
+        },
+    )
+    return {"browser_grant": True, **result}
+
+
+def _release(args: argparse.Namespace) -> dict[str, Any]:
+    with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
+        result = client.control("release", tab_id=args.tab, timeout=args.timeout)
+    _check_response(result)
+    revoked = result["result"]["revoked_grant"]
+    safety.record(
+        config.load(),
+        {
+            "action": "browser-stop",
+            "tab_id": revoked["tab_id"],
+            "document_id": revoked["document_id"],
+        },
+    )
+    return {"browser_grant_released": True, **result}
 
 
 def _wait(args: argparse.Namespace) -> dict[str, Any]:
@@ -450,7 +521,7 @@ def _capture(args: argparse.Namespace) -> dict[str, Any]:
         if "interact" not in grant.get("capabilities", ["read"]):
             raise Refused(
                 exits.BROWSER_READ_REFUSED,
-                "the current browser grant is read-only; choose page interaction in CU Browser",
+                "the current browser grant is read-only; bind the tab again with cu web grant",
             )
         if args.generation != grant["generation"]:
             raise Refused(exits.BROWSER_DOCUMENT_STALE, "the granted generation changed")
@@ -529,6 +600,10 @@ def run(args: argparse.Namespace) -> int:
                 except transport.BrowserReadError:
                     helpers.append({"socket": str(path), "state": "unavailable"})
             result = {"helpers": helpers, "truncated": len(paths) > 16}
+        elif args.web_command == "grant":
+            result = _bind(args)
+        elif args.web_command == "stop":
+            result = _release(args)
         elif args.web_command == "read":
             result = _read(args)
         elif args.web_command == "action":

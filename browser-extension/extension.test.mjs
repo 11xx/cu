@@ -152,7 +152,7 @@ function fakeApi() {
   return { api, currentTab, port, updated, removed, calls };
 }
 
-test("installation starts with no grant and only the current tab can be granted", async () => {
+test("installation starts with no grant and a navigation revokes without closing the host", async () => {
   const { api, port, calls } = fakeApi();
   const controller = createController(api);
   assert.equal(controller.status().active, false);
@@ -169,7 +169,7 @@ test("installation starts with no grant and only the current tab can be granted"
   await controller.handleTabUpdated(7, { status: "loading" });
   assert.equal(controller.status().active, false);
   assert.equal(port.messages.at(-1).type, "revoke");
-  assert.equal(port.disconnected, true);
+  assert.equal(port.disconnected, false);
 });
 
 test("native requests reject arbitrary tabs and action-like operations", async () => {
@@ -842,19 +842,14 @@ test("late collector cleanup cannot disconnect a subsequent grant", async () => 
   const controller = createController(api);
   await controller.startCurrent();
   const stopping = controller.stop();
-  const nextPort = new FakePort();
-  api.runtime.connectNative = () => nextPort;
   const next = await controller.startCurrent();
   release({ ok: true });
   await stopping;
   assert.equal(next.ok, true);
-  assert.equal(port.disconnected, true);
+  assert.equal(port.disconnected, false);
   assert.notEqual(controller.status().native, "unavailable");
-  await controller.handleNativeMessage(
-    request("observe", { session: next.grant.session }),
-    nextPort,
-  );
-  assert.equal(nextPort.messages.at(-1).ok, true);
+  await controller.handleNativeMessage(request("observe", { session: next.grant.session }), port);
+  assert.equal(port.messages.at(-1).ok, true);
 });
 
 test("a lost native host revokes the grant and stays reported as unavailable", async () => {
@@ -944,7 +939,7 @@ test("reload revokes the grant, dispatches once, and confers nothing on the new 
   assert.equal(response.result.effect, "not-observed");
   assert.equal(response.result.new_document_grant, "none");
   assert.equal(response.result.revoked_grant.document_id, "document-1");
-  assert.equal(port.disconnected, true);
+  assert.equal(port.disconnected, false);
   assert.equal(controller.status().active, false);
 
   await controller.handleNativeMessage(
@@ -954,12 +949,10 @@ test("reload revokes the grant, dispatches once, and confers nothing on the new 
   assert.equal(calls.messages.filter((call) => call.message.type === "read-request").length, 0);
   assert.deepEqual(calls.reloads, [7]);
 
-  const nextPort = new FakePort();
-  api.runtime.connectNative = () => nextPort;
   const next = await controller.startCurrent(null, ["read", "interact"]);
   assert.equal(next.ok, true);
   assert.notEqual(next.grant.session, started.grant.session);
-  assert.equal(nextPort.messages[0].grants[0].session, next.grant.session);
+  assert.equal(controller.status().grant.session, next.grant.session);
 });
 
 test("refused reloads dispatch nothing and leave the grant in place", async () => {
@@ -1042,13 +1035,11 @@ test("stop during reload preparation dispatches nothing and no grant shares the 
   await reloading;
 
   assert.deepEqual(calls.reloads, []);
-  assert.equal(port.disconnected, true);
+  assert.equal(port.disconnected, false);
   assert.equal(
     port.messages.some((message) => message.type === "response" && message.ok),
     false,
   );
-  const nextPort = new FakePort();
-  api.runtime.connectNative = () => nextPort;
   const next = await controller.startCurrent(null, ["read", "interact"]);
   assert.equal(next.ok, true);
 });
@@ -1066,7 +1057,7 @@ test("a rejected reload or a tab lost before dispatch keeps the grant revoked", 
     assert.equal(response.error.code, "reload-rejected");
     assert.equal(response.error.state, "grant-revoked");
     assert.equal(controller.status().active, false);
-    assert.equal(port.disconnected, true);
+    assert.equal(port.disconnected, false);
   }
   {
     const { api, currentTab, port, calls } = fakeApi();
@@ -1082,27 +1073,30 @@ test("a rejected reload or a tab lost before dispatch keeps the grant revoked", 
   }
 });
 
-test("a callback-mode install answers popup controls through sendResponse", async () => {
+test("a callback-mode install connects its host and grants nothing from the popup", async () => {
   const { api, calls } = fakeApi();
   let listener;
+  let connections = 0;
+  const connect = api.runtime.connectNative;
+  api.runtime.connectNative = () => (connections++, connect());
   api.runtime.onMessage = { addListener: (fn) => (listener = fn) };
   api.tabs.onUpdated = { addListener: () => {} };
   api.tabs.onRemoved = { addListener: () => {} };
   api.action = api.browserAction;
   delete api.browserAction;
-  api.scripting.executeScript = async (value) => calls.execute.push(value);
   background.install(api, {
     respond: "callback",
     collectorFiles: ["collector.js", "chromium-collector.js"],
   });
+  assert.equal(connections, 1);
   const sender = { id: api.runtime.id };
-  let replied;
-  const answered = new Promise((resolve) => (replied = resolve));
-  assert.equal(listener({ type: "start-interaction" }, sender, replied), true);
-  const reply = await answered;
-  assert.equal(reply.ok, true, JSON.stringify(reply));
-  assert.deepEqual(calls.execute[0].files, ["collector.js", "chromium-collector.js"]);
-  assert.deepEqual(calls.badges.at(-1), { text: "ACT" });
+  const send = (message) => new Promise((resolve) => listener(message, sender, resolve));
+  for (const type of ["start-read", "start-interaction", "stop"]) {
+    const reply = await send({ type });
+    assert.equal(reply.error.code, "invalid-ui-message", type);
+  }
+  assert.equal((await send({ type: "status" })).active, false);
+  assert.deepEqual(calls.execute, []);
 });
 
 test("the default install keeps returning the reply Promise", async () => {
@@ -1117,6 +1111,125 @@ test("the default install keeps returning the reply Promise", async () => {
   });
   assert.equal(typeof reply.then, "function");
   assert.equal((await reply).active, false);
+});
+
+function readyMessage() {
+  return {
+    protocol: PROTOCOL,
+    version: VERSION,
+    type: "ready",
+    helper_id: "helper-test",
+    socket: "/run/user/1000/cu/browser/helper-test.sock",
+    limits: { ...LIMITS },
+  };
+}
+
+function control(operation, overrides = {}) {
+  return {
+    protocol: PROTOCOL,
+    version: VERSION,
+    type: "control",
+    id: overrides.id || "control-1",
+    operation,
+    tab_id: overrides.tab_id === undefined ? null : overrides.tab_id,
+    ...(overrides.capabilities ? { capabilities: overrides.capabilities } : {}),
+    ...(overrides.cursor === undefined ? {} : { cursor: overrides.cursor }),
+  };
+}
+
+test("a session control binds a named background tab and announces the grant first", async () => {
+  const { api, currentTab, port, calls } = fakeApi();
+  currentTab.active = false;
+  const controller = createController(api);
+  controller.connectNative();
+  await controller.handleNativeMessage(readyMessage(), port);
+  await controller.handleNativeMessage(
+    control("grant", { tab_id: 7, capabilities: ["read", "interact"], cursor: false }),
+    port,
+  );
+  const grantIndex = port.messages.findIndex((message) => message.type === "grant");
+  const response = port.messages.at(-1);
+  assert.ok(grantIndex >= 0 && grantIndex < port.messages.length - 1);
+  assert.equal(response.ok, true, JSON.stringify(response));
+  assert.equal(response.id, "control-1");
+  assert.equal(response.tab_id, 7);
+  assert.equal(response.session, response.result.grant.session);
+  assert.deepEqual(response.result.grant.capabilities, ["read", "interact"]);
+  assert.equal(calls.execute[0].target.tabId, 7);
+  assert.equal(calls.messages.find((call) => call.message.type === "start").message.cursor, false);
+  assert.deepEqual(calls.query, []);
+});
+
+test("a release control revokes the grant, keeps the host, and refuses a second release", async () => {
+  const { api, port } = fakeApi();
+  const controller = createController(api);
+  controller.connectNative();
+  await controller.handleNativeMessage(readyMessage(), port);
+  await controller.handleNativeMessage(control("grant"), port);
+  const granted = port.messages.at(-1).result.grant;
+  await controller.handleNativeMessage(control("release", { id: "control-2" }), port);
+  const released = port.messages.at(-1);
+  assert.equal(released.ok, true, JSON.stringify(released));
+  assert.equal(released.result.revoked_grant.session, granted.session);
+  assert.equal(port.messages.at(-2).type, "revoke");
+  assert.equal(port.messages.at(-2).reason, "client-stop");
+  assert.equal(controller.status().active, false);
+  assert.equal(port.disconnected, false);
+  await controller.handleNativeMessage(control("release", { id: "control-3" }), port);
+  assert.equal(port.messages.at(-1).error.code, "tab-not-granted");
+});
+
+test("malformed session controls are refused before any tab is touched", async () => {
+  const { api, port, calls } = fakeApi();
+  const controller = createController(api);
+  controller.connectNative();
+  for (const [name, message] of [
+    ["unknown operation", control("transfer")],
+    ["release with capabilities", control("release", { capabilities: ["read"] })],
+    ["fractional tab", control("grant", { tab_id: 1.5 })],
+    ["older protocol", { ...control("grant"), version: VERSION - 1 }],
+  ]) {
+    await controller.handleNativeMessage(message, port);
+    assert.equal(port.messages.at(-1).error.code, "invalid-request", name);
+  }
+  assert.deepEqual(calls.execute, []);
+});
+
+test("a grant that names no cursor uses the stored popup setting", async () => {
+  const { api, port, calls } = fakeApi();
+  api.storage = { local: { get: async (defaults) => ({ ...defaults, cursor: false }) } };
+  const controller = createController(api);
+  controller.connectNative();
+  await controller.handleNativeMessage(control("grant"), port);
+  assert.equal(port.messages.at(-1).ok, true, JSON.stringify(port.messages.at(-1)));
+  assert.equal(calls.messages.find((call) => call.message.type === "start").message.cursor, false);
+});
+
+test("a lost native host is retried no sooner than the retry interval", () => {
+  const { api } = fakeApi();
+  const ports = [];
+  api.runtime.connectNative = () => {
+    const next = new FakePort();
+    ports.push(next);
+    return next;
+  };
+  const controller = createController(api);
+  controller.connectNative();
+  controller.connectNative();
+  assert.equal(ports.length, 1);
+  ports[0].disconnect();
+  controller.connectNative();
+  assert.equal(ports.length, 1);
+  assert.equal(controller.status().native_error, "native-unavailable");
+  const now = Date.now;
+  Date.now = () => now() + 6000;
+  try {
+    controller.connectNative();
+  } finally {
+    Date.now = now;
+  }
+  assert.equal(ports.length, 2);
+  assert.equal(ports[1].messages[0].type, "hello");
 });
 
 test("a callback-mode collector answers through sendResponse", async () => {

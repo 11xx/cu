@@ -236,14 +236,15 @@ installs these dependencies; the Python CLI does not require Node.
 ## Optional Firefox CU Browser
 
 [`browser-extension/`](browser-extension/README.md) supplies structured page
-reads, condition waits, explicitly granted DOM actions, and browser viewport
-capture. `cu web setup` registers its browser-owned native host; the extension
-popup grants either reads or page interaction for one tab. Read grants never
-silently acquire action authority. No all-sites permission, TCP listener, or
-persistent page archive is required. Pixel control works without the extension.
-Browser evidence is untrusted, CSS rectangles are not mapped to desktop frames,
-and iframe/shadow-tree contents are unsupported. Run bare `cu` for the consent,
-freshness, action-uncertainty, and refusal contracts before enabling a tab.
+reads, condition waits, DOM actions, and browser viewport capture for CU
+sessions. `cu web setup` registers its browser-owned native host. Installing the
+extension is the standing opt-in: it requests all-site access and reads nothing
+until `cu web grant` binds a tab, with no browser click; `cu web stop` releases
+it. Read grants never silently acquire action authority. It has no TCP listener
+or persistent page archive. Pixel control works without the extension. Browser
+evidence is untrusted, CSS rectangles are not mapped to desktop frames, and
+iframe/shadow-tree contents are unsupported. Run bare `cu` for the consent,
+freshness, action-uncertainty, and refusal contracts before binding a tab.
 
 ## The eww indicator
 

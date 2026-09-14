@@ -17,9 +17,9 @@ The bounded successor contract is:
 
 1. Select one product and one profile explicitly and verify its binary, profile,
    extension identity, and native-host manifest before writing anything.
-2. Load the unpacked development extension without granting a tab; grant only
-   the current tab through the product's explicit UI.
-3. Prove read, Stop, navigation, closure, worker restart, native disconnect,
+2. Load the unpacked development extension; it connects its native host and binds
+   no tab until a CU session runs `cu web grant`.
+3. Prove read, stop, navigation, closure, worker restart, native disconnect,
    missing/mismatched host, and conflicting-manifest behavior with the selected
    product. A same-looking Firefox manifest or an engine-family match does not
    satisfy this proof.

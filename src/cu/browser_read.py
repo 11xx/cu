@@ -32,7 +32,7 @@ from typing import Any, BinaryIO, Self
 from . import png
 
 PROTOCOL = "cu-browser-read"
-VERSION = 5
+VERSION = 6
 MAX_MESSAGE_BYTES = 1 << 20
 MAX_RECV_CHUNK_BYTES = 64 << 10
 MAX_PENDING_REQUESTS = 64
@@ -68,6 +68,7 @@ ACTION_OPERATIONS = frozenset(
 # A receipt from any other backend does not describe the operation that was sent.
 _ACTION_BACKENDS = {"reload": "tabs"}
 OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
+CONTROL_OPERATIONS = frozenset({"grant", "release"})
 CAPABILITIES = frozenset({"read", "interact"})
 _OBSERVE_FIELDS = frozenset({"include_values", "limit", "selector", "include_details"})
 _CAPTURE_FIELDS = frozenset({"region"})
@@ -807,6 +808,60 @@ def make_request(
     )
 
 
+def validate_control(message: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a session control that binds or releases a tab without a browser click."""
+    control = _object(message, "control")
+    _exact_fields(
+        control,
+        {"protocol", "version", "type", "id", "operation", "tab_id"},
+        {"protocol", "version", "type", "id", "operation", "tab_id", "capabilities", "cursor"},
+    )
+    _validate_envelope(control, "control")
+    operation = control["operation"]
+    if not isinstance(operation, str) or operation not in CONTROL_OPERATIONS:
+        raise ProtocolError("operation is not a supported session control")
+    tab_id = control["tab_id"]
+    result: dict[str, Any] = {
+        "protocol": PROTOCOL,
+        "version": VERSION,
+        "type": "control",
+        "id": _bounded_string(control["id"], "id", MAX_REQUEST_ID_CHARS),
+        "operation": operation,
+        "tab_id": None if tab_id is None else _bounded_int(tab_id, "tab_id", 2**31 - 1, minimum=1),
+    }
+    if operation == "release":
+        if "capabilities" in control or "cursor" in control:
+            raise ProtocolError("release takes no capabilities or cursor")
+        return result
+    result["capabilities"] = _capabilities(control.get("capabilities"))
+    if "cursor" in control:
+        result["cursor"] = _bounded_bool(control["cursor"], "cursor")
+    return result
+
+
+def make_control(
+    operation: str,
+    *,
+    tab_id: int | None = None,
+    capabilities: list[str] | None = None,
+    cursor: bool | None = None,
+) -> dict[str, Any]:
+    """Build a session control after applying the same allowlist used by the host."""
+    control: dict[str, Any] = {
+        "protocol": PROTOCOL,
+        "version": VERSION,
+        "type": "control",
+        "id": uuid.uuid4().hex,
+        "operation": operation,
+        "tab_id": tab_id,
+    }
+    if capabilities is not None:
+        control["capabilities"] = capabilities
+    if cursor is not None:
+        control["cursor"] = cursor
+    return validate_control(control)
+
+
 def _validate_grant(grant: Mapping[str, Any]) -> dict[str, Any]:
     value = _object(grant, "grant")
     allowed = {
@@ -1198,6 +1253,55 @@ class BrowserReadClient:
         finally:
             self._lock.release()
 
+    def control(
+        self,
+        operation: str,
+        *,
+        tab_id: int | None = None,
+        capabilities: list[str] | None = None,
+        cursor: bool | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Bind or release a tab for the calling CU session; returns no page content."""
+        control = make_control(operation, tab_id=tab_id, capabilities=capabilities, cursor=cursor)
+        wait = self._timeout if timeout is None else timeout
+        deadline = _deadline(wait)
+        if not self._lock.acquire(timeout=wait):
+            raise BrowserReadTimeout("another request holds this client past the deadline")
+        try:
+            if self._closed:
+                raise HelperUnavailable("browser read client is closed")
+            try:
+                self._connection.settimeout(max(0.001, deadline - time.monotonic()))
+                write_frame(self._connection, control)
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise BrowserReadTimeout("session control exceeded its deadline")
+                    self._connection.settimeout(remaining)
+                    response = read_frame(self._connection)
+                    if response is None:
+                        raise StaleHelper("browser read helper closed the connection")
+                    if response.get("type") in {"hello", "grant", "revoke"}:
+                        self._event(response)
+                        continue
+                    if response.get("type") != "response":
+                        raise ProtocolError("helper returned an unsupported message")
+                    if response.get("id") != control["id"]:
+                        raise MismatchedResponse("helper response id did not match the control")
+                    return _validate_response(response)
+            except TimeoutError as exc:
+                self.close()
+                raise BrowserReadTimeout("session control exceeded its deadline") from exc
+            except (BrokenPipeError, ConnectionError, OSError) as exc:
+                self.close()
+                raise HelperUnavailable("browser read helper is unavailable") from exc
+            except (BrowserReadTimeout, MismatchedResponse, ProtocolError, StaleHelper):
+                self.close()
+                raise
+        finally:
+            self._lock.release()
+
     def observe(
         self,
         *,
@@ -1505,9 +1609,22 @@ class NativeMessagingHost:
         if not self._native_output:
             self._selector.unregister(self.stdout)
 
+    def _grant_refusal(self, request: Mapping[str, Any]) -> dict[str, Any] | None:
+        grant = self.grants.get((request["session"], request["tab_id"]))
+        if grant is None:
+            return _error_response(request["id"], "tab-not-granted", "the tab has no active grant")
+        if grant["document_id"] != request["document_id"]:
+            return _error_response(request["id"], "stale-document", "the document grant is stale")
+        if request["operation"] in ACTION_OPERATIONS and "interact" not in grant["capabilities"]:
+            return _error_response(
+                request["id"], "interaction-not-granted", "the current browser grant is read-only"
+            )
+        return None
+
     def _handle_local(self, peer: _Peer, message: Mapping[str, Any]) -> None:
+        control = isinstance(message, Mapping) and message.get("type") == "control"
         try:
-            request = validate_request(message)
+            request = validate_control(message) if control else validate_request(message)
         except ProtocolError as exc:
             request_id = _safe_request_id(message)
             if request_id is None:
@@ -1520,25 +1637,14 @@ class NativeMessagingHost:
             return
 
         request_id = request["id"]
-        key = (request["session"], request["tab_id"])
-        grant = self.grants.get(key)
-        if grant is None:
-            response = _error_response(
-                request_id, "tab-not-granted", "the tab has no active read grant"
-            )
-        elif grant["document_id"] != request["document_id"]:
-            response = _error_response(request_id, "stale-document", "the document grant is stale")
-        elif request["operation"] in ACTION_OPERATIONS and "interact" not in grant["capabilities"]:
-            response = _error_response(
-                request_id, "interaction-not-granted", "the current browser grant is read-only"
-            )
-        elif request_id in self.pending:
+        response = None if control else self._grant_refusal(request)
+        if response is None and request_id in self.pending:
             response = _error_response(
                 request_id, "duplicate-request-id", "request id is already pending"
             )
-        elif len(self.pending) >= MAX_PENDING_REQUESTS:
+        elif response is None and len(self.pending) >= MAX_PENDING_REQUESTS:
             response = _error_response(request_id, "busy", "the helper request budget is full")
-        else:
+        elif response is None:
             self.pending[request_id] = (peer, request)
             try:
                 self._send_native(request)
@@ -1574,7 +1680,8 @@ class NativeMessagingHost:
             return  # The local caller can time out and close before the browser replies.
         peer, request = pending
         for field in ("session", "tab_id", "document_id"):
-            if field in value and value[field] != request[field]:
+            expected = request.get(field)
+            if field in value and expected is not None and value[field] != expected:
                 raise MismatchedResponse(f"native response {field} did not match the request")
         if request["operation"] == "capture" and "region" in request["payload"] and value["ok"]:
             try:
