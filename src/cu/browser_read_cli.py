@@ -328,6 +328,9 @@ def _check_response(result: dict[str, Any]) -> dict[str, Any]:
     detail = f"browser request refused: {reason}"
     if result["error"].get("state") == "grant-revoked":
         detail += "; the grant is revoked; bind the tab again with cu web grant"
+        # Nothing timed out: the next step is a new grant, not inspecting helper state.
+        if code == exits.BROWSER_READ_TIMEOUT:
+            code = exits.BROWSER_READ_REFUSED
     raise Refused(code, detail)
 
 

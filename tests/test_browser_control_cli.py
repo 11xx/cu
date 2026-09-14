@@ -50,6 +50,10 @@ def bridge(monkeypatch):
             state.requests.append(("capture", kwargs))
             return {"ok": True, "result": dict(state.capture)}
 
+        def wait(self, **kwargs):
+            state.requests.append(("wait", kwargs["payload"]))
+            return state.wait_result
+
         def control(self, operation, **kwargs):
             state.controls.append((operation, kwargs))
             if operation.startswith("debug-"):
@@ -393,6 +397,38 @@ def test_revoked_refusal_says_only_a_new_grant_restores_access():
             }
         )
     assert refused.value.code == exits.BROWSER_READ_REFUSED
+
+
+def test_a_wait_ended_by_revocation_refuses_instead_of_timing_out(bridge, capsys):
+    args = [
+        "web",
+        "wait",
+        "--document",
+        "fixture-document",
+        "--selector",
+        "#never",
+        "--state",
+        "visible",
+    ]
+    bridge.wait_result = {
+        "ok": False,
+        "error": {"code": "cancelled", "state": "grant-revoked", "message": "x"},
+    }
+    assert cli.main(args) == exits.BROWSER_READ_REFUSED
+    err = capsys.readouterr().err
+    assert "bind the tab again with cu web grant" in err
+    assert "timed out" not in err
+    for reason in ("cancelled", "wait-timeout"):
+        bridge.wait_result = {"ok": False, "error": {"code": reason, "message": "x"}}
+        assert cli.main(args) == exits.BROWSER_READ_TIMEOUT
+    with pytest.raises(cli.Refused) as uncertain:
+        web._check_response(
+            {
+                "ok": False,
+                "error": {"code": "action-uncertain", "state": "grant-revoked", "message": "x"},
+            }
+        )
+    assert uncertain.value.code == exits.BROWSER_ACTION_UNCERTAIN
 
 
 def test_grant_binds_through_the_interlocks_and_stop_releases(bridge, capsys):
