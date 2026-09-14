@@ -30,7 +30,7 @@ from cu.browser_read import (
     write_frame,
 )
 
-PROTOCOL = {"protocol": "cu-browser-read", "version": 7}
+PROTOCOL = {"protocol": "cu-browser-read", "version": 8}
 
 
 def response(request: dict[str, object], *, response_id: str | None = None) -> dict[str, object]:

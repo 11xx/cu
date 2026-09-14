@@ -10,7 +10,7 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 7;
+  const VERSION = 8;
   const CAPABILITIES = new Set(["read", "interact"]);
   const READ_OPERATIONS = new Set(["observe", "query", "wait", "ax-query", "console", "network"]);
   // Evidence the worker reads through an attached debugger; collectors never see it.

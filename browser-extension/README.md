@@ -250,7 +250,7 @@ focused window.
 ## Transport and refusals
 
 The extension ID is `cu-browser-read@local`, the native host is `org.cu.read`, and
-the protocol is `cu-browser-read`, version **7**. Extension and host versions must
+the protocol is `cu-browser-read`, version **8**. Extension and host versions must
 match. Frames use native-endian uint32 length plus UTF-8 JSON, bounded at 1 MiB.
 Session controls that bind (`grant`) and release (`release`) a tab, and attach
 (`debug-attach`) or detach (`debug-detach`) the debugger, travel the same channel
