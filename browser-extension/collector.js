@@ -24,9 +24,30 @@
     "hover",
     "select",
     "wait",
+    "trusted-click",
+    "trusted-hover",
+    "trusted-type",
+    "trusted-key",
+    "trusted-scroll",
   ]);
   const READ_OPERATIONS = new Set(["observe", "query"]);
-  const ACTION_OPERATIONS = new Set(["click", "focus", "fill", "scroll", "hover", "select"]);
+  // Debugger input: the collector only locates and checks its target point.
+  const TRUSTED_INPUT = new Set([
+    "trusted-click",
+    "trusted-hover",
+    "trusted-type",
+    "trusted-key",
+    "trusted-scroll",
+  ]);
+  const ACTION_OPERATIONS = new Set([
+    "click",
+    "focus",
+    "fill",
+    "scroll",
+    "hover",
+    "select",
+    ...TRUSTED_INPUT,
+  ]);
   const MAX_TEXT_CHARS = 32768;
   const MAX_ELEMENT_TEXT_CHARS = 512;
   const MAX_VALUE_CHARS = 1024;
@@ -225,6 +246,29 @@
         value: boundedString(value.value, "value", MAX_ACTION_VALUE_CHARS, {
           empty: true,
         }),
+      };
+    }
+    if (operation === "trusted-click" || operation === "trusted-hover") {
+      exactKeys(value, new Set(["ref"]), new Set(["ref"]));
+      return { ref: refValue(value.ref) };
+    }
+    if (operation === "trusted-type") {
+      exactKeys(value, new Set(["ref", "text"]), new Set(["ref", "text"]));
+      return {
+        ref: refValue(value.ref),
+        text: boundedString(value.text, "text", MAX_ACTION_VALUE_CHARS),
+      };
+    }
+    if (operation === "trusted-key") {
+      exactKeys(value, new Set(["key"]), new Set(["key"]));
+      return { key: boundedString(value.key, "key", 16) };
+    }
+    if (operation === "trusted-scroll") {
+      exactKeys(value, new Set(["dx", "dy"]), new Set(["ref", "dx", "dy"]));
+      return {
+        ...(Object.prototype.hasOwnProperty.call(value, "ref") ? { ref: refValue(value.ref) } : {}),
+        dx: boundedSignedInteger(value.dx, "dx", 10000),
+        dy: boundedSignedInteger(value.dy, "dy", 10000),
       };
     }
     if (operation === "scroll") {
@@ -1268,6 +1312,80 @@
         note: "DOM selection and synthetic input/change events; not trusted browser input",
       });
     }
+    // Debugger input needs a viewport point, and gets the same freshness,
+    // visibility, sensitivity and covering checks as a DOM action first.
+    function targetPoint(request) {
+      if (!request.capabilities.includes("interact"))
+        return refusal(request, "interaction-not-granted", "the current grant is read-only");
+      const view = doc.defaultView;
+      const scroll = request.operation === "trusted-scroll";
+      const located = (x, y) =>
+        responseFor(request, true, {
+          kind: "target-point",
+          x,
+          y,
+          ...(request.payload.ref ? { ref: request.payload.ref } : {}),
+          generation,
+          document_id: documentId,
+        });
+      if (scroll && !request.payload.ref) {
+        if (!Number.isFinite(view?.innerWidth) || !Number.isFinite(view?.innerHeight))
+          return refusal(request, "unsupported-action", "the viewport size is unavailable");
+        return located(view.innerWidth / 2, view.innerHeight / 2);
+      }
+      const element = resolveRef(request.payload.ref);
+      if (!element)
+        return refusal(request, "stale-element", "the element ref is stale or disconnected");
+      if (
+        observedFields.has(element) &&
+        observedFields.get(element) !== JSON.stringify(currentField(element))
+      ) {
+        bumpGeneration();
+        return refusal(request, "stale-generation", "the field changed since observation");
+      }
+      try {
+        actionable(element, scroll ? "scroll" : "click");
+      } catch (error) {
+        const code =
+          error.message === "element is disabled" ? "disabled-target" : "target-not-visible";
+        return refusal(request, code, error.message);
+      }
+      if (
+        ["input", "textarea"].includes(tagName(element)) &&
+        ["redacted", "unsupported"].includes(currentField(element)?.state)
+      )
+        return refusal(request, "sensitive-target", "sensitive controls cannot be acted on");
+      if (request.operation === "trusted-type") {
+        try {
+          ordinaryInput(element);
+        } catch (error) {
+          return refusal(request, "unsupported-target", error.message);
+        }
+      }
+      const rect = element.getBoundingClientRect();
+      const rectLeft = rect.left ?? rect.x;
+      const rectTop = rect.top ?? rect.y;
+      const rectRight = rect.right ?? rectLeft + rect.width;
+      const rectBottom = rect.bottom ?? rectTop + rect.height;
+      const left = Math.max(0, rectLeft);
+      const top = Math.max(0, rectTop);
+      const right = Number.isFinite(view?.innerWidth)
+        ? Math.min(view.innerWidth, rectRight)
+        : rectRight;
+      const bottom = Number.isFinite(view?.innerHeight)
+        ? Math.min(view.innerHeight, rectBottom)
+        : rectBottom;
+      if (!(left < right && top < bottom))
+        return refusal(request, "target-offscreen", "scroll the target into view first");
+      const x = (left + right) / 2;
+      const y = (top + bottom) / 2;
+      if (!scroll && typeof doc.elementFromPoint === "function") {
+        const hit = doc.elementFromPoint(x, y);
+        if (hit !== element && !element.contains(hit))
+          return refusal(request, "target-covered", "the target is covered by another element");
+      }
+      return located(x, y);
+    }
     function action(request) {
       if (!request.capabilities.includes("interact"))
         return refusal(request, "interaction-not-granted", "the current grant is read-only");
@@ -1651,7 +1769,7 @@
         for (const wait of waits) if (wait.id === message.id) wait.cancel(new WaitCancelled());
         return { ok: true };
       }
-      if (message.type !== "read-request")
+      if (message.type !== "read-request" && message.type !== "target-point")
         return {
           ok: false,
           error: {
@@ -1687,6 +1805,13 @@
         request.generation !== generation
       )
         return refusal(request, "stale-generation", "the observation generation did not match");
+      if (TRUSTED_INPUT.has(request.operation) !== (message.type === "target-point"))
+        return refusal(
+          request,
+          "unsupported-action",
+          "the collector locates debugger input targets and never dispatches that input",
+        );
+      if (message.type === "target-point") return targetPoint(request);
       if (request.operation === "wait") return waitFor(request);
       try {
         if (!READ_OPERATIONS.has(request.operation)) return action(request);

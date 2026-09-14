@@ -612,6 +612,51 @@ test("interaction actions reject a detached ref and preserve capability boundari
   collector.dispose();
 });
 
+test("the collector locates debugger input targets and never dispatches that input", () => {
+  const button = new Element("button", {
+    text: "Run",
+    rect: { x: 10, y: 20, width: 40, height: 10 },
+  });
+  const secret = new Element("input", {
+    attrs: { type: "password", name: "password" },
+    value: "hunter2",
+  });
+  const field = new Element("input", { attrs: { type: "text", name: "notes" }, value: "" });
+  const doc = new Document([button, secret, field]);
+  const collector = createCollector(doc, { idFactory: () => "document-1" });
+  collector.handle({ type: "start", session: "session-1", capabilities: ["read", "interact"] });
+  const observed = collector.handle({
+    type: "read-request",
+    request: request("observe", { payload: { include_values: false, limit: 10 } }),
+  });
+  assert.equal(observed.result.elements.items.length, 3);
+  const [runRef, secretRef, notesRef] = observed.result.elements.items.map((item) => item.ref);
+  const pick = (name) => ({ Run: runRef, password: secretRef, notes: notesRef })[name];
+  const message = (type, operation, payload) => ({
+    type,
+    request: request(operation, {
+      generation: observed.result.generation,
+      capabilities: ["read", "interact"],
+      payload,
+    }),
+  });
+  const located = collector.handle(message("target-point", "trusted-click", { ref: pick("Run") }));
+  assert.equal(located.ok, true, JSON.stringify(located));
+  assert.deepEqual([located.result.x, located.result.y], [30, 25]);
+  const secretType = message("target-point", "trusted-type", { ref: pick("password"), text: "x" });
+  assert.equal(collector.handle(secretType).error.code, "sensitive-target");
+  const notesType = message("target-point", "trusted-type", { ref: pick("notes"), text: "x" });
+  assert.equal(collector.handle(notesType).ok, true);
+  const dispatched = message("read-request", "trusted-click", { ref: pick("Run") });
+  assert.equal(collector.handle(dispatched).error.code, "unsupported-action");
+  const domPoint = message("target-point", "click", { ref: pick("Run") });
+  assert.equal(collector.handle(domPoint).error.code, "unsupported-action");
+  button.parentElement = null;
+  const stale = message("target-point", "trusted-hover", { ref: pick("Run") });
+  assert.equal(collector.handle(stale).error.code, "stale-element");
+  collector.dispose();
+});
+
 test("media reads and bounded card details label text metadata honestly", () => {
   const link = new Element("a", {
     text: "Story",
@@ -1466,6 +1511,133 @@ test("a browser without an extension debugger refuses debugger mode", async () =
   assert.equal(port.messages.at(-1).error.code, "debugger-unsupported");
   await controller.handleNativeMessage(request("network", { id: "n", session, payload: {} }), port);
   assert.equal(port.messages.at(-1).error.code, "debugger-not-attached");
+});
+
+function pointReply(api, result) {
+  const original = api.tabs.sendMessage;
+  const located = [];
+  api.tabs.sendMessage = async (tabId, message) => {
+    if (message.type !== "target-point") return original(tabId, message);
+    located.push(message.request.operation);
+    const envelope = {
+      protocol: PROTOCOL,
+      version: VERSION,
+      type: "response",
+      id: message.request.id,
+      session: message.request.session,
+      tab_id: tabId,
+      document_id: "document-1",
+    };
+    return result.ok === false
+      ? { ...envelope, ok: false, error: result.error }
+      : {
+          ...envelope,
+          ok: true,
+          result: { kind: "target-point", generation: 0, document_id: "document-1", ...result },
+        };
+  };
+  return located;
+}
+
+test("debugger input dispatches real mouse, text and key events at the located point", async () => {
+  const { api, port } = fakeApi();
+  const calls = debuggerFake(api);
+  const located = pointReply(api, { x: 40, y: 50, ref: "e1" });
+  const controller = createController(api);
+  controller.connectNative();
+  const session = await grantWithDebugger(controller, port);
+  const act = async (id, operation, payload) => {
+    calls.length = 0;
+    await controller.handleNativeMessage(
+      request(operation, { id, session, generation: 0, payload }),
+      port,
+    );
+    return port.messages.at(-1);
+  };
+  const clicked = await act("click", "trusted-click", { ref: "e1" });
+  assert.equal(clicked.ok, true, JSON.stringify(clicked));
+  assert.equal(clicked.result.backend, "debugger");
+  assert.equal(clicked.result.effect, "click-dispatched");
+  assert.equal(clicked.result.ref, "e1");
+  assert.deepEqual(clicked.result.point, { x: 40, y: 50, space: "css-viewport" });
+  assert.deepEqual(
+    calls.map((call) => [call[1], call[2].type, call[2].x, call[2].y]),
+    [
+      ["Input.dispatchMouseEvent", "mouseMoved", 40, 50],
+      ["Input.dispatchMouseEvent", "mousePressed", 40, 50],
+      ["Input.dispatchMouseEvent", "mouseReleased", 40, 50],
+    ],
+  );
+  const typed = await act("type", "trusted-type", { ref: "e1", text: "hello" });
+  assert.equal(typed.result.effect, "text-inserted");
+  assert.deepEqual(calls.at(-1), ["send", "Input.insertText", { text: "hello" }]);
+  const key = await act("key", "trusted-key", { key: "Enter" });
+  assert.equal(key.result.effect, "key-dispatched");
+  assert.deepEqual(
+    calls.map((call) => [call[2].type, call[2].key, call[2].text]),
+    [
+      ["keyDown", "Enter", "\r"],
+      ["keyUp", "Enter", undefined],
+    ],
+  );
+  assert.deepEqual(located, ["trusted-click", "trusted-type"]);
+  const badKey = await act("bad-key", "trusted-key", { key: "F5" });
+  assert.equal(badKey.error.code, "invalid-request");
+  assert.deepEqual(calls, []);
+});
+
+test("debugger input refuses before dispatch and reports a partial dispatch as uncertain", async () => {
+  {
+    const { api, port } = fakeApi();
+    const calls = debuggerFake(api);
+    pointReply(api, {
+      ok: false,
+      error: { code: "target-covered", state: "unsupported", message: "covered" },
+    });
+    const controller = createController(api);
+    controller.connectNative();
+    const session = await grantWithDebugger(controller, port);
+    calls.length = 0;
+    await controller.handleNativeMessage(
+      request("trusted-click", { id: "covered", session, generation: 0, payload: { ref: "e1" } }),
+      port,
+    );
+    assert.equal(port.messages.at(-1).error.code, "target-covered");
+    assert.deepEqual(calls, []);
+  }
+  {
+    const { api, port } = fakeApi();
+    debuggerFake(api);
+    pointReply(api, { x: 1, y: 2 });
+    const controller = createController(api);
+    controller.connectNative();
+    const session = await grantWithDebugger(controller, port);
+    const send = api.debugger.sendCommand;
+    api.debugger.sendCommand = async (target, method, params) => {
+      if (params?.type === "mousePressed") throw new Error("Debugger is not attached");
+      return send(target, method, params);
+    };
+    await controller.handleNativeMessage(
+      request("trusted-click", { id: "partial", session, generation: 0, payload: { ref: "e1" } }),
+      port,
+    );
+    assert.equal(port.messages.at(-1).error.code, "action-uncertain");
+  }
+  {
+    const { api, port } = fakeApi();
+    const controller = createController(api);
+    controller.connectNative();
+    await controller.handleNativeMessage(
+      control("grant", { capabilities: ["read", "interact"] }),
+      port,
+    );
+    const session = port.messages.at(-1).result.grant.session;
+    await controller.handleNativeMessage(
+      request("trusted-hover", { id: "detached", session, generation: 0, payload: { ref: "e1" } }),
+      port,
+    );
+    assert.equal(port.messages.at(-1).error.code, "debugger-not-attached");
+  }
 });
 
 test("a callback-mode collector answers through sendResponse", async () => {

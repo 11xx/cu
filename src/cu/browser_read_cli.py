@@ -122,11 +122,21 @@ def configure(parser: argparse.ArgumentParser) -> None:
     action.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     _common(action)
     action.set_defaults(injects=True)
-    action.add_argument("action", choices=sorted(transport.ACTION_OPERATIONS - {"capture"}))
+    action.add_argument(
+        "action",
+        choices=("click", "fill", "focus", "hover", "key", "reload", "scroll", "select", "type"),
+    )
+    action.add_argument(
+        "--input",
+        choices=("dom", "debugger"),
+        default="dom",
+        help="dom dispatches page events; debugger sends real input through an attached debugger",
+    )
     action.add_argument("--ref", help="Stable ref from a prior observation")
     action.add_argument(
-        "--value", help="Replacement value for fill or exact option value for select"
+        "--value", help="Value for fill, text for type, or exact option value for select"
     )
+    action.add_argument("--key", choices=sorted(transport.TRUSTED_KEYS), help="Named key for key")
     action.add_argument("--label", help="Visible option label for select")
     action.add_argument("--target", choices=("document", "element"), default="element")
     action.add_argument("--dx", type=int, default=0)
@@ -360,11 +370,30 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
     safety.check_abort()
     safety.check_session()
     safety.check_denylist(config.load(), observe.focused())
+    operation = args.action
+    if args.input == "debugger":
+        if args.action not in {"click", "hover", "scroll", "type", "key"}:
+            raise ValueError(f"{args.action} has no debugger input; use --input dom")
+        operation = f"trusted-{args.action}"
+    elif args.action in {"type", "key"}:
+        raise ValueError(f"{args.action} needs --input debugger")
     payload: dict[str, Any]
-    if args.action in {"click", "focus", "hover"}:
+    if operation in {"click", "focus", "hover", "trusted-click", "trusted-hover"}:
         if not args.ref:
             raise ValueError(f"{args.action} requires --ref")
         payload = {"ref": args.ref}
+    elif operation == "trusted-type":
+        if args.ref is None or args.value is None:
+            raise ValueError("type requires --ref and --value")
+        payload = {"ref": args.ref, "text": args.value}
+    elif operation == "trusted-key":
+        if args.key is None or args.ref:
+            raise ValueError("key requires --key and targets the focused element, not --ref")
+        payload = {"key": args.key}
+    elif operation == "trusted-scroll":
+        if args.target == "element" and not args.ref:
+            raise ValueError("element scroll requires --ref")
+        payload = {"dx": args.dx, "dy": args.dy, **({"ref": args.ref} if args.ref else {})}
     elif args.action == "select":
         if not args.ref:
             raise ValueError("select requires --ref")
@@ -401,7 +430,7 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
                 "the current browser grant is read-only; bind the tab again with cu web grant",
             )
         result = client.action(
-            args.action,
+            operation,
             **_identity(grant),
             generation=args.generation,
             payload=payload,
@@ -412,7 +441,7 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
     safety.record(
         config.load(),
         {
-            "action": f"browser-{args.action}",
+            "action": f"browser-{operation}",
             "backend": receipt.get("backend"),
             "verification": receipt.get("verification"),
             "tab_id": grant["tab_id"],

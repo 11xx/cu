@@ -34,6 +34,30 @@
     "required",
     "selected",
   ]);
+  // Real input dispatched through an attached debugger rather than page events.
+  const TRUSTED_INPUT = new Set([
+    "trusted-click",
+    "trusted-hover",
+    "trusted-type",
+    "trusted-key",
+    "trusted-scroll",
+  ]);
+  const TRUSTED_KEYS = Object.freeze({
+    Enter: { code: "Enter", keyCode: 13, text: "\r" },
+    Tab: { code: "Tab", keyCode: 9 },
+    Escape: { code: "Escape", keyCode: 27 },
+    Backspace: { code: "Backspace", keyCode: 8 },
+    Delete: { code: "Delete", keyCode: 46 },
+    ArrowUp: { code: "ArrowUp", keyCode: 38 },
+    ArrowDown: { code: "ArrowDown", keyCode: 40 },
+    ArrowLeft: { code: "ArrowLeft", keyCode: 37 },
+    ArrowRight: { code: "ArrowRight", keyCode: 39 },
+    Home: { code: "Home", keyCode: 36 },
+    End: { code: "End", keyCode: 35 },
+    PageUp: { code: "PageUp", keyCode: 33 },
+    PageDown: { code: "PageDown", keyCode: 34 },
+    Space: { code: "Space", keyCode: 32, key: " ", text: " " },
+  });
   const ACTION_OPERATIONS = new Set([
     "click",
     "focus",
@@ -43,6 +67,7 @@
     "select",
     "capture",
     "reload",
+    ...TRUSTED_INPUT,
   ]);
   const OPERATIONS = new Set([...READ_OPERATIONS, ...ACTION_OPERATIONS]);
   const MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -179,9 +204,34 @@
       exactKeys(value, new Set(), new Set());
       return {};
     }
-    if (operation === "click" || operation === "focus" || operation === "hover") {
+    if (
+      operation === "click" ||
+      operation === "focus" ||
+      operation === "hover" ||
+      operation === "trusted-click" ||
+      operation === "trusted-hover"
+    ) {
       exactKeys(value, new Set(["ref"]), new Set(["ref"]));
       return { ref: validateRef(value.ref) };
+    }
+    if (operation === "trusted-type") {
+      exactKeys(value, new Set(["ref", "text"]), new Set(["ref", "text"]));
+      return { ref: validateRef(value.ref), text: boundedString(value.text, "text", 1024) };
+    }
+    if (operation === "trusted-key") {
+      exactKeys(value, new Set(["key"]), new Set(["key"]));
+      const key = boundedString(value.key, "key", 16);
+      if (!Object.prototype.hasOwnProperty.call(TRUSTED_KEYS, key))
+        throw new ValidationError("key is not a supported named key");
+      return { key };
+    }
+    if (operation === "trusted-scroll") {
+      exactKeys(value, new Set(["dx", "dy"]), new Set(["ref", "dx", "dy"]));
+      return {
+        ...(Object.prototype.hasOwnProperty.call(value, "ref") ? { ref: validateRef(value.ref) } : {}),
+        dx: boundedSignedInteger(value.dx, "dx", 10000),
+        dy: boundedSignedInteger(value.dy, "dy", 10000),
+      };
     }
     if (operation === "select") {
       exactKeys(value, new Set(["ref"]), new Set(["ref", "value", "label"]));
@@ -1250,6 +1300,10 @@
         }
       }
       if (job.cancelled || state.grant !== grant || state.nativePort !== port) return;
+      if (TRUSTED_INPUT.has(request.operation)) {
+        await dispatchTrustedInput(request, grant, port, job);
+        return;
+      }
       if (request.operation === "reload") {
         await reloadGrantedTab(request, grant, port, job);
         return;
@@ -1642,6 +1696,137 @@
         return;
       }
       postNative(response, port);
+    }
+    // Real input goes through the debugger to the point the collector checked,
+    // so DOM actions' freshness, visibility, sensitivity and covering refusals
+    // apply before anything is dispatched.
+    async function dispatchTrustedInput(request, grant, port, job) {
+      const debug = state.debug;
+      if (!debug || debug.grant !== grant) {
+        postNative(
+          errorResponse(
+            request.id,
+            "debugger-not-attached",
+            "attach the debugger with cu web debug attach",
+          ),
+          port,
+        );
+        return;
+      }
+      let point = null;
+      if (request.operation !== "trusted-key") {
+        let located;
+        try {
+          located = await api.tabs.sendMessage(request.tab_id, {
+            type: "target-point",
+            request: { ...request, capabilities: copyGrant(grant).capabilities },
+          });
+          validateCollectorResponse(located);
+        } catch (_) {
+          postNative(
+            errorResponse(
+              request.id,
+              "collector-unavailable",
+              "the bound tab did not locate the target; nothing was dispatched",
+            ),
+            port,
+          );
+          return;
+        }
+        if (!located.ok) {
+          postNative(located, port);
+          return;
+        }
+        point = located.result;
+      }
+      if (job.cancelled || state.debug !== debug || state.grant !== grant) return;
+      const input = (method, params) =>
+        api.debugger.sendCommand({ tabId: debug.tabId }, method, params);
+      const payload = request.payload;
+      let dispatched = false;
+      let effect;
+      try {
+        if (request.operation === "trusted-key") {
+          const key = TRUSTED_KEYS[payload.key];
+          const common = {
+            key: key.key ?? payload.key,
+            code: key.code,
+            windowsVirtualKeyCode: key.keyCode,
+            nativeVirtualKeyCode: key.keyCode,
+          };
+          dispatched = true;
+          await input("Input.dispatchKeyEvent", {
+            type: key.text ? "keyDown" : "rawKeyDown",
+            ...common,
+            ...(key.text ? { text: key.text, unmodifiedText: key.text } : {}),
+          });
+          await input("Input.dispatchKeyEvent", { type: "keyUp", ...common });
+          effect = "key-dispatched";
+        } else if (request.operation === "trusted-scroll") {
+          dispatched = true;
+          await input("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: point.x,
+            y: point.y,
+            deltaX: payload.dx,
+            deltaY: payload.dy,
+          });
+          effect = "wheel-dispatched";
+        } else {
+          const at = { x: point.x, y: point.y };
+          dispatched = true;
+          await input("Input.dispatchMouseEvent", { type: "mouseMoved", ...at, button: "none" });
+          if (request.operation !== "trusted-hover") {
+            const press = { ...at, button: "left", clickCount: 1 };
+            await input("Input.dispatchMouseEvent", { type: "mousePressed", ...press, buttons: 1 });
+            await input("Input.dispatchMouseEvent", { type: "mouseReleased", ...press, buttons: 0 });
+          }
+          if (request.operation === "trusted-type")
+            await input("Input.insertText", { text: payload.text });
+          effect = {
+            "trusted-hover": "pointer-moved",
+            "trusted-click": "click-dispatched",
+            "trusted-type": "text-inserted",
+          }[request.operation];
+        }
+      } catch (_) {
+        postNative(
+          dispatched
+            ? errorResponse(
+                request.id,
+                "action-uncertain",
+                "debugger input may have been partially applied; inspect fresh evidence",
+              )
+            : errorResponse(request.id, "debugger-detached", "the debugger detached first"),
+          port,
+        );
+        return;
+      }
+      if (state.grant !== grant || state.nativePort !== port) return;
+      postNative(
+        {
+          protocol: PROTOCOL,
+          version: VERSION,
+          type: "response",
+          id: request.id,
+          session: request.session,
+          tab_id: request.tab_id,
+          document_id: request.document_id,
+          ok: true,
+          result: {
+            kind: "action",
+            action: request.operation,
+            backend: "debugger",
+            effect,
+            verification: "unverified",
+            ...(payload.ref ? { ref: payload.ref } : {}),
+            ...(point ? { point: { x: point.x, y: point.y, space: "css-viewport" } } : {}),
+            generation: point ? point.generation : grant.generation,
+            document_id: request.document_id,
+          },
+        },
+        port,
+      );
     }
     async function storedCursor() {
       try {

@@ -592,6 +592,7 @@ OPTIONAL FIREFOX CU BROWSER
   cu web debug attach --json
   cu web debug console --json
   cu web debug ax --role button --name Submit --json
+  cu web action click --input debugger --ref e4 --document DOCUMENT --generation 3
   cu web read --selector '.result-card' --details --query Port --json
   cu web action click --document DOCUMENT --generation 3 --ref e4 --tab 12
   cu web action select --document DOCUMENT --generation 4 --ref e5 --value two --tab 12
@@ -623,7 +624,12 @@ OPTIONAL FIREFOX CU BROWSER
   without query strings, headers, or bodies, and accessibility roles, names, and
   states with values omitted unless `--values`. Any end of the grant, `debug
   detach`, or a detach from the banner ends the attachment. Firefox refuses these
-  commands.
+  commands. With it attached, `cu web action click|hover|type|key|scroll --input
+  debugger` sends real input to the point the collector checked (the same
+  freshness, visibility, sensitivity, and covering refusals), so pages see trusted
+  events and CSS :hover. `key` takes named keys only. Receipts name backend
+  debugger and stay unverified; an interrupted dispatch is uncertain (exit 58).
+  Input never falls back between dom and debugger.
 
   Reads return stable per-document element refs. Optional bounded CSS selector
   scopes are data, never eval. `--details` returns bounded links and time-like

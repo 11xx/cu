@@ -133,6 +133,8 @@ def test_select_action_requires_one_option_identity_and_forwards_value(bridge, c
         web._action(
             SimpleNamespace(
                 action="select",
+                input="dom",
+                key=None,
                 document="fixture-document",
                 generation=0,
                 ref="e1",
@@ -422,3 +424,25 @@ def test_debug_reads_forward_bounded_payloads(bridge, capsys):
     assert cli.main(["web", "debug", "network", "--role", "button", "--json"]) == exits.USAGE
     ax_payload = {"role": "button", "name": "Apply once", "include_values": False, "limit": 128}
     assert bridge.requests == [("console", {"limit": 5}), ("ax-query", ax_payload)]
+
+
+def debugger_action(*extra):
+    return ["web", "action", *extra, "--document", "fixture-document", "--generation", "0"]
+
+
+def test_debugger_input_maps_actions_and_never_falls_back(bridge):
+    assert cli.main(debugger_action("click", "--input", "debugger", "--ref", "e1")) == 0
+    typed = debugger_action("type", "--input", "debugger", "--ref", "e2", "--value", "hi")
+    assert cli.main(typed) == 0
+    assert cli.main(debugger_action("key", "--input", "debugger", "--key", "Enter")) == 0
+    scroll = debugger_action("scroll", "--input", "debugger", "--target", "document", "--dy", "300")
+    assert cli.main(scroll) == 0
+    assert cli.main(debugger_action("type", "--ref", "e2", "--value", "hi")) == exits.USAGE
+    select = debugger_action("select", "--input", "debugger", "--ref", "e3", "--value", "x")
+    assert cli.main(select) == exits.USAGE
+    assert bridge.payloads == [
+        ("trusted-click", {"ref": "e1"}),
+        ("trusted-type", {"ref": "e2", "text": "hi"}),
+        ("trusted-key", {"key": "Enter"}),
+        ("trusted-scroll", {"dx": 0, "dy": 300}),
+    ]

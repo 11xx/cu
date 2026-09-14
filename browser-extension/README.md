@@ -224,6 +224,29 @@ accessible name, with values omitted unless `--values` is given. All of it is
 untrusted page evidence. Firefox has no extension debugger, so these commands
 refuse there as `debugger-unsupported`.
 
+With the debugger attached, `--input debugger` sends real input instead of page
+events:
+
+```sh
+cu web action click --input debugger --ref e4 --document DOCUMENT --generation 3
+cu web action hover --input debugger --ref e7 --document DOCUMENT --generation 3
+cu web action type --input debugger --ref e5 --value 'ordinary text' --document DOCUMENT --generation 4
+cu web action key --input debugger --key Enter --document DOCUMENT --generation 5
+cu web action scroll --input debugger --target document --dy 400 --document DOCUMENT --generation 5
+```
+
+The collector first checks the target as it would for a DOM action (fresh ref and
+generation, visible, enabled, not sensitive, not covered) and returns its viewport
+point; the worker then sends mouse movement and presses, a wheel scroll, text
+insertion, or a named key through the debugger. Pages receive trusted events, so
+CSS `:hover` and handlers that ignore synthetic events respond. `type` clicks the
+field before inserting text; `key` goes to whatever has focus and accepts only
+Enter, Tab, Escape, Backspace, Delete, the arrow keys, Home, End, PageUp, PageDown
+and Space. Receipts name backend `debugger` and stay `unverified`, and a failure
+after input started is uncertain (exit 58). Input never falls back between `dom`
+and `debugger`, and actions still require the bound tab to be active in the
+focused window.
+
 ## Transport and refusals
 
 The extension ID is `cu-browser-read@local`, the native host is `org.cu.read`, and

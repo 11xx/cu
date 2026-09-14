@@ -479,6 +479,22 @@ def test_debugger_evidence_payloads_and_controls_are_bounded():
             make_control(operation, capabilities=["read"])
 
 
+def test_debugger_input_payloads_are_bounded_and_need_a_generation():
+    assert validate_payload("trusted-click", {"ref": "e1"}) == {"ref": "e1"}
+    assert validate_payload("trusted-type", {"ref": "e2", "text": "hi"}) == {
+        "ref": "e2",
+        "text": "hi",
+    }
+    assert validate_payload("trusted-key", {"key": "Enter"}) == {"key": "Enter"}
+    with pytest.raises(ProtocolError, match="named key"):
+        validate_payload("trusted-key", {"key": "F5"})
+    assert validate_payload("trusted-scroll", {"dx": 0, "dy": 300}) == {"dx": 0, "dy": 300}
+    with pytest.raises(ProtocolError, match="passive read"):
+        make_request(
+            "trusted-click", session="s", tab_id=7, document_id="d", payload={"ref": "e1"}
+        )
+
+
 def test_reload_receipt_names_the_revoked_grant_and_tracks_the_revocation():
     helper = HelperSocket.create()
     thread, errors = serve_reload(helper, reload_receipt())

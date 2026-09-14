@@ -65,11 +65,34 @@ SOCKET_SUFFIX = ".sock"
 READ_OPERATIONS = frozenset({"observe", "query", "wait", "ax-query", "console", "network"})
 # Evidence read through an attached Chromium debugger rather than the page collector.
 DEBUGGER_READS = frozenset({"ax-query", "console", "network"})
-ACTION_OPERATIONS = frozenset(
-    {"click", "focus", "fill", "scroll", "hover", "select", "capture", "reload"}
+# Real input sent through an attached Chromium debugger rather than page events.
+TRUSTED_INPUT = frozenset(
+    {"trusted-click", "trusted-hover", "trusted-type", "trusted-key", "trusted-scroll"}
+)
+TRUSTED_KEYS = frozenset(
+    {
+        "Enter",
+        "Tab",
+        "Escape",
+        "Backspace",
+        "Delete",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+        "Home",
+        "End",
+        "PageUp",
+        "PageDown",
+        "Space",
+    }
+)
+ACTION_OPERATIONS = (
+    frozenset({"click", "focus", "fill", "scroll", "hover", "select", "capture", "reload"})
+    | TRUSTED_INPUT
 )
 # A receipt from any other backend does not describe the operation that was sent.
-_ACTION_BACKENDS = {"reload": "tabs"}
+_ACTION_BACKENDS = {"reload": "tabs", **dict.fromkeys(TRUSTED_INPUT, "debugger")}
 OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
 CONTROL_OPERATIONS = frozenset({"grant", "release", "debug-attach", "debug-detach"})
 CAPABILITIES = frozenset({"read", "interact"})
@@ -404,9 +427,28 @@ def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
     if operation == "reload":
         _exact_fields(payload_object, set(), set())
         return {}
-    if operation in {"click", "focus", "hover"}:
+    if operation in {"click", "focus", "hover", "trusted-click", "trusted-hover"}:
         _exact_fields(payload_object, {"ref"}, {"ref"})
         return {"ref": _ref(payload_object["ref"])}
+    if operation == "trusted-type":
+        _exact_fields(payload_object, {"ref", "text"}, {"ref", "text"})
+        return {
+            "ref": _ref(payload_object["ref"]),
+            "text": _bounded_string(payload_object["text"], "text", MAX_ACTION_VALUE_CHARS),
+        }
+    if operation == "trusted-key":
+        _exact_fields(payload_object, {"key"}, {"key"})
+        key = _bounded_string(payload_object["key"], "key", 16)
+        if key not in TRUSTED_KEYS:
+            raise ProtocolError("key is not a supported named key")
+        return {"key": key}
+    if operation == "trusted-scroll":
+        _exact_fields(payload_object, {"dx", "dy"}, {"ref", "dx", "dy"})
+        return {
+            **({"ref": _ref(payload_object["ref"])} if "ref" in payload_object else {}),
+            "dx": _bounded_signed_int(payload_object["dx"], "dx", 10000),
+            "dy": _bounded_signed_int(payload_object["dy"], "dy", 10000),
+        }
     if operation == "select":
         _exact_fields(payload_object, {"ref"}, {"ref", "value", "label"})
         has_value = "value" in payload_object
