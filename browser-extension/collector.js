@@ -1796,6 +1796,14 @@
         });
       });
     };
+    // Leaving a document ends its session: the worker revokes the grant on
+    // navigation, so a page restored from the back/forward cache holds none.
+    if (typeof doc.defaultView?.addEventListener === "function")
+      doc.defaultView.addEventListener("pagehide", () => {
+        background?.disconnect();
+        background = null;
+        if (collector.session) collector.release(collector.session);
+      });
     api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const reply = Promise.resolve(collector.handle(message)).then((value) =>
         confirm(message, value),

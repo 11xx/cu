@@ -1204,6 +1204,26 @@ test("an acknowledged collector session ends when its background port closes", a
   assert.equal(ports[1].disconnected, true);
 });
 
+test("a page restored from the back/forward cache holds no collector session", async () => {
+  const { api, ports, send } = collectorPortApi();
+  const doc = new Document([]);
+  const collector = collectorModule.install(api, doc, {
+    respond: "callback",
+    releaseWhenDisconnected: true,
+  });
+  assert.equal(
+    (await send({ type: "start", session: "session-left", capabilities: ["read"] })).ok,
+    true,
+  );
+  doc.dispatch("pagehide");
+  assert.equal(collector.session, null);
+  assert.equal(ports[0].disconnected, true);
+  assert.equal(
+    (await send({ type: "start", session: "session-restored", capabilities: ["read"] })).ok,
+    true,
+  );
+});
+
 test("a worker that drops or ignores the collector port refuses the session", async () => {
   for (const scenario of [
     { name: "closed at once", closeAtOnce: true },
