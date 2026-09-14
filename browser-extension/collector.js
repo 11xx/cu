@@ -879,6 +879,22 @@
     function bumpGeneration() {
       generation += 1;
     }
+    let fullPageRender = null;
+    // A full-page render resizes and scrolls the view itself, so while one runs
+    // those events do not advance the generation; page changes still do.
+    function bumpForViewport() {
+      if (fullPageRender === null) bumpGeneration();
+    }
+    function startFullPageRender(view) {
+      endFullPageRender();
+      fullPageRender = view.setTimeout(() => {
+        fullPageRender = null;
+      }, 30000);
+    }
+    function endFullPageRender() {
+      if (fullPageRender !== null) doc.defaultView?.clearTimeout(fullPageRender);
+      fullPageRender = null;
+    }
     function refFor(element) {
       let ref = elementRefs.get(element);
       if (!ref || !refElements.has(ref)) {
@@ -952,13 +968,17 @@
     function installFreshnessObservers() {
       if (typeof doc.defaultView?.addEventListener === "function")
         for (const event of ["resize", "scroll"]) {
-          doc.defaultView.addEventListener(event, bumpGeneration, true);
-          listeners.push([doc.defaultView, event]);
+          doc.defaultView.addEventListener(event, bumpForViewport, true);
+          listeners.push([doc.defaultView, event, bumpForViewport]);
         }
       if (typeof doc.addEventListener === "function") {
-        for (const event of ["scroll", "input", "change"]) {
-          doc.addEventListener(event, bumpGeneration, true);
-          listeners.push([doc, event]);
+        for (const [event, handler] of [
+          ["scroll", bumpForViewport],
+          ["input", bumpGeneration],
+          ["change", bumpGeneration],
+        ]) {
+          doc.addEventListener(event, handler, true);
+          listeners.push([doc, event, handler]);
         }
       }
       const Observer = doc.defaultView?.MutationObserver || globalThis.MutationObserver;
@@ -977,9 +997,10 @@
     function stopObserving() {
       observer?.disconnect();
       observer = null;
-      for (const [target, event] of listeners)
-        target.removeEventListener(event, bumpGeneration, true);
+      for (const [target, event, handler] of listeners)
+        target.removeEventListener(event, handler, true);
       listeners.length = 0;
+      endFullPageRender();
       lastReads.clear();
       removeOverlay();
       for (const wait of [...waits]) wait.cancel(new WaitCancelled());
@@ -1681,7 +1702,7 @@
         exactKeys(
           message,
           new Set(["type", "session", "document_id", "generation"]),
-          new Set(["type", "session", "document_id", "generation", "region"]),
+          new Set(["type", "session", "document_id", "generation", "region", "full_page"]),
         );
         if (!session || message.session !== session.id)
           return {
@@ -1707,8 +1728,20 @@
             },
           };
         }
+        if (Object.prototype.hasOwnProperty.call(message, "full_page") && message.full_page !== true)
+          return {
+            ok: false,
+            error: {
+              code: "invalid-message",
+              state: "unsupported",
+              message: "full_page must be true when present",
+            },
+          };
         const preparing = message.type === "capture-prep";
-        if (!preparing) setOverlayHidden(false);
+        if (!preparing) {
+          setOverlayHidden(false);
+          endFullPageRender();
+        }
         drainMutations();
         if (message.document_id !== documentId || message.generation !== generation)
           return {
@@ -1760,6 +1793,7 @@
           requested_coverage: requested,
         };
         if (!preparing) return result;
+        if (message.full_page === true) startFullPageRender(view);
         setOverlayHidden(true);
         return new Promise((resolve) =>
           view.requestAnimationFrame(() => view.requestAnimationFrame(() => resolve(result))),

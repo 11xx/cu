@@ -254,7 +254,8 @@ cu web capture --full-page --document DOCUMENT --generation 6 --json
 
 `--full-page` renders the document's CSS content size, beyond the viewport, as
 one PNG through the debugger. The collector brackets it with the same document
-and generation checks as a viewport capture. The page's device-pixel size is
+and generation checks as a viewport capture; the render's own resize and scroll
+events do not advance the generation, while page changes during it still refuse. The page's device-pixel size is
 checked against the 16-megapixel bound before rendering, and the encoded PNG
 against 512 KiB after. The receipt names backend `debugger`, carries the
 `document_size` in CSS pixels, and has no native-input authority. It cannot be

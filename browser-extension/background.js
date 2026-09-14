@@ -1052,6 +1052,7 @@
           document_id: request.document_id,
           generation: request.generation,
           ...(region ? { region } : {}),
+          ...(request.payload.full_page ? { full_page: true } : {}),
         });
         if (!reply?.ok)
           throw Object.assign(new ValidationError("capture identity could not be verified"), {

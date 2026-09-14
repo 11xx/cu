@@ -1494,6 +1494,7 @@ test("full-page capture renders through the attached debugger and checks its bud
   const original = api.tabs.sendMessage;
   api.tabs.sendMessage = async (tab, message) => {
     if (!message.type.startsWith("capture-")) return original(tab, message);
+    assert.equal(message.full_page, true);
     return {
       ok: true,
       document_id: "document-1",
