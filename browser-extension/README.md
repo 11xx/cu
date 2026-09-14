@@ -213,8 +213,9 @@ it. The attachment ends with `cu web debug detach`, with any end of the grant
 (stop, reload, navigation, closure, a worker restart), and when the browser or the
 user detaches it, for example from the banner.
 
-Evidence is collected from attach onward and bounded to the 100 most recent
-entries. `console` keeps exceptions, error-level console calls, failed assertions,
+Evidence is buffered from attach onward and bounded to the 100 most recent
+entries; enabling browser logging also replays error log entries the browser had
+already recorded for the page, such as resources that failed to load. `console` keeps exceptions, error-level console calls, failed assertions,
 and error-level browser log entries, with text clipped. `network` keeps method,
 resource type, URL without query string or fragment, status, MIME type, completion
 and failure; never headers, bodies or cookies. `ax` returns accessibility roles,

@@ -618,7 +618,8 @@ OPTIONAL FIREFOX CU BROWSER
   In Chromium-family browsers `cu web debug attach` attaches the extension
   debugger to the bound tab (interaction grant, same interlocks), and the browser
   shows its debugging banner. `debug console`, `debug network`, and `debug ax`
-  return bounded evidence collected since attach: failures only, request metadata
+  return bounded evidence buffered since attach (browser error log entries include
+  ones already recorded for the page): failures only, request metadata
   without query strings, headers, or bodies, and accessibility roles, names, and
   states with values omitted unless `--values`. Any end of the grant, `debug
   detach`, or a detach from the banner ends the attachment. Firefox refuses these
