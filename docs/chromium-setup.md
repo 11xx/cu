@@ -49,3 +49,17 @@ the product's only existing default root. A missing root refuses, because setup
 never creates a profile; several candidate roots refuse as ambiguous; and a
 different existing file at either path refuses rather than being overwritten.
 Setup registers the host only: it loads no extension and grants no tab.
+
+## Service-worker lifecycle
+
+The Chromium entry keeps grant state only in its service worker's memory, the
+same controller Firefox runs in a persistent background page. A worker the
+browser stops loses that state, and its native port closes; the host exits on
+end of input and removes its helper socket, so a stopped worker ends every grant.
+Nothing is persisted and nothing is restored: a restarted worker starts without a
+grant and does not reconnect to the host until the user grants a tab again. A
+native-port reconnect is never treated as renewed page authority.
+
+Listeners reply through `sendResponse` in this entry, because a Chromium-family
+listener's returned Promise delivers no reply; the Firefox entry keeps returning
+Promises.

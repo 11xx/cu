@@ -621,7 +621,9 @@
     };
   }
 
-  function createController(api) {
+  function createController(api, options = {}) {
+    const collectorFiles = options.collectorFiles || ["collector.js"];
+    const action = api.browserAction || api.action;
     const state = {
       grant: null,
       pendingStart: null,
@@ -641,9 +643,9 @@
           ? "ACT"
           : "READ"
         : "";
-      if (api.browserAction?.setBadgeText) await api.browserAction.setBadgeText({ text });
-      if (state.grant && api.browserAction?.setBadgeBackgroundColor)
-        await api.browserAction.setBadgeBackgroundColor({
+      if (action?.setBadgeText) await action.setBadgeText({ text });
+      if (state.grant && action?.setBadgeBackgroundColor)
+        await action.setBadgeBackgroundColor({
           color: state.grant.capabilities.includes("interact") ? "#9a6700" : "#276749",
         });
     }
@@ -775,7 +777,7 @@
       try {
         await api.scripting.executeScript({
           target: { tabId: tab.id },
-          files: ["collector.js"],
+          files: collectorFiles,
         });
         info = await api.tabs.sendMessage(tab.id, {
           type: "start",
@@ -1384,9 +1386,11 @@
       status,
     };
   }
-  function install(api) {
-    const controller = createController(api);
-    api.browserAction.onClicked.addListener((tab) => {
+  // Firefox resolves a listener's returned Promise as the reply. Chromium-family
+  // browsers deliver nothing for it, so their entry asks for sendResponse.
+  function install(api, options = {}) {
+    const controller = createController(api, options);
+    (api.browserAction || api.action)?.onClicked?.addListener((tab) => {
       void controller.startCurrent(tab, ["read"]);
     });
     api.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -1398,9 +1402,12 @@
     api.tabs.onRemoved.addListener((tabId) => {
       void controller.handleTabRemoved(tabId);
     });
-    api.runtime.onMessage.addListener((message, sender) =>
-      controller.handleUiMessage(message, sender),
-    );
+    api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      const reply = controller.handleUiMessage(message, sender);
+      if (options.respond !== "callback") return reply;
+      void reply.then(sendResponse);
+      return true;
+    });
     return controller;
   }
   return {

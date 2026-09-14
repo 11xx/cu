@@ -596,6 +596,9 @@ OPTIONAL FIREFOX CU BROWSER
     --region '120,80 640x360' --json
 
   Temporarily load browser-extension/manifest.json through Firefox about:debugging.
+  For Thorium, run `cu web setup --browser thorium` and load browser-extension/chromium
+  unpacked; its service worker holds grants in memory only, so a worker restart
+  ends them and the tab must be granted again.
   The CU Browser popup offers a read-only grant or an explicit page-interaction
   grant for the current tab. It shows the capability state and Stop revokes it.
   Navigation, reload, closure, and native disconnect revoke the grant; switching

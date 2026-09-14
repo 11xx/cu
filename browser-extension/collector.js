@@ -1734,9 +1734,14 @@
       dispose: stopObserving,
     };
   }
-  function install(api, doc) {
+  function install(api, doc, options = {}) {
     const collector = createCollector(doc);
-    api.runtime.onMessage.addListener(async (message) => collector.handle(message));
+    api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      const reply = Promise.resolve(collector.handle(message));
+      if (options.respond !== "callback") return reply;
+      void reply.then(sendResponse);
+      return true;
+    });
     return collector;
   }
   return {

@@ -1069,3 +1069,53 @@ test("a rejected reload or a tab lost before dispatch keeps the grant revoked", 
     assert.equal(controller.status().active, false);
   }
 });
+
+test("a callback-mode install answers popup controls through sendResponse", async () => {
+  const { api, calls } = fakeApi();
+  let listener;
+  api.runtime.onMessage = { addListener: (fn) => (listener = fn) };
+  api.tabs.onUpdated = { addListener: () => {} };
+  api.tabs.onRemoved = { addListener: () => {} };
+  api.action = api.browserAction;
+  delete api.browserAction;
+  api.scripting.executeScript = async (value) => calls.execute.push(value);
+  background.install(api, {
+    respond: "callback",
+    collectorFiles: ["collector.js", "chromium-collector.js"],
+  });
+  const sender = { id: api.runtime.id };
+  let replied;
+  const answered = new Promise((resolve) => (replied = resolve));
+  assert.equal(listener({ type: "start-interaction" }, sender, replied), true);
+  const reply = await answered;
+  assert.equal(reply.ok, true, JSON.stringify(reply));
+  assert.deepEqual(calls.execute[0].files, ["collector.js", "chromium-collector.js"]);
+  assert.deepEqual(calls.badges.at(-1), { text: "ACT" });
+});
+
+test("the default install keeps returning the reply Promise", async () => {
+  const { api } = fakeApi();
+  let listener;
+  api.runtime.onMessage = { addListener: (fn) => (listener = fn) };
+  api.tabs.onUpdated = { addListener: () => {} };
+  api.tabs.onRemoved = { addListener: () => {} };
+  background.install(api);
+  const reply = listener({ type: "status" }, { id: api.runtime.id }, () => {
+    throw new Error("sendResponse must not be used in the default mode");
+  });
+  assert.equal(typeof reply.then, "function");
+  assert.equal((await reply).active, false);
+});
+
+test("a callback-mode collector answers through sendResponse", async () => {
+  let listener;
+  collectorModule.install(
+    { runtime: { onMessage: { addListener: (fn) => (listener = fn) } } },
+    new Document([]),
+    { respond: "callback" },
+  );
+  let replied;
+  const answered = new Promise((resolve) => (replied = resolve));
+  assert.equal(listener({ type: "start", session: "fixture-session" }, {}, replied), true);
+  assert.equal((await answered).ok, true);
+});

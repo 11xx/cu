@@ -1,3 +1,4 @@
+const extension = globalThis.browser || globalThis.chrome;
 const statusElement = document.getElementById("status");
 const capabilitiesElement = document.getElementById("capabilities");
 const readButton = document.getElementById("start-read");
@@ -45,7 +46,7 @@ async function start(type) {
   interactionButton.disabled = true;
   try {
     render(
-      await browser.runtime.sendMessage({
+      await extension.runtime.sendMessage({
         type,
         ...(type === "start-interaction"
           ? { cursor: document.getElementById("cursor").checked }
@@ -61,7 +62,7 @@ async function start(type) {
 
 async function refresh() {
   try {
-    render(await browser.runtime.sendMessage({ type: "status" }));
+    render(await extension.runtime.sendMessage({ type: "status" }));
   } catch (error) {
     statusElement.textContent = "Session status is unavailable.";
   }
@@ -76,7 +77,7 @@ interactionButton.addEventListener("click", () => {
 stopButton.addEventListener("click", async () => {
   stopButton.disabled = true;
   try {
-    render(await browser.runtime.sendMessage({ type: "stop" }));
+    render(await extension.runtime.sendMessage({ type: "stop" }));
   } catch (error) {
     statusElement.textContent = "The browser session could not be stopped.";
     stopButton.disabled = false;
