@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "CU Browser",
+  "version": "0.1.0",
+  "description": "Explicit Chromium-family page reads and optional interaction for CU.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwctLSTxMM6P0qeE2bq+PXuQafjVLsqHBKNHF/3V037QlGJLLs/K9Xy0KsD/eat3sOtx+L1cYb110Kc20NLuXr4RSfLmjrZho9xnVQhSancUp8mETnKmnA6KSca3hm8zrGAbib88lgUS2nYlmDL3uA3qX1BNFh+dJ+TB6nKXQTnjXIIojJONtelZqK9F0gzN0G+dx0F91uFzIMxjvLfIaenGk75ovCI7poqH/SlZm1nUxTC1lIvB13b0V3oATI4bjgqKNmz6VT/iuymJaG6aUAOEU7e4T3jfjyHU1eSxF+OpGlocFh27hsAI1YNQMhnrSrZ5+dqgPeqssO8uMHHgiJQIDAQAB",
+  "minimum_chrome_version": "105",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "worker.js"
+  },
+  "action": {
+    "default_title": "CU Browser",
+    "default_popup": "popup.html"
+  }
+}

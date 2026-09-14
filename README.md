@@ -108,7 +108,7 @@ cu type 'new value' --replace --verify # whole-field replacement, exact read-bac
 cu batch steps.json --json       # bounded argv arrays, fail-fast with partial results
 cu key --action paste            # a semantic action, resolved per application
 cu browser list                  # installed browsers and what each resolves
-cu browser products              # explicit Chrome/Chromium product candidates
+cu browser products              # Chromium-family products and setup state
 cu browser focus-urlbar          # a semantic browser action, never a chord
 cu recipe save open-url --last 4 # promote a successful run from the log
 cu recipe replay open-url --param text1=example.com

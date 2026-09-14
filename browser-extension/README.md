@@ -31,6 +31,42 @@ Temporary add-ons last for the Firefox session. Persistent installation requires
 a separate Firefox distribution/signing workflow. No signing, upload, publication,
 Chrome installation, or browser security-preference change is performed by CU.
 
+## Thorium and other Chromium-family browsers
+
+`browser-extension/chromium/` is the Manifest V3 entry for Chromium-family
+browsers. Its service worker, `worker.js`, loads the same controller as Firefox;
+the collector and popup are the same files, linked into that directory so an
+unpacked load needs no build step. The manifest's public key pins the extension
+ID, so one native-host registration fits every checkout.
+
+Setup is offered only for products that `cu browser products` reports as
+`native-host`:
+
+```sh
+cu web setup --browser thorium
+cu web setup --browser thorium --user-data-dir PATH
+```
+
+The first form registers in the product's only existing profile root. Then load
+`browser-extension/chromium` unpacked (developer mode on the extensions page, or
+`--load-extension`). Grants, capabilities, Stop, reload and receipts behave as
+described in the rest of this document, with the same permissions and no
+content scripts or host permissions. While the action popup is open the browser
+window is not focused, so actions refuse as `not-current-tab`; close the popup
+before acting.
+
+The browser may stop an extension service worker. Grants live only in the
+worker's memory. While a grant is active, its connected native port keeps the
+worker running; if the worker stops anyway, the port closes, the helper exits,
+and every grant ends with it. A restarted worker starts with no grant and never
+restores one, so grant the tab again. The injected collector holds a port to the
+worker for the life of its session; when the worker stops, that port closes and
+the collector drops the session and its amber cursor, so the tab can be granted
+again without reloading. The worker keeps each collector port referenced, and if
+one closes anyway its tab's grant ends, so the helper never reports a grant the
+page no longer holds. A read session still cannot be upgraded by a second grant
+while its worker is alive.
+
 ## Read structured evidence
 
 ```sh

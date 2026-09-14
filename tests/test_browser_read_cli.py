@@ -34,6 +34,52 @@ def test_setup_is_explicit_and_does_not_overwrite(tmp_path, monkeypatch):
         browser_read_cli.install_host()
 
 
+def test_thorium_setup_registers_the_pinned_origin_in_one_profile_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    root = tmp_path / "thorium-profile"
+    root.mkdir()
+    result = browser_read_cli.install_host("thorium", str(root))
+    manifest_path = Path(result["manifest"])
+    assert manifest_path == root / "NativeMessagingHosts" / "org.cu.read.json"
+    manifest = json.loads(manifest_path.read_text())
+    origin = f"chrome-extension://{browser_read_cli.CHROMIUM_EXTENSION_ID}/"
+    assert manifest["allowed_origins"] == [origin]
+    assert "allowed_extensions" not in manifest
+    assert not (tmp_path / ".mozilla").exists()
+    assert not result["extension_installed"] and not result["tab_granted"]
+    assert browser_read_cli.install_host("thorium", str(root)) == result
+
+    monkeypatch.setitem(
+        browser_read_cli.browser.CHROMIUM_PRODUCTS,
+        "thorium",
+        {**browser_read_cli.browser.CHROMIUM_PRODUCTS["thorium"], "profiles": (str(root),)},
+    )
+    assert browser_read_cli.install_host("thorium") == result
+
+    manifest_path.write_text("{}")
+    with pytest.raises(cli.Refused, match="overwrite"):
+        browser_read_cli.install_host("thorium", str(root))
+    with pytest.raises(cli.Refused, match="never creates one"):
+        browser_read_cli.install_host("thorium", str(tmp_path / "absent"))
+    with pytest.raises(ValueError, match="absolute"):
+        browser_read_cli.install_host("thorium", "relative-profile")
+    with pytest.raises(ValueError, match="Chromium-family"):
+        browser_read_cli.install_host("firefox", str(root))
+
+
+def test_setup_command_selects_the_browser(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    root = tmp_path / "profile"
+    root.mkdir()
+    args = ["web", "setup", "--browser", "thorium", "--user-data-dir", str(root), "--json"]
+    assert cli.main(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["extension_id"] == browser_read_cli.CHROMIUM_EXTENSION_ID
+    assert cli.main(["web", "setup", "--user-data-dir", str(root), "--json"]) == exits.USAGE
+
+
 def test_native_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     process = subprocess.Popen(
@@ -208,7 +254,7 @@ def test_native_host_delivers_a_reload_receipt_before_the_browser_disconnects(
                         "result": {
                             "kind": "action",
                             "action": "reload",
-                            "backend": "firefox-tabs",
+                            "backend": "tabs",
                             "document_id": grant["document_id"],
                             "generation": 3,
                             "verification": "unverified",

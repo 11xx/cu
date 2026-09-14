@@ -621,7 +621,9 @@
     };
   }
 
-  function createController(api) {
+  function createController(api, options = {}) {
+    const collectorFiles = options.collectorFiles || ["collector.js"];
+    const action = api.browserAction || api.action;
     const state = {
       grant: null,
       pendingStart: null,
@@ -641,9 +643,9 @@
           ? "ACT"
           : "READ"
         : "";
-      if (api.browserAction?.setBadgeText) await api.browserAction.setBadgeText({ text });
-      if (state.grant && api.browserAction?.setBadgeBackgroundColor)
-        await api.browserAction.setBadgeBackgroundColor({
+      if (action?.setBadgeText) await action.setBadgeText({ text });
+      if (state.grant && action?.setBadgeBackgroundColor)
+        await action.setBadgeBackgroundColor({
           color: state.grant.capabilities.includes("interact") ? "#9a6700" : "#276749",
         });
     }
@@ -729,7 +731,7 @@
       state.nativePort = null;
       state.nativeReady = false;
       state.nativeSocket = null;
-      state.nativeError = null;
+      state.nativeError = reason === "native-disconnect" ? "native-unavailable" : null;
       if (port) {
         if (grant) postNative(revokeMessage(grant, reason), port);
         try {
@@ -775,7 +777,7 @@
       try {
         await api.scripting.executeScript({
           target: { tabId: tab.id },
-          files: ["collector.js"],
+          files: collectorFiles,
         });
         info = await api.tabs.sendMessage(tab.id, {
           type: "start",
@@ -907,7 +909,7 @@
       const coverage = captureCoverage(region, after.viewport, image, scale || { x: 1, y: 1 });
       return {
         kind: "capture",
-        backend: "firefox-tabs.captureVisibleTab",
+        backend: "tabs.captureVisibleTab",
         effect: "browser-rendered-viewport",
         verification: "identity-bracketed",
         provenance: "browser-rendered, not a CU compositor frame",
@@ -1042,7 +1044,7 @@
         result: {
           kind: "action",
           action: "reload",
-          backend: "firefox-tabs",
+          backend: "tabs",
           document_id: request.document_id,
           generation: request.generation,
           dispatch: "api-resolved",
@@ -1342,6 +1344,11 @@
       }
       return false;
     }
+    async function handleCollectorDisconnected(tabId) {
+      if (state.grant?.tab_id !== tabId) return false;
+      await revokeGrant("collector-disconnected", false);
+      return true;
+    }
     async function handleTabRemoved(tabId, reason = "tab-closed") {
       if (state.grant?.tab_id !== tabId && state.pendingStart?.tabId !== tabId) return false;
       await revokeGrant(reason, true);
@@ -1373,6 +1380,9 @@
       if (message.type === "status") return status();
       return errorResponse(null, "invalid-ui-message", "unsupported extension control message");
     }
+    // Badge text is held by the browser, so a controller that starts after an
+    // earlier worker stopped must clear whatever that worker last showed.
+    void updateBadge();
     return {
       start,
       startCurrent,
@@ -1380,13 +1390,16 @@
       handleNativeMessage,
       handleTabUpdated,
       handleTabRemoved,
+      handleCollectorDisconnected,
       handleUiMessage,
       status,
     };
   }
-  function install(api) {
-    const controller = createController(api);
-    api.browserAction.onClicked.addListener((tab) => {
+  // Firefox resolves a listener's returned Promise as the reply. Chromium-family
+  // browsers deliver nothing for it, so their entry asks for sendResponse.
+  function install(api, options = {}) {
+    const controller = createController(api, options);
+    (api.browserAction || api.action)?.onClicked?.addListener((tab) => {
       void controller.startCurrent(tab, ["read"]);
     });
     api.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -1398,9 +1411,29 @@
     api.tabs.onRemoved.addListener((tabId) => {
       void controller.handleTabRemoved(tabId);
     });
-    api.runtime.onMessage.addListener((message, sender) =>
-      controller.handleUiMessage(message, sender),
-    );
+    api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      const reply = controller.handleUiMessage(message, sender);
+      if (options.respond !== "callback") return reply;
+      void reply.then(sendResponse);
+      return true;
+    });
+    if (options.acceptCollectorPorts) {
+      // An unreferenced receiving port can be collected, which closes the channel
+      // under the collector; a port that does close ends the grant for its tab.
+      const collectorPorts = new Set();
+      api.runtime.onConnect?.addListener((port) => {
+        if (port.name !== "cu-collector" || !Number.isSafeInteger(port.sender?.tab?.id)) {
+          port.disconnect();
+          return;
+        }
+        collectorPorts.add(port);
+        port.postMessage({ type: "ack" });
+        port.onDisconnect.addListener(() => {
+          collectorPorts.delete(port);
+          void controller.handleCollectorDisconnected(port.sender.tab.id);
+        });
+      });
+    }
     return controller;
   }
   return {

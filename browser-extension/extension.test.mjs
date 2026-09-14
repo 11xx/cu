@@ -857,6 +857,18 @@ test("late collector cleanup cannot disconnect a subsequent grant", async () => 
   assert.equal(nextPort.messages.at(-1).ok, true);
 });
 
+test("a lost native host revokes the grant and stays reported as unavailable", async () => {
+  const { api, port } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  assert.equal(started.ok, true);
+  port.disconnect();
+  await new Promise((resolve) => setImmediate(resolve));
+  const status = controller.status();
+  assert.equal(status.active, false);
+  assert.equal(status.native_error, "native-unavailable");
+});
+
 test("a tab moved to another browser window cannot retain action authority", async () => {
   const { api, currentTab, port, calls } = fakeApi();
   const controller = createController(api);
@@ -928,7 +940,7 @@ test("reload revokes the grant, dispatches once, and confers nothing on the new 
   assert.ok(revokeIndex >= 0 && revokeIndex < port.messages.length - 1);
   assert.equal(port.messages[revokeIndex].reason, "reload");
   assert.equal(response.ok, true, JSON.stringify(response));
-  assert.equal(response.result.backend, "firefox-tabs");
+  assert.equal(response.result.backend, "tabs");
   assert.equal(response.result.effect, "not-observed");
   assert.equal(response.result.new_document_grant, "none");
   assert.equal(response.result.revoked_grant.document_id, "document-1");
@@ -1068,4 +1080,213 @@ test("a rejected reload or a tab lost before dispatch keeps the grant revoked", 
     assert.deepEqual(calls.reloads, []);
     assert.equal(controller.status().active, false);
   }
+});
+
+test("a callback-mode install answers popup controls through sendResponse", async () => {
+  const { api, calls } = fakeApi();
+  let listener;
+  api.runtime.onMessage = { addListener: (fn) => (listener = fn) };
+  api.tabs.onUpdated = { addListener: () => {} };
+  api.tabs.onRemoved = { addListener: () => {} };
+  api.action = api.browserAction;
+  delete api.browserAction;
+  api.scripting.executeScript = async (value) => calls.execute.push(value);
+  background.install(api, {
+    respond: "callback",
+    collectorFiles: ["collector.js", "chromium-collector.js"],
+  });
+  const sender = { id: api.runtime.id };
+  let replied;
+  const answered = new Promise((resolve) => (replied = resolve));
+  assert.equal(listener({ type: "start-interaction" }, sender, replied), true);
+  const reply = await answered;
+  assert.equal(reply.ok, true, JSON.stringify(reply));
+  assert.deepEqual(calls.execute[0].files, ["collector.js", "chromium-collector.js"]);
+  assert.deepEqual(calls.badges.at(-1), { text: "ACT" });
+});
+
+test("the default install keeps returning the reply Promise", async () => {
+  const { api } = fakeApi();
+  let listener;
+  api.runtime.onMessage = { addListener: (fn) => (listener = fn) };
+  api.tabs.onUpdated = { addListener: () => {} };
+  api.tabs.onRemoved = { addListener: () => {} };
+  background.install(api);
+  const reply = listener({ type: "status" }, { id: api.runtime.id }, () => {
+    throw new Error("sendResponse must not be used in the default mode");
+  });
+  assert.equal(typeof reply.then, "function");
+  assert.equal((await reply).active, false);
+});
+
+test("a callback-mode collector answers through sendResponse", async () => {
+  let listener;
+  collectorModule.install(
+    { runtime: { onMessage: { addListener: (fn) => (listener = fn) } } },
+    new Document([]),
+    { respond: "callback" },
+  );
+  let replied;
+  const answered = new Promise((resolve) => (replied = resolve));
+  assert.equal(listener({ type: "start", session: "fixture-session" }, {}, replied), true);
+  assert.equal((await answered).ok, true);
+});
+
+test("a controller clears a badge left by an earlier worker", () => {
+  const { api, calls } = fakeApi();
+  createController(api);
+  assert.deepEqual(calls.badges[0], { text: "" });
+});
+
+function collectorPortApi({ acknowledge = true, closeAtOnce = false } = {}) {
+  const ports = [];
+  let listener;
+  const api = {
+    runtime: {
+      onMessage: { addListener: (fn) => (listener = fn) },
+      connect: ({ name }) => {
+        const port = {
+          name,
+          disconnected: false,
+          messageListeners: [],
+          disconnectListeners: [],
+          onMessage: { addListener: (fn) => port.messageListeners.push(fn) },
+          onDisconnect: { addListener: (fn) => port.disconnectListeners.push(fn) },
+          disconnect() {
+            port.disconnected = true;
+          },
+          close() {
+            for (const fn of port.disconnectListeners) fn();
+          },
+        };
+        ports.push(port);
+        queueMicrotask(() => {
+          if (closeAtOnce) port.close();
+          else if (acknowledge) for (const fn of port.messageListeners) fn({ type: "ack" });
+        });
+        return port;
+      },
+    },
+  };
+  const send = (message) => new Promise((resolve) => listener(message, {}, resolve));
+  return { api, ports, send };
+}
+
+test("an acknowledged collector session ends when its background port closes", async () => {
+  const { api, ports, send } = collectorPortApi();
+  const collector = collectorModule.install(api, new Document([]), {
+    respond: "callback",
+    releaseWhenDisconnected: true,
+  });
+  assert.equal(
+    (await send({ type: "start", session: "session-old", capabilities: ["read"] })).ok,
+    true,
+  );
+  assert.deepEqual(
+    ports.map((port) => port.name),
+    ["cu-collector"],
+  );
+  const upgrade = await send({
+    type: "start",
+    session: "session-upgrade",
+    capabilities: ["read", "interact"],
+  });
+  assert.equal(upgrade.ok, false);
+  assert.equal(collector.session, "session-old");
+  ports[0].close();
+  assert.equal(collector.session, null);
+  assert.equal(
+    (await send({ type: "start", session: "session-new", capabilities: ["read"] })).ok,
+    true,
+  );
+  assert.equal(ports.length, 2);
+  assert.equal((await send({ type: "stop", session: "session-new" })).ok, true);
+  assert.equal(ports[1].disconnected, true);
+});
+
+test("a page restored from the back/forward cache holds no collector session", async () => {
+  const { api, ports, send } = collectorPortApi();
+  const doc = new Document([]);
+  const collector = collectorModule.install(api, doc, {
+    respond: "callback",
+    releaseWhenDisconnected: true,
+  });
+  assert.equal(
+    (await send({ type: "start", session: "session-left", capabilities: ["read"] })).ok,
+    true,
+  );
+  doc.dispatch("pagehide");
+  assert.equal(collector.session, null);
+  assert.equal(ports[0].disconnected, true);
+  assert.equal(
+    (await send({ type: "start", session: "session-restored", capabilities: ["read"] })).ok,
+    true,
+  );
+});
+
+test("a worker that drops or ignores the collector port refuses the session", async () => {
+  for (const scenario of [
+    { name: "closed at once", closeAtOnce: true },
+    { name: "never acknowledged", acknowledge: false },
+  ]) {
+    const { api, ports, send } = collectorPortApi(scenario);
+    const collector = collectorModule.install(api, new Document([]), {
+      respond: "callback",
+      releaseWhenDisconnected: true,
+      ackTimeoutMs: 20,
+    });
+    const reply = await send({ type: "start", session: "session-1", capabilities: ["read"] });
+    assert.equal(reply.ok, false, scenario.name);
+    assert.equal(reply.error.code, "worker-mismatch", scenario.name);
+    assert.equal(collector.session, null, scenario.name);
+    assert.equal(ports[0].disconnected, true, scenario.name);
+  }
+});
+
+test("the Chromium controller holds collector ports and a closed one ends that tab's grant", async () => {
+  const { api, port: nativePort } = fakeApi();
+  let onConnect;
+  api.runtime.onMessage = { addListener: () => {} };
+  api.runtime.onConnect = { addListener: (fn) => (onConnect = fn) };
+  api.tabs.onUpdated = { addListener: () => {} };
+  api.tabs.onRemoved = { addListener: () => {} };
+  const controller = background.install(api, { acceptCollectorPorts: true });
+  const port = (name, tabId) => {
+    const value = {
+      name,
+      sender: tabId === undefined ? {} : { tab: { id: tabId } },
+      disconnected: false,
+      listeners: [],
+      messages: [],
+      onDisconnect: { addListener: (fn) => value.listeners.push(fn) },
+      postMessage(message) {
+        value.messages.push(message);
+      },
+      disconnect() {
+        value.disconnected = true;
+      },
+    };
+    return value;
+  };
+  const other = port("other", 7);
+  const tabless = port("cu-collector");
+  onConnect(other);
+  onConnect(tabless);
+  assert.equal(other.disconnected, true);
+  assert.equal(tabless.disconnected, true);
+
+  await controller.startCurrent(null, ["read", "interact"]);
+  const unrelated = port("cu-collector", 8);
+  const granted = port("cu-collector", 7);
+  onConnect(unrelated);
+  onConnect(granted);
+  assert.equal(granted.disconnected, false);
+  assert.deepEqual(granted.messages, [{ type: "ack" }]);
+  for (const fn of unrelated.listeners) fn();
+  await Promise.resolve();
+  assert.equal(controller.status().active, true);
+  for (const fn of granted.listeners) fn();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(controller.status().active, false);
+  assert.equal(nativePort.messages.at(-1).reason, "collector-disconnected");
 });

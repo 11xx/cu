@@ -66,7 +66,7 @@ ACTION_OPERATIONS = frozenset(
     {"click", "focus", "fill", "scroll", "hover", "select", "capture", "reload"}
 )
 # A receipt from any other backend does not describe the operation that was sent.
-_ACTION_BACKENDS = {"reload": "firefox-tabs"}
+_ACTION_BACKENDS = {"reload": "tabs"}
 OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
 CAPABILITIES = frozenset({"read", "interact"})
 _OBSERVE_FIELDS = frozenset({"include_values", "limit", "selector", "include_details"})

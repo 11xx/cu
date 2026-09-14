@@ -17,8 +17,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import browser, config, exits, observe, png, safety
 from . import browser_read as transport
-from . import config, exits, observe, png, safety
 from .safety import Refused
 
 
@@ -35,25 +35,45 @@ def _context(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--why", default=argparse.SUPPRESS, metavar="TEXT", help="What this is for")
 
 
+#: Derived from the public key in browser-extension/chromium/manifest.json, which
+#: pins the unpacked extension's ID; a test holds the two together.
+CHROMIUM_EXTENSION_ID = "eneedbaolcjmmpmfjohalmpbfhlmfoip"
+CHROMIUM_SETUP = tuple(
+    product for product, definition in browser.CHROMIUM_PRODUCTS.items()
+    if definition.get("native_host")
+)
+
+
 def configure(parser: argparse.ArgumentParser) -> None:
     commands = parser.add_subparsers(dest="web_command", required=True)
     setup = commands.add_parser(
         "setup",
-        help="Register the Firefox native host; it grants no tab access",
-        description="Register the Firefox native host; it grants no tab access",
+        help="Register the CU native host for one browser; it grants no tab access",
+        description="Register the CU native host for one browser; it grants no tab access",
     )
     setup.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    setup.add_argument(
+        "--browser",
+        choices=("firefox", *CHROMIUM_SETUP),
+        default="firefox",
+        help="Whose native-messaging lookup to register in",
+    )
+    setup.add_argument(
+        "--user-data-dir",
+        metavar="PATH",
+        help="Chromium-family profile root; defaults to the product's only existing one",
+    )
     hosts = commands.add_parser(
         "hosts",
-        help="List live Firefox helpers and their explicit tab grants",
-        description="List live Firefox helpers and their explicit tab grants",
+        help="List live CU Browser helpers and their explicit tab grants",
+        description="List live CU Browser helpers and their explicit tab grants",
     )
     hosts.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
 
     read = commands.add_parser(
         "read",
-        help="Read bounded Firefox page evidence",
-        description="Read bounded Firefox page evidence",
+        help="Read bounded page evidence from an explicitly granted tab",
+        description="Read bounded page evidence from an explicitly granted tab",
     )
     read.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     _common(read)
@@ -69,8 +89,8 @@ def configure(parser: argparse.ArgumentParser) -> None:
 
     action = commands.add_parser(
         "action",
-        help="Interact with an explicitly granted active Firefox tab",
-        description="Interact with an explicitly granted active Firefox tab",
+        help="Interact with an explicitly granted active browser tab",
+        description="Interact with an explicitly granted active browser tab",
     )
     action.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     _common(action)
@@ -121,23 +141,65 @@ def configure(parser: argparse.ArgumentParser) -> None:
         _context(child)
 
 
-def install_host() -> dict[str, Any]:
+def _chromium_profile_root(product: str, user_data_dir: str | None) -> Path:
+    if user_data_dir is None:
+        existing = [
+            Path(profile).expanduser()
+            for profile in browser.CHROMIUM_PRODUCTS[product]["profiles"]
+            if Path(profile).expanduser().is_dir()
+        ]
+        if len(existing) != 1:
+            raise Refused(
+                exits.BROWSER_READ_AMBIGUOUS if existing else exits.BROWSER_READ_REFUSED,
+                "select the browser profile root with --user-data-dir",
+            )
+        return existing[0]
+    root = Path(user_data_dir).expanduser()
+    if not root.is_absolute():
+        raise ValueError("--user-data-dir must be an absolute path")
+    if not root.is_dir():
+        raise Refused(
+            exits.BROWSER_READ_REFUSED,
+            f"no browser profile root at {root}; setup never creates one",
+        )
+    return root
+
+
+def install_host(browser_name: str = "firefox", user_data_dir: str | None = None) -> dict[str, Any]:
     data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share")))
     launcher = data / "cu" / "browser-native-host"
     if not launcher.is_absolute():
         raise ValueError("XDG_DATA_HOME must be absolute")
-    manifest = Path.home() / ".mozilla/native-messaging-hosts/org.cu.read.json"
     script = (
         "#!/bin/sh\n# CU Firefox read host\n"
         f"exec {shlex.quote(sys.executable)} -m cu.browser_read host\n"
     )
-    definition = {
-        "name": "org.cu.read",
-        "description": "CU Firefox browser bridge",
-        "path": str(launcher),
-        "type": "stdio",
-        "allowed_extensions": ["cu-browser-read@local"],
-    }
+    if browser_name == "firefox":
+        if user_data_dir is not None:
+            raise ValueError("--user-data-dir applies only to Chromium-family browsers")
+        manifest = Path.home() / ".mozilla/native-messaging-hosts/org.cu.read.json"
+        extension = "cu-browser-read@local"
+        definition = {
+            "name": "org.cu.read",
+            "description": "CU Firefox browser bridge",
+            "path": str(launcher),
+            "type": "stdio",
+            "allowed_extensions": [extension],
+        }
+    else:
+        manifest = (
+            _chromium_profile_root(browser_name, user_data_dir)
+            / "NativeMessagingHosts"
+            / "org.cu.read.json"
+        )
+        extension = CHROMIUM_EXTENSION_ID
+        definition = {
+            "name": "org.cu.read",
+            "description": "CU Chromium browser bridge",
+            "path": str(launcher),
+            "type": "stdio",
+            "allowed_origins": [f"chrome-extension://{extension}/"],
+        }
     files = [(launcher, script, 0o700), (manifest, json.dumps(definition, indent=2) + "\n", 0o600)]
     for path, content, _ in files:
         if path.exists() and (path.is_symlink() or path.read_text() != content):
@@ -151,8 +213,10 @@ def install_host() -> dict[str, Any]:
                 handle.write(content)
         path.chmod(mode)
     return {
+        "browser": browser_name,
         "manifest": str(manifest),
         "launcher": str(launcher),
+        "extension_id": extension,
         "extension_installed": False,
         "tab_granted": False,
     }
@@ -161,7 +225,7 @@ def install_host() -> dict[str, Any]:
 def _paths(args: argparse.Namespace) -> list[Path]:
     paths = [Path(args.helper)] if args.helper else transport.discover_socket_paths()
     if not paths:
-        raise transport.StaleHelper("enable a tab in the Firefox CU Browser extension first")
+        raise transport.StaleHelper("grant a tab in the CU Browser extension first")
     if len(paths) != 1:
         raise Refused(exits.BROWSER_READ_AMBIGUOUS, "use web hosts and select --helper")
     return paths
@@ -454,7 +518,7 @@ def _capture(args: argparse.Namespace) -> dict[str, Any]:
 def run(args: argparse.Namespace) -> int:
     try:
         if args.web_command == "setup":
-            result = install_host()
+            result = install_host(args.browser, args.user_data_dir)
         elif args.web_command == "hosts":
             paths = transport.discover_socket_paths()
             helpers = []

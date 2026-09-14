@@ -1731,12 +1731,87 @@
       get overlay() {
         return overlay;
       },
+      release(sessionId) {
+        if (!session || session.id !== sessionId) return false;
+        session = null;
+        stopObserving();
+        return true;
+      },
       dispose: stopObserving,
     };
   }
-  function install(api, doc) {
+  // A Chromium-family worker can stop without telling the page, and an older
+  // worker can keep running after the extension's files change. The collector
+  // opens a port for the life of a session and starts only once the worker
+  // acknowledges it; the port closing later ends the session.
+  function install(api, doc, options = {}) {
     const collector = createCollector(doc);
-    api.runtime.onMessage.addListener(async (message) => collector.handle(message));
+    const ackTimeoutMs = options.ackTimeoutMs ?? 1000;
+    let background = null;
+    const mismatch = {
+      ok: false,
+      error: {
+        code: "worker-mismatch",
+        state: "unsupported",
+        message: "the extension worker did not acknowledge this page; reload the extension",
+      },
+    };
+    const confirm = (message, reply) => {
+      if (!options.releaseWhenDisconnected || reply?.ok !== true) return reply;
+      if (message?.type === "stop") {
+        background?.disconnect();
+        background = null;
+        return reply;
+      }
+      if (message?.type !== "start") return reply;
+      background?.disconnect();
+      const session = reply.session;
+      const port = api.runtime.connect({ name: "cu-collector" });
+      background = port;
+      return new Promise((resolve) => {
+        let settled = false;
+        const release = () => {
+          if (background === port) background = null;
+          collector.release(session);
+        };
+        const settle = (acknowledged) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (acknowledged) {
+            resolve(reply);
+            return;
+          }
+          release();
+          if (background === null) port.disconnect();
+          resolve(mismatch);
+        };
+        const timer = setTimeout(() => settle(false), ackTimeoutMs);
+        port.onMessage.addListener((value) => {
+          if (value?.type === "ack") settle(true);
+        });
+        port.onDisconnect.addListener(() => {
+          if (!settled) settle(false);
+          else release();
+        });
+      });
+    };
+    // Leaving a document ends its session: the worker revokes the grant on
+    // navigation, so a page restored from the back/forward cache holds none.
+    if (typeof doc.defaultView?.addEventListener === "function")
+      doc.defaultView.addEventListener("pagehide", () => {
+        background?.disconnect();
+        background = null;
+        if (collector.session) collector.release(collector.session);
+      });
+    api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      const reply = Promise.resolve(collector.handle(message)).then((value) =>
+        confirm(message, value),
+      );
+      if (options.respond !== "callback") return reply;
+      void reply.then(sendResponse);
+      return true;
+    });
     return collector;
   }
   return {

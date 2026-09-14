@@ -41,6 +41,8 @@ CHROMIUM = {
 
 # Chromium product paths are candidates, not proof of installation. A row is
 # usable only when a matching binary and profile are both present at runtime.
+# `native_host` marks a product whose MV3 extension identity and profile-local
+# native-host lookup were proven live; every other product is reported unprobed.
 CHROMIUM_PRODUCTS = {
     "google-chrome": {
         "name": "Google Chrome",
@@ -55,6 +57,12 @@ CHROMIUM_PRODUCTS = {
         "name": "Chromium",
         "binaries": ("chromium", "chromium-browser"),
         "profiles": ("~/.config/chromium",),
+    },
+    "thorium": {
+        "name": "Thorium",
+        "binaries": ("thorium-browser",),
+        "profiles": ("~/.config/thorium",),
+        "native_host": True,
     },
 }
 
@@ -177,7 +185,7 @@ def product_candidates() -> list[dict[str, Any]]:
                 "resolved": resolved,
                 "profiles": profiles,
                 "available": resolved is not None and bool(profiles),
-                "setup": "unsupported-until-mv3-identity-is-proven",
+                "setup": "native-host" if definition.get("native_host") else "unprobed",
             }
         )
     return candidates
