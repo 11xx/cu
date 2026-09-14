@@ -62,8 +62,10 @@ and every grant ends with it. A restarted worker starts with no grant and never
 restores one, so grant the tab again. The injected collector holds a port to the
 worker for the life of its session; when the worker stops, that port closes and
 the collector drops the session and its amber cursor, so the tab can be granted
-again without reloading. A read session still cannot be upgraded by a second
-grant while its worker is alive.
+again without reloading. The worker keeps each collector port referenced, and if
+one closes anyway its tab's grant ends, so the helper never reports a grant the
+page no longer holds. A read session still cannot be upgraded by a second grant
+while its worker is alive.
 
 ## Read structured evidence
 

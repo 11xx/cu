@@ -1178,25 +1178,45 @@ test("a released collector session ends when its background port closes", async 
   assert.equal(ports[1].disconnected, true);
 });
 
-test("the Chromium controller keeps collector ports and refuses others", () => {
-  const { api } = fakeApi();
+test("the Chromium controller holds collector ports and a closed one ends that tab's grant", async () => {
+  const { api, port: nativePort } = fakeApi();
   let onConnect;
   api.runtime.onMessage = { addListener: () => {} };
   api.runtime.onConnect = { addListener: (fn) => (onConnect = fn) };
   api.tabs.onUpdated = { addListener: () => {} };
   api.tabs.onRemoved = { addListener: () => {} };
-  background.install(api, { acceptCollectorPorts: true });
-  const port = (name) => ({
-    name,
-    disconnected: false,
-    disconnect() {
-      this.disconnected = true;
-    },
-  });
-  const collectorPort = port("cu-collector");
-  const otherPort = port("other");
-  onConnect(collectorPort);
-  onConnect(otherPort);
-  assert.equal(collectorPort.disconnected, false);
-  assert.equal(otherPort.disconnected, true);
+  const controller = background.install(api, { acceptCollectorPorts: true });
+  const port = (name, tabId) => {
+    const value = {
+      name,
+      sender: tabId === undefined ? {} : { tab: { id: tabId } },
+      disconnected: false,
+      listeners: [],
+      onDisconnect: { addListener: (fn) => value.listeners.push(fn) },
+      disconnect() {
+        value.disconnected = true;
+      },
+    };
+    return value;
+  };
+  const other = port("other", 7);
+  const tabless = port("cu-collector");
+  onConnect(other);
+  onConnect(tabless);
+  assert.equal(other.disconnected, true);
+  assert.equal(tabless.disconnected, true);
+
+  await controller.startCurrent(null, ["read", "interact"]);
+  const unrelated = port("cu-collector", 8);
+  const granted = port("cu-collector", 7);
+  onConnect(unrelated);
+  onConnect(granted);
+  assert.equal(granted.disconnected, false);
+  for (const fn of unrelated.listeners) fn();
+  await Promise.resolve();
+  assert.equal(controller.status().active, true);
+  for (const fn of granted.listeners) fn();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(controller.status().active, false);
+  assert.equal(nativePort.messages.at(-1).reason, "collector-disconnected");
 });

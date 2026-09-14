@@ -1344,6 +1344,11 @@
       }
       return false;
     }
+    async function handleCollectorDisconnected(tabId) {
+      if (state.grant?.tab_id !== tabId) return false;
+      await revokeGrant("collector-disconnected", false);
+      return true;
+    }
     async function handleTabRemoved(tabId, reason = "tab-closed") {
       if (state.grant?.tab_id !== tabId && state.pendingStart?.tabId !== tabId) return false;
       await revokeGrant(reason, true);
@@ -1385,6 +1390,7 @@
       handleNativeMessage,
       handleTabUpdated,
       handleTabRemoved,
+      handleCollectorDisconnected,
       handleUiMessage,
       status,
     };
@@ -1411,10 +1417,22 @@
       void reply.then(sendResponse);
       return true;
     });
-    if (options.acceptCollectorPorts)
+    if (options.acceptCollectorPorts) {
+      // An unreferenced receiving port can be collected, which closes the channel
+      // under the collector; a port that does close ends the grant for its tab.
+      const collectorPorts = new Set();
       api.runtime.onConnect?.addListener((port) => {
-        if (port.name !== "cu-collector") port.disconnect();
+        if (port.name !== "cu-collector" || !Number.isSafeInteger(port.sender?.tab?.id)) {
+          port.disconnect();
+          return;
+        }
+        collectorPorts.add(port);
+        port.onDisconnect.addListener(() => {
+          collectorPorts.delete(port);
+          void controller.handleCollectorDisconnected(port.sender.tab.id);
+        });
       });
+    }
     return controller;
   }
   return {

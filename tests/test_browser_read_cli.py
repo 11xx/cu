@@ -62,6 +62,8 @@ def test_thorium_setup_registers_the_pinned_origin_in_one_profile_root(tmp_path,
         browser_read_cli.install_host("thorium", str(root))
     with pytest.raises(cli.Refused, match="never creates one"):
         browser_read_cli.install_host("thorium", str(tmp_path / "absent"))
+    with pytest.raises(ValueError, match="absolute"):
+        browser_read_cli.install_host("thorium", "relative-profile")
     with pytest.raises(ValueError, match="Chromium-family"):
         browser_read_cli.install_host("firefox", str(root))
 

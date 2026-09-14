@@ -65,15 +65,15 @@ def configure(parser: argparse.ArgumentParser) -> None:
     )
     hosts = commands.add_parser(
         "hosts",
-        help="List live Firefox helpers and their explicit tab grants",
-        description="List live Firefox helpers and their explicit tab grants",
+        help="List live CU Browser helpers and their explicit tab grants",
+        description="List live CU Browser helpers and their explicit tab grants",
     )
     hosts.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
 
     read = commands.add_parser(
         "read",
-        help="Read bounded Firefox page evidence",
-        description="Read bounded Firefox page evidence",
+        help="Read bounded page evidence from an explicitly granted tab",
+        description="Read bounded page evidence from an explicitly granted tab",
     )
     read.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     _common(read)
@@ -89,8 +89,8 @@ def configure(parser: argparse.ArgumentParser) -> None:
 
     action = commands.add_parser(
         "action",
-        help="Interact with an explicitly granted active Firefox tab",
-        description="Interact with an explicitly granted active Firefox tab",
+        help="Interact with an explicitly granted active browser tab",
+        description="Interact with an explicitly granted active browser tab",
     )
     action.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     _common(action)
@@ -155,7 +155,9 @@ def _chromium_profile_root(product: str, user_data_dir: str | None) -> Path:
             )
         return existing[0]
     root = Path(user_data_dir).expanduser()
-    if not root.is_absolute() or not root.is_dir():
+    if not root.is_absolute():
+        raise ValueError("--user-data-dir must be an absolute path")
+    if not root.is_dir():
         raise Refused(
             exits.BROWSER_READ_REFUSED,
             f"no browser profile root at {root}; setup never creates one",
