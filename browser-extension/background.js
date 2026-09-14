@@ -1427,6 +1427,7 @@
           return;
         }
         collectorPorts.add(port);
+        port.postMessage({ type: "ack" });
         port.onDisconnect.addListener(() => {
           collectorPorts.delete(port);
           void controller.handleCollectorDisconnected(port.sender.tab.id);

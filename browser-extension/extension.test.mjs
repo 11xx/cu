@@ -1126,7 +1126,7 @@ test("a controller clears a badge left by an earlier worker", () => {
   assert.deepEqual(calls.badges[0], { text: "" });
 });
 
-test("a released collector session ends when its background port closes", async () => {
+function collectorPortApi({ acknowledge = true, closeAtOnce = false } = {}) {
   const ports = [];
   let listener;
   const api = {
@@ -1136,22 +1136,36 @@ test("a released collector session ends when its background port closes", async 
         const port = {
           name,
           disconnected: false,
-          listeners: [],
-          onDisconnect: { addListener: (fn) => port.listeners.push(fn) },
+          messageListeners: [],
+          disconnectListeners: [],
+          onMessage: { addListener: (fn) => port.messageListeners.push(fn) },
+          onDisconnect: { addListener: (fn) => port.disconnectListeners.push(fn) },
           disconnect() {
             port.disconnected = true;
           },
+          close() {
+            for (const fn of port.disconnectListeners) fn();
+          },
         };
         ports.push(port);
+        queueMicrotask(() => {
+          if (closeAtOnce) port.close();
+          else if (acknowledge) for (const fn of port.messageListeners) fn({ type: "ack" });
+        });
         return port;
       },
     },
   };
+  const send = (message) => new Promise((resolve) => listener(message, {}, resolve));
+  return { api, ports, send };
+}
+
+test("an acknowledged collector session ends when its background port closes", async () => {
+  const { api, ports, send } = collectorPortApi();
   const collector = collectorModule.install(api, new Document([]), {
     respond: "callback",
     releaseWhenDisconnected: true,
   });
-  const send = (message) => new Promise((resolve) => listener(message, {}, resolve));
   assert.equal(
     (await send({ type: "start", session: "session-old", capabilities: ["read"] })).ok,
     true,
@@ -1167,7 +1181,7 @@ test("a released collector session ends when its background port closes", async 
   });
   assert.equal(upgrade.ok, false);
   assert.equal(collector.session, "session-old");
-  for (const fn of ports[0].listeners) fn();
+  ports[0].close();
   assert.equal(collector.session, null);
   assert.equal(
     (await send({ type: "start", session: "session-new", capabilities: ["read"] })).ok,
@@ -1176,6 +1190,25 @@ test("a released collector session ends when its background port closes", async 
   assert.equal(ports.length, 2);
   assert.equal((await send({ type: "stop", session: "session-new" })).ok, true);
   assert.equal(ports[1].disconnected, true);
+});
+
+test("a worker that drops or ignores the collector port refuses the session", async () => {
+  for (const scenario of [
+    { name: "closed at once", closeAtOnce: true },
+    { name: "never acknowledged", acknowledge: false },
+  ]) {
+    const { api, ports, send } = collectorPortApi(scenario);
+    const collector = collectorModule.install(api, new Document([]), {
+      respond: "callback",
+      releaseWhenDisconnected: true,
+      ackTimeoutMs: 20,
+    });
+    const reply = await send({ type: "start", session: "session-1", capabilities: ["read"] });
+    assert.equal(reply.ok, false, scenario.name);
+    assert.equal(reply.error.code, "worker-mismatch", scenario.name);
+    assert.equal(collector.session, null, scenario.name);
+    assert.equal(ports[0].disconnected, true, scenario.name);
+  }
 });
 
 test("the Chromium controller holds collector ports and a closed one ends that tab's grant", async () => {
@@ -1192,7 +1225,11 @@ test("the Chromium controller holds collector ports and a closed one ends that t
       sender: tabId === undefined ? {} : { tab: { id: tabId } },
       disconnected: false,
       listeners: [],
+      messages: [],
       onDisconnect: { addListener: (fn) => value.listeners.push(fn) },
+      postMessage(message) {
+        value.messages.push(message);
+      },
       disconnect() {
         value.disconnected = true;
       },
@@ -1212,6 +1249,7 @@ test("the Chromium controller holds collector ports and a closed one ends that t
   onConnect(unrelated);
   onConnect(granted);
   assert.equal(granted.disconnected, false);
+  assert.deepEqual(granted.messages, [{ type: "ack" }]);
   for (const fn of unrelated.listeners) fn();
   await Promise.resolve();
   assert.equal(controller.status().active, true);
