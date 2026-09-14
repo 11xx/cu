@@ -252,7 +252,7 @@ def test_native_host_delivers_a_reload_receipt_before_the_browser_disconnects(
                         "result": {
                             "kind": "action",
                             "action": "reload",
-                            "backend": "firefox-tabs",
+                            "backend": "tabs",
                             "document_id": grant["document_id"],
                             "generation": 3,
                             "verification": "unverified",

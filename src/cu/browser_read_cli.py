@@ -223,7 +223,7 @@ def install_host(browser_name: str = "firefox", user_data_dir: str | None = None
 def _paths(args: argparse.Namespace) -> list[Path]:
     paths = [Path(args.helper)] if args.helper else transport.discover_socket_paths()
     if not paths:
-        raise transport.StaleHelper("enable a tab in the Firefox CU Browser extension first")
+        raise transport.StaleHelper("grant a tab in the CU Browser extension first")
     if len(paths) != 1:
         raise Refused(exits.BROWSER_READ_AMBIGUOUS, "use web hosts and select --helper")
     return paths

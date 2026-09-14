@@ -51,7 +51,9 @@ The first form registers in the product's only existing profile root. Then load
 `browser-extension/chromium` unpacked (developer mode on the extensions page, or
 `--load-extension`). Grants, capabilities, Stop, reload and receipts behave as
 described in the rest of this document, with the same permissions and no
-content scripts or host permissions.
+content scripts or host permissions. While the action popup is open the browser
+window is not focused, so actions refuse as `not-current-tab`; close the popup
+before acting.
 
 The browser may stop an extension service worker. Grants live only in the
 worker's memory. While a grant is active, its connected native port keeps the

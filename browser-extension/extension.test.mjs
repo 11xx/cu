@@ -928,7 +928,7 @@ test("reload revokes the grant, dispatches once, and confers nothing on the new 
   assert.ok(revokeIndex >= 0 && revokeIndex < port.messages.length - 1);
   assert.equal(port.messages[revokeIndex].reason, "reload");
   assert.equal(response.ok, true, JSON.stringify(response));
-  assert.equal(response.result.backend, "firefox-tabs");
+  assert.equal(response.result.backend, "tabs");
   assert.equal(response.result.effect, "not-observed");
   assert.equal(response.result.new_document_grant, "none");
   assert.equal(response.result.revoked_grant.document_id, "document-1");

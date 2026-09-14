@@ -322,7 +322,7 @@ def reload_receipt(**changes: object) -> dict[str, object]:
     return {
         "kind": "action",
         "action": "reload",
-        "backend": "firefox-tabs",
+        "backend": "tabs",
         "document_id": "document-1",
         "generation": 2,
         "dispatch": "api-resolved",

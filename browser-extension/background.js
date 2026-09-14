@@ -909,7 +909,7 @@
       const coverage = captureCoverage(region, after.viewport, image, scale || { x: 1, y: 1 });
       return {
         kind: "capture",
-        backend: "firefox-tabs.captureVisibleTab",
+        backend: "tabs.captureVisibleTab",
         effect: "browser-rendered-viewport",
         verification: "identity-bracketed",
         provenance: "browser-rendered, not a CU compositor frame",
@@ -1044,7 +1044,7 @@
         result: {
           kind: "action",
           action: "reload",
-          backend: "firefox-tabs",
+          backend: "tabs",
           document_id: request.document_id,
           generation: request.generation,
           dispatch: "api-resolved",
