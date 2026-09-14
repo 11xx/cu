@@ -161,3 +161,87 @@ def test_native_host_cancels_a_disconnected_waiter(tmp_path, monkeypatch):
         if process.poll() is None:
             process.terminate()
         process.communicate(timeout=2)
+
+
+def test_native_host_delivers_a_reload_receipt_before_the_browser_disconnects(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    process = subprocess.Popen(
+        [sys.executable, "-m", "cu.browser_read", "host"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            assert selector.select(2), "native host did not send ready"
+        ready = wire.read_frame(process.stdout)
+        grant = {
+            "session": "fixture-session",
+            "tab_id": 1,
+            "window_id": 1,
+            "document_id": "fixture-document",
+            "generation": 3,
+            "active": True,
+            "hidden": False,
+            "capabilities": ["read", "interact"],
+        }
+        envelope = {"protocol": wire.PROTOCOL, "version": wire.VERSION}
+        wire.write_frame(process.stdin, {**envelope, "type": "hello", "grants": [grant]})
+        errors = []
+
+        def browser():
+            try:
+                request = wire.read_frame(process.stdout)
+                identity = {k: request[k] for k in ("session", "tab_id", "document_id")}
+                wire.write_frame(process.stdin, {**envelope, "type": "revoke", **identity})
+                wire.write_frame(
+                    process.stdin,
+                    {
+                        **envelope,
+                        "type": "response",
+                        "id": request["id"],
+                        **identity,
+                        "ok": True,
+                        "result": {
+                            "kind": "action",
+                            "action": "reload",
+                            "backend": "firefox-tabs",
+                            "document_id": grant["document_id"],
+                            "generation": 3,
+                            "verification": "unverified",
+                            "revoked_grant": {**grant, "reason": "reload"},
+                            "new_document_grant": "none",
+                        },
+                    },
+                )
+                process.stdin.close()
+            except Exception as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=browser, daemon=True)
+        thread.start()
+        with wire.BrowserReadClient.connect(ready["socket"]) as client:
+            result = client.action(
+                "reload",
+                session=grant["session"],
+                tab_id=1,
+                document_id=grant["document_id"],
+                generation=3,
+                payload={},
+            )
+            assert result["result"]["new_document_grant"] == "none"
+            assert client.metadata["grants"] == []
+        thread.join(2)
+        assert not thread.is_alive() and not errors
+        assert process.wait(2) == 0
+        assert not os.path.exists(ready["socket"])
+    finally:
+        if process.poll() is None:
+            process.kill()
+        # The fake browser closed stdin itself, so communicate() cannot flush it.
+        process.wait(timeout=2)
+        process.stdout.close()
+        process.stderr.close()

@@ -10,7 +10,7 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 4;
+  const VERSION = 5;
   const CAPABILITIES = new Set(["read", "interact"]);
   const READ_OPERATIONS = new Set(["observe", "query", "wait"]);
   const ACTION_OPERATIONS = new Set([
@@ -21,6 +21,7 @@
     "hover",
     "select",
     "capture",
+    "reload",
   ]);
   const OPERATIONS = new Set([...READ_OPERATIONS, ...ACTION_OPERATIONS]);
   const MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -152,6 +153,10 @@
       return Object.prototype.hasOwnProperty.call(value, "region")
         ? { region: validateCaptureRegion(value.region) }
         : {};
+    }
+    if (operation === "reload") {
+      exactKeys(value, new Set(), new Set());
+      return {};
     }
     if (operation === "click" || operation === "focus" || operation === "hover") {
       exactKeys(value, new Set(["ref"]), new Set(["ref"]));
@@ -364,6 +369,11 @@
     };
     if (validRequestId(id)) response.id = id;
     return { ...response, ...extra };
+  }
+  function revokedResponse(id, code, message) {
+    const response = errorResponse(id, code, message);
+    response.error.state = "grant-revoked";
+    return response;
   }
   function validateCollectorInfo(message, session) {
     const allowed = new Set([
@@ -623,6 +633,7 @@
       actionQueue: Promise.resolve(),
       jobs: new Map(),
       captureEpoch: 0,
+      transition: null,
     };
     async function updateBadge() {
       const text = state.grant
@@ -709,6 +720,7 @@
       const grant = state.grant;
       const port = state.nativePort;
       state.pendingStart = null;
+      state.transition = null;
       state.grant = null;
       state.session = null;
       state.actionQueue = Promise.resolve();
@@ -742,7 +754,7 @@
           "not-current-tab",
           "browser sessions start only for the current tab",
         );
-      if (state.grant || state.pendingStart)
+      if (state.grant || state.pendingStart || state.transition)
         return errorResponse(null, "session-active", "stop the current browser session first");
       if (!api.scripting || typeof api.scripting.executeScript !== "function")
         return errorResponse(
@@ -932,6 +944,121 @@
         },
       };
     }
+    function refuseDetachedJobs(current, port) {
+      for (const job of state.jobs.values()) {
+        if (job === current || job.cancelled) continue;
+        job.cancelled = true;
+        postNative(
+          revokedResponse(
+            job.request.id,
+            isAction(job.request.operation) ? "grant-revoked" : "cancelled",
+            "a reload revoked the grant before this request completed",
+          ),
+          port,
+        );
+      }
+    }
+    // Reload ends the grant before it reaches the tab: the old document's refs,
+    // queued actions, and waits cannot outlive it, and the new document receives
+    // nothing until the user grants it again.
+    async function reloadGrantedTab(request, grant, port, job) {
+      if (typeof api.tabs?.reload !== "function") {
+        postNative(
+          errorResponse(request.id, "reload-unavailable", "Firefox tab reload is unavailable"),
+          port,
+        );
+        return;
+      }
+      const revoked = { ...copyGrant(grant), reason: "reload" };
+      const transition = { tabId: grant.tab_id };
+      state.transition = transition;
+      state.grant = null;
+      state.session = null;
+      refuseDetachedJobs(job, port);
+      postNative(revokeMessage(grant, "reload"), port);
+      await updateBadge();
+      const finish = async (response) => {
+        if (state.transition === transition) state.transition = null;
+        if (state.nativePort === port) {
+          postNative(response, port);
+          state.nativePort = null;
+          state.nativeReady = false;
+          state.nativeSocket = null;
+          state.nativeError = null;
+          try {
+            port.disconnect();
+          } catch (_) {}
+        }
+        await updateBadge();
+      };
+      const abandoned = () => job.cancelled || state.nativePort !== port;
+      const cancelled = () =>
+        finish(
+          revokedResponse(request.id, "cancelled", "the reload was cancelled before dispatch"),
+        );
+      let collectorStopped = false;
+      try {
+        const stopped = await api.tabs.sendMessage(grant.tab_id, {
+          type: "stop",
+          session: grant.session,
+        });
+        collectorStopped = stopped?.ok === true;
+      } catch (_) {}
+      if (abandoned()) return cancelled();
+      try {
+        const tab = await currentTab(grant.tab_id);
+        if (tab.windowId !== grant.window_id)
+          throw new ValidationError("the granted tab changed browser windows");
+      } catch (_) {
+        return finish(
+          revokedResponse(
+            request.id,
+            "not-current-tab",
+            "the granted tab stopped being current before reload; nothing was reloaded",
+          ),
+        );
+      }
+      if (abandoned()) return cancelled();
+      try {
+        await api.tabs.reload(grant.tab_id);
+      } catch (_) {
+        return finish(
+          revokedResponse(
+            request.id,
+            "reload-rejected",
+            "Firefox reported a reload error; inspect the tab before granting it again",
+          ),
+        );
+      }
+      return finish({
+        protocol: PROTOCOL,
+        version: VERSION,
+        type: "response",
+        id: request.id,
+        session: request.session,
+        tab_id: request.tab_id,
+        document_id: request.document_id,
+        ok: true,
+        result: {
+          kind: "action",
+          action: "reload",
+          backend: "firefox-tabs",
+          document_id: request.document_id,
+          generation: request.generation,
+          dispatch: "api-resolved",
+          verification: "unverified",
+          effect: "not-observed",
+          revoked_grant: revoked,
+          new_document_grant: "none",
+          collector_stopped: collectorStopped,
+          limitations: {
+            page_load: "not-observed",
+            new_document_authority: "requires-explicit-user-grant",
+            bypass_cache: "unsupported",
+          },
+        },
+      });
+    }
     async function executeNativeRequest(request, port, job) {
       const grant = state.grant;
       if (
@@ -989,6 +1116,10 @@
         }
       }
       if (job.cancelled || state.grant !== grant || state.nativePort !== port) return;
+      if (request.operation === "reload") {
+        await reloadGrantedTab(request, grant, port, job);
+        return;
+      }
       let collected;
       try {
         if (request.operation === "capture")

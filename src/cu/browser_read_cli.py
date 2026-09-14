@@ -204,7 +204,10 @@ def _check_response(result: dict[str, Any]) -> dict[str, Any]:
         if reason in {"wait-timeout", "cancelled"}
         else exits.BROWSER_READ_REFUSED
     )
-    raise Refused(code, f"browser request refused: {reason}")
+    detail = f"browser request refused: {reason}"
+    if result["error"].get("state") == "grant-revoked":
+        detail += "; the grant is revoked and only a new explicit user grant restores access"
+    raise Refused(code, detail)
 
 
 def _parse_region(text: str) -> dict[str, float | str]:
@@ -269,6 +272,10 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
         if args.ref is None or args.value is None:
             raise ValueError("fill requires --ref and --value")
         payload = {"ref": args.ref, "value": args.value}
+    elif args.action == "reload":
+        if args.ref or args.value is not None or args.label is not None or args.dx or args.dy:
+            raise ValueError("reload names no element or value; it reloads the granted tab")
+        payload = {}
     else:
         if args.target == "element" and not args.ref:
             raise ValueError("element scroll requires --ref")
@@ -300,7 +307,7 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
         config.load(),
         {
             "action": f"browser-{args.action}",
-            "backend": "dom",
+            "backend": receipt.get("backend"),
             "verification": receipt.get("verification"),
             "tab_id": grant["tab_id"],
             "document_id": grant["document_id"],
