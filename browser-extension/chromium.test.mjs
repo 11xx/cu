@@ -47,6 +47,7 @@ test("the worker installs the shared controller in callback mode", () => {
   assert.deepEqual(JSON.parse(JSON.stringify(installs[0].options)), {
     respond: "callback",
     collectorFiles: ["collector.js", "chromium-collector.js"],
+    acceptCollectorPorts: true,
   });
 });
 
@@ -62,5 +63,8 @@ test("the content bootstrap installs one callback-mode collector", () => {
   vm.runInNewContext(source, context);
   vm.runInNewContext(source, context);
   assert.equal(installs.length, 1);
-  assert.deepEqual(JSON.parse(JSON.stringify(installs[0][2])), { respond: "callback" });
+  assert.deepEqual(JSON.parse(JSON.stringify(installs[0][2])), {
+    respond: "callback",
+    releaseWhenDisconnected: true,
+  });
 });

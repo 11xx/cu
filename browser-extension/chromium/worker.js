@@ -5,4 +5,5 @@ importScripts("background.js");
 globalThis.CUBrowserExtension.install(chrome, {
   respond: "callback",
   collectorFiles: ["collector.js", "chromium-collector.js"],
+  acceptCollectorPorts: true,
 });

@@ -58,7 +58,10 @@ browser stops loses that state, and its native port closes; the host exits on
 end of input and removes its helper socket, so a stopped worker ends every grant.
 Nothing is persisted and nothing is restored: a restarted worker starts without a
 grant and does not reconnect to the host until the user grants a tab again. A
-native-port reconnect is never treated as renewed page authority.
+native-port reconnect is never treated as renewed page authority. The injected
+collector holds its own port to the worker for the life of a session and ends
+that session when the port closes, so no page-side session outlives the worker
+that granted it.
 
 Listeners reply through `sendResponse` in this entry, because a Chromium-family
 listener's returned Promise delivers no reply; the Firefox entry keeps returning

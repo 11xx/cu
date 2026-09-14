@@ -1119,3 +1119,84 @@ test("a callback-mode collector answers through sendResponse", async () => {
   assert.equal(listener({ type: "start", session: "fixture-session" }, {}, replied), true);
   assert.equal((await answered).ok, true);
 });
+
+test("a controller clears a badge left by an earlier worker", () => {
+  const { api, calls } = fakeApi();
+  createController(api);
+  assert.deepEqual(calls.badges[0], { text: "" });
+});
+
+test("a released collector session ends when its background port closes", async () => {
+  const ports = [];
+  let listener;
+  const api = {
+    runtime: {
+      onMessage: { addListener: (fn) => (listener = fn) },
+      connect: ({ name }) => {
+        const port = {
+          name,
+          disconnected: false,
+          listeners: [],
+          onDisconnect: { addListener: (fn) => port.listeners.push(fn) },
+          disconnect() {
+            port.disconnected = true;
+          },
+        };
+        ports.push(port);
+        return port;
+      },
+    },
+  };
+  const collector = collectorModule.install(api, new Document([]), {
+    respond: "callback",
+    releaseWhenDisconnected: true,
+  });
+  const send = (message) => new Promise((resolve) => listener(message, {}, resolve));
+  assert.equal(
+    (await send({ type: "start", session: "session-old", capabilities: ["read"] })).ok,
+    true,
+  );
+  assert.deepEqual(
+    ports.map((port) => port.name),
+    ["cu-collector"],
+  );
+  const upgrade = await send({
+    type: "start",
+    session: "session-upgrade",
+    capabilities: ["read", "interact"],
+  });
+  assert.equal(upgrade.ok, false);
+  assert.equal(collector.session, "session-old");
+  for (const fn of ports[0].listeners) fn();
+  assert.equal(collector.session, null);
+  assert.equal(
+    (await send({ type: "start", session: "session-new", capabilities: ["read"] })).ok,
+    true,
+  );
+  assert.equal(ports.length, 2);
+  assert.equal((await send({ type: "stop", session: "session-new" })).ok, true);
+  assert.equal(ports[1].disconnected, true);
+});
+
+test("the Chromium controller keeps collector ports and refuses others", () => {
+  const { api } = fakeApi();
+  let onConnect;
+  api.runtime.onMessage = { addListener: () => {} };
+  api.runtime.onConnect = { addListener: (fn) => (onConnect = fn) };
+  api.tabs.onUpdated = { addListener: () => {} };
+  api.tabs.onRemoved = { addListener: () => {} };
+  background.install(api, { acceptCollectorPorts: true });
+  const port = (name) => ({
+    name,
+    disconnected: false,
+    disconnect() {
+      this.disconnected = true;
+    },
+  });
+  const collectorPort = port("cu-collector");
+  const otherPort = port("other");
+  onConnect(collectorPort);
+  onConnect(otherPort);
+  assert.equal(collectorPort.disconnected, false);
+  assert.equal(otherPort.disconnected, true);
+});

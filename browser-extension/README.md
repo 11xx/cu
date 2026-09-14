@@ -59,9 +59,11 @@ The browser may stop an extension service worker. Grants live only in the
 worker's memory. While a grant is active, its connected native port keeps the
 worker running; if the worker stops anyway, the port closes, the helper exits,
 and every grant ends with it. A restarted worker starts with no grant and never
-restores one, so grant the tab again. A collector already injected into the page
-is not told; its session lingers, with no route to act, until the page navigates
-or reloads.
+restores one, so grant the tab again. The injected collector holds a port to the
+worker for the life of its session; when the worker stops, that port closes and
+the collector drops the session and its amber cursor, so the tab can be granted
+again without reloading. A read session still cannot be upgraded by a second
+grant while its worker is alive.
 
 ## Read structured evidence
 

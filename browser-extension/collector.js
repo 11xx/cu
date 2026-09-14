@@ -1731,13 +1731,41 @@
       get overlay() {
         return overlay;
       },
+      release(sessionId) {
+        if (!session || session.id !== sessionId) return false;
+        session = null;
+        stopObserving();
+        return true;
+      },
       dispose: stopObserving,
     };
   }
+  // A Chromium-family worker can stop without telling the page. The collector holds
+  // a port to it for the life of a session, and that port closing ends the session.
   function install(api, doc, options = {}) {
     const collector = createCollector(doc);
+    let background = null;
+    const track = (message, reply) => {
+      if (!options.releaseWhenDisconnected || reply?.ok !== true) return;
+      if (message?.type === "start") {
+        background?.disconnect();
+        const session = reply.session;
+        const port = api.runtime.connect({ name: "cu-collector" });
+        background = port;
+        port.onDisconnect.addListener(() => {
+          if (background === port) background = null;
+          collector.release(session);
+        });
+      } else if (message?.type === "stop") {
+        background?.disconnect();
+        background = null;
+      }
+    };
     api.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      const reply = Promise.resolve(collector.handle(message));
+      const reply = Promise.resolve(collector.handle(message)).then((value) => {
+        track(message, value);
+        return value;
+      });
       if (options.respond !== "callback") return reply;
       void reply.then(sendResponse);
       return true;

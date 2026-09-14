@@ -1375,6 +1375,9 @@
       if (message.type === "status") return status();
       return errorResponse(null, "invalid-ui-message", "unsupported extension control message");
     }
+    // Badge text is held by the browser, so a controller that starts after an
+    // earlier worker stopped must clear whatever that worker last showed.
+    void updateBadge();
     return {
       start,
       startCurrent,
@@ -1408,6 +1411,10 @@
       void reply.then(sendResponse);
       return true;
     });
+    if (options.acceptCollectorPorts)
+      api.runtime.onConnect?.addListener((port) => {
+        if (port.name !== "cu-collector") port.disconnect();
+      });
     return controller;
   }
   return {
