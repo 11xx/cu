@@ -555,7 +555,7 @@ CHOOSE THE POSTCONDITION BEFORE INPUT
 
 BROWSERS
   cu browser list                What is installed, and what each resolves.
-  cu browser products            Google Chrome/Chromium binaries and profiles.
+  cu browser products            Chromium-family binaries, profiles, setup state.
   cu browser actions             What the focused browser can be driven by.
   cu browser focus-urlbar
   cu browser close-tab
@@ -564,10 +564,13 @@ BROWSERS
   each browser's own configuration; a browser that resolves nothing until the
   user configures it is being honest, not broken.
 
-  `cu browser products` reports Chrome and Chromium candidates, resolved binary
-  paths, profile directories, and whether both are present. It does not install
-  an extension, register a native host, grant a tab, or claim that a Firefox
-  Manifest V2 setup works in a Chromium Manifest V3 worker.
+  `cu browser products` reports Chromium-family candidates, resolved binary
+  paths, profile directories, whether both are present, and a setup state:
+  native-host where CU's MV3 identity and host lookup were proven, unprobed
+  elsewhere. `cu web setup --browser thorium [--user-data-dir PATH]` registers
+  the host for the pinned CU extension origin inside one profile root, and
+  refuses a missing root, an ambiguous default, or a conflicting file. Neither
+  command loads an extension or grants a tab.
 
   A browser may be configured to keep its chrome hidden until the pointer
   reaches an edge, so an address bar missing from a capture may be revealable
