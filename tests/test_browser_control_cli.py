@@ -313,3 +313,43 @@ def test_browser_region_capture_refuses_unsupported_geometry_and_budget(bridge):
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(wire, "MAX_CAPTURE_BYTES", 1)
         assert cli.main([*outside[:-2], "0,0 1x1", "--json"]) == exits.BROWSER_READ_BUDGET
+
+
+def reload_args(*extra):
+    return [
+        "web",
+        "action",
+        "reload",
+        "--document",
+        "fixture-document",
+        "--generation",
+        "0",
+        *extra,
+        "--json",
+    ]
+
+
+def test_reload_forwards_an_empty_payload_through_the_interlocks(bridge, capsys):
+    assert cli.main(reload_args("--tab", "1")) == 0
+    assert json.loads(capsys.readouterr().out)["dispatch_completed"] is True
+    assert bridge.payloads == [("reload", {})]
+    for extra in (["--ref", "e1"], ["--value", "x"], ["--label", "X"], ["--dy", "5"]):
+        assert cli.main(reload_args(*extra)) == exits.USAGE
+    assert bridge.calls == 1
+
+
+def test_reload_on_a_read_grant_refuses_before_dispatch(bridge):
+    bridge.grant["capabilities"] = ["read"]
+    assert cli.main(reload_args()) == exits.BROWSER_READ_REFUSED
+    assert bridge.calls == 0
+
+
+def test_revoked_refusal_says_only_a_new_grant_restores_access():
+    with pytest.raises(cli.Refused, match="new explicit user grant") as refused:
+        web._check_response(
+            {
+                "ok": False,
+                "error": {"code": "reload-rejected", "state": "grant-revoked", "message": "x"},
+            }
+        )
+    assert refused.value.code == exits.BROWSER_READ_REFUSED

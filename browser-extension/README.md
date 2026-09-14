@@ -62,6 +62,7 @@ cu web action fill --document DOCUMENT --generation 4 --ref e5 --value 'ordinary
 cu web action select --document DOCUMENT --generation 5 --ref e6 --value two --tab 12
 cu web action select --document DOCUMENT --generation 6 --ref e6 --label Two --tab 12
 cu web action scroll --target document --dy 500 --document DOCUMENT --generation 5
+cu web action reload --document DOCUMENT --generation 7 --tab 12
 cu web wait --document DOCUMENT --selector '.result-card' --state visible
 cu web wait --document DOCUMENT --ref e4 --state text --text Ready
 ```
@@ -93,6 +94,19 @@ value/focus, not persistence in application state. Use a fresh read or a relevan
 condition wait instead of blindly replaying an uncertain action. Explicit site
 blocks and rate limits are reasons to stop/back off, not to switch backends to
 evade them.
+
+Reload takes no ref. It needs an interaction grant, the observed document and
+generation, and the granted tab active in the focused window; anything else
+refuses without reloading and leaves the grant alone. An accepted reload revokes
+the grant first: queued requests refuse with `grant-revoked`, waits are
+cancelled, the in-page collector stops, and the helper is told before one
+`tabs.reload` call reaches that tab. The receipt names the revoked grant and
+reports `new_document_grant: "none"`; it does not claim the page finished
+loading, and the reloaded document has no authority until the user grants it
+again. A tab that stops being current before dispatch, or a reload Firefox
+rejects, refuses with `state: "grant-revoked"`. A receipt lost to the
+disconnect that ends the grant is exit 58: inspect the tab, never reload again
+blindly. Cache-bypass reload, navigation, and tab transfer are unsupported.
 
 Waits poll DOM/media conditions for at most 10 seconds; the CLI's default wait
 transport budget is 12 seconds. `playing` requires ready, unpaused media with
@@ -133,7 +147,7 @@ revocation, and collector disposal remove it.
 ## Transport and refusals
 
 The extension ID is `cu-browser-read@local`, the native host is `org.cu.read`, and
-the protocol is `cu-browser-read`, version **4**. Extension and host versions must
+the protocol is `cu-browser-read`, version **5**. Extension and host versions must
 match. Frames use native-endian uint32 length plus UTF-8 JSON, bounded at 1 MiB.
 Missing grant capabilities mean read-only, never implicit action authority.
 

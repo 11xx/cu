@@ -32,7 +32,7 @@ from typing import Any, BinaryIO, Self
 from . import png
 
 PROTOCOL = "cu-browser-read"
-VERSION = 4
+VERSION = 5
 MAX_MESSAGE_BYTES = 1 << 20
 MAX_RECV_CHUNK_BYTES = 64 << 10
 MAX_PENDING_REQUESTS = 64
@@ -63,8 +63,10 @@ SOCKET_SUFFIX = ".sock"
 
 READ_OPERATIONS = frozenset({"observe", "query", "wait"})
 ACTION_OPERATIONS = frozenset(
-    {"click", "focus", "fill", "scroll", "hover", "select", "capture"}
+    {"click", "focus", "fill", "scroll", "hover", "select", "capture", "reload"}
 )
+# A receipt from any other backend does not describe the operation that was sent.
+_ACTION_BACKENDS = {"reload": "firefox-tabs"}
 OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
 CAPABILITIES = frozenset({"read", "interact"})
 _OBSERVE_FIELDS = frozenset({"include_values", "limit", "selector", "include_details"})
@@ -395,6 +397,9 @@ def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
             if "region" in payload_object
             else {}
         )
+    if operation == "reload":
+        _exact_fields(payload_object, set(), set())
+        return {}
     if operation in {"click", "focus", "hover"}:
         _exact_fields(payload_object, {"ref"}, {"ref"})
         return {"ref": _ref(payload_object["ref"])}
@@ -701,6 +706,18 @@ def normalize_capture_response(
         },
     }
     return {**response, "result": transformed}
+
+
+def _revoked_by_reload(body: Mapping[str, Any], request: Mapping[str, Any]) -> bool:
+    """A reload receipt names the grant it ended and confers none on the new document."""
+    revoked = body.get("revoked_grant")
+    return (
+        isinstance(revoked, Mapping)
+        and all(
+            revoked.get(field) == request[field] for field in ("session", "tab_id", "document_id")
+        )
+        and body.get("new_document_grant") == "none"
+    )
 
 
 def validate_request(message: Mapping[str, Any]) -> dict[str, Any]:
@@ -1145,10 +1162,11 @@ class BrowserReadClient:
                         if (
                             body.get("kind") != "action"
                             or body.get("action") != operation
-                            or body.get("backend") != "dom"
+                            or body.get("backend") != _ACTION_BACKENDS.get(operation, "dom")
                             or body.get("document_id") != document_id
                             or body.get("verification") not in {"verified", "unverified"}
                             or result_generation < generation
+                            or (operation == "reload" and not _revoked_by_reload(body, request))
                             or (
                                 "ref" in request["payload"]
                                 and body.get("ref") != request["payload"]["ref"]
@@ -1256,7 +1274,7 @@ class BrowserReadClient:
         timeout: float | None = None,
     ) -> dict[str, Any]:
         if operation not in ACTION_OPERATIONS - {"capture"}:
-            raise ValueError("operation is not a DOM browser action")
+            raise ValueError("operation is not a browser action")
         return self.request(
             operation,
             session=session,

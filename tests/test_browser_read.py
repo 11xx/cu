@@ -29,7 +29,7 @@ from cu.browser_read import (
     write_frame,
 )
 
-PROTOCOL = {"protocol": "cu-browser-read", "version": 4}
+PROTOCOL = {"protocol": "cu-browser-read", "version": 5}
 
 
 def response(request: dict[str, object], *, response_id: str | None = None) -> dict[str, object]:
@@ -299,6 +299,124 @@ def test_action_timeout_reports_uncertain_effect():
                 payload={"ref": "e1"},
                 timeout=0.05,
             )
+        assert client._closed is True
+    finally:
+        thread.join(timeout=1)
+        helper.close()
+    assert errors == []
+
+
+RELOAD_GRANT = {
+    "session": "session-1",
+    "tab_id": 7,
+    "window_id": 3,
+    "document_id": "document-1",
+    "generation": 2,
+    "active": True,
+    "hidden": False,
+    "capabilities": ["read", "interact"],
+}
+
+
+def reload_receipt(**changes: object) -> dict[str, object]:
+    return {
+        "kind": "action",
+        "action": "reload",
+        "backend": "firefox-tabs",
+        "document_id": "document-1",
+        "generation": 2,
+        "dispatch": "api-resolved",
+        "verification": "unverified",
+        "effect": "not-observed",
+        "revoked_grant": {**RELOAD_GRANT, "reason": "reload"},
+        "new_document_grant": "none",
+        **changes,
+    }
+
+
+def serve_reload(helper: HelperSocket, receipt: dict[str, object] | None):
+    """Revoke before replying, then reply with `receipt` or drop the connection."""
+    errors: list[BaseException] = []
+
+    def serve() -> None:
+        try:
+            connection, _ = helper.listener.accept()
+            with connection:
+                write_frame(connection, {**hello(str(helper.path)), "grants": [RELOAD_GRANT]})
+                request = read_frame(connection)
+                assert request is not None and request["operation"] == "reload"
+                write_frame(
+                    connection,
+                    {
+                        **PROTOCOL,
+                        "type": "revoke",
+                        "session": "session-1",
+                        "tab_id": 7,
+                        "document_id": "document-1",
+                        "reason": "reload",
+                    },
+                )
+                if receipt is not None:
+                    write_frame(connection, {**response(request), "result": receipt})
+        except BaseException as error:  # surfaced after the client assertion
+            errors.append(error)
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    return thread, errors
+
+
+def reload_action(client: BrowserReadClient) -> dict[str, object]:
+    return client.action(
+        "reload",
+        session="session-1",
+        tab_id=7,
+        document_id="document-1",
+        generation=2,
+        payload={},
+        timeout=0.5,
+    )
+
+
+def test_reload_payload_names_no_element_and_requires_generation():
+    assert validate_payload("reload", {}) == {}
+    with pytest.raises(ProtocolError, match="unsupported message field ref"):
+        validate_payload("reload", {"ref": "e1"})
+    with pytest.raises(ProtocolError, match="passive read"):
+        make_request("reload", session="session-1", tab_id=7, document_id="document-1")
+
+
+def test_reload_receipt_names_the_revoked_grant_and_tracks_the_revocation():
+    helper = HelperSocket.create()
+    thread, errors = serve_reload(helper, reload_receipt())
+    try:
+        with BrowserReadClient.connect(helper.path, timeout=0.5) as client:
+            result = reload_action(client)
+            assert result["result"]["new_document_grant"] == "none"
+            assert client.metadata["grants"] == []
+    finally:
+        thread.join(timeout=1)
+        helper.close()
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        reload_receipt(new_document_grant="granted"),
+        reload_receipt(revoked_grant={**RELOAD_GRANT, "document_id": "other-document"}),
+        reload_receipt(backend="dom"),
+        None,
+    ],
+    ids=["regrants", "wrong-grant", "dom-backend", "lost-receipt"],
+)
+def test_reload_without_a_trustworthy_receipt_is_uncertain(receipt):
+    helper = HelperSocket.create()
+    thread, errors = serve_reload(helper, receipt)
+    try:
+        client = BrowserReadClient.connect(helper.path, timeout=0.5)
+        with pytest.raises(BrowserActionUncertain):
+            reload_action(client)
         assert client._closed is True
     finally:
         thread.join(timeout=1)

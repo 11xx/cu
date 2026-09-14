@@ -586,6 +586,7 @@ OPTIONAL FIREFOX CU BROWSER
   cu web read --selector '.result-card' --details --query Port --json
   cu web action click --document DOCUMENT --generation 3 --ref e4 --tab 12
   cu web action select --document DOCUMENT --generation 4 --ref e5 --value two --tab 12
+  cu web action reload --document DOCUMENT --generation 7 --tab 12
   cu web wait --document DOCUMENT --selector '.result-card' --state visible
   cu web capture --document DOCUMENT --generation 6 --tab 12 --json
   cu web capture --document DOCUMENT --generation 6 --tab 12 \
@@ -619,6 +620,14 @@ OPTIONAL FIREFOX CU BROWSER
   guessed CSS geometry is used. Select dispatches synthetic input/change events,
   not trusted browser input or arbitrary script evaluation. Timeout or disconnect
   after send can mean partial effect, so it is reported and never replayed.
+
+  Reload takes no ref and needs an interaction grant on the active, focused
+  tab. An accepted reload revokes that grant before one tabs.reload: queued
+  requests refuse as grant-revoked, waits cancel, and the receipt names the
+  revoked grant with new_document_grant "none". It never reports page load and
+  never re-grants; the reloaded page needs a new explicit user grant. A tab
+  lost before dispatch or a rejected reload stays revoked; exit 58 means the
+  receipt was lost, so inspect the tab instead of reloading again.
 
   Waits re-check fresh DOM or media conditions for at most 10 seconds (12-second
   default transport budget). Stop and client disconnect cancel them. Playing

@@ -68,7 +68,7 @@ function fakeApi() {
   const removed = [];
   const currentTab = { id: 7, windowId: 3, active: true, hidden: false };
   const port = new FakePort();
-  const calls = { query: [], execute: [], messages: [], badges: [] };
+  const calls = { query: [], execute: [], messages: [], badges: [], reloads: [], order: [] };
   const api = {
     runtime: {
       id: "cu-browser-read@local",
@@ -86,6 +86,7 @@ function fakeApi() {
       get: async () => ({ ...currentTab }),
       sendMessage: async (tabId, message) => {
         calls.messages.push({ tabId, message });
+        if (message.type === "stop") calls.order.push("stop");
         if (message.type === "start")
           return {
             protocol: PROTOCOL,
@@ -134,6 +135,10 @@ function fakeApi() {
           type: "stopped",
           ok: true,
         };
+      },
+      reload: async (tabId) => {
+        calls.order.push("reload");
+        calls.reloads.push(tabId);
       },
       onUpdated: { addListener: (listener) => updated.push(listener) },
       onRemoved: { addListener: (listener) => removed.push(listener) },
@@ -904,4 +909,163 @@ test("cancellation prevents an action waiting on focus checks from being dispatc
   release();
   await pending;
   assert.equal(calls.messages.filter((call) => call.message.type === "read-request").length, 0);
+});
+
+function reloadRequest(session, overrides = {}) {
+  return request("reload", { session, generation: 0, payload: {}, ...overrides });
+}
+
+test("reload revokes the grant, dispatches once, and confers nothing on the new document", async () => {
+  const { api, port, calls } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  await controller.handleNativeMessage(reloadRequest(started.grant.session), port);
+
+  assert.deepEqual(calls.reloads, [7]);
+  assert.deepEqual(calls.order, ["stop", "reload"]);
+  const revokeIndex = port.messages.findIndex((message) => message.type === "revoke");
+  const response = port.messages.at(-1);
+  assert.ok(revokeIndex >= 0 && revokeIndex < port.messages.length - 1);
+  assert.equal(port.messages[revokeIndex].reason, "reload");
+  assert.equal(response.ok, true, JSON.stringify(response));
+  assert.equal(response.result.backend, "firefox-tabs");
+  assert.equal(response.result.effect, "not-observed");
+  assert.equal(response.result.new_document_grant, "none");
+  assert.equal(response.result.revoked_grant.document_id, "document-1");
+  assert.equal(port.disconnected, true);
+  assert.equal(controller.status().active, false);
+
+  await controller.handleNativeMessage(
+    request("click", { session: started.grant.session, generation: 0, payload: { ref: "e1" } }),
+    port,
+  );
+  assert.equal(calls.messages.filter((call) => call.message.type === "read-request").length, 0);
+  assert.deepEqual(calls.reloads, [7]);
+
+  const nextPort = new FakePort();
+  api.runtime.connectNative = () => nextPort;
+  const next = await controller.startCurrent(null, ["read", "interact"]);
+  assert.equal(next.ok, true);
+  assert.notEqual(next.grant.session, started.grant.session);
+  assert.equal(nextPort.messages[0].grants[0].session, next.grant.session);
+});
+
+test("refused reloads dispatch nothing and leave the grant in place", async () => {
+  const cases = [
+    { name: "read-only", capabilities: ["read"], code: "interaction-not-granted" },
+    { name: "stale generation", overrides: { generation: 5 }, code: "stale-generation" },
+    { name: "wrong tab", overrides: { tab_id: 99 }, code: "tab-not-granted" },
+    { name: "stale document", overrides: { document_id: "document-old" }, code: "stale-document" },
+    { name: "inactive tab", inactive: true, code: "not-current-tab" },
+    { name: "no reload API", noReload: true, code: "reload-unavailable" },
+  ];
+  for (const scenario of cases) {
+    const { api, currentTab, port, calls } = fakeApi();
+    const controller = createController(api);
+    const started = await controller.startCurrent(
+      null,
+      scenario.capabilities || ["read", "interact"],
+    );
+    if (scenario.inactive) currentTab.active = false;
+    if (scenario.noReload) delete api.tabs.reload;
+    await controller.handleNativeMessage(
+      reloadRequest(started.grant.session, scenario.overrides),
+      port,
+    );
+    assert.equal(port.messages.at(-1).error?.code, scenario.code, scenario.name);
+    assert.deepEqual(calls.reloads, [], scenario.name);
+    assert.equal(controller.status().active, true, scenario.name);
+    assert.equal(port.disconnected, false, scenario.name);
+  }
+  assert.throws(
+    () => validateRequest(request("reload", { generation: 0, payload: { ref: "e1" } })),
+    /unsupported message field ref/,
+  );
+  assert.throws(() => validateRequest(request("reload", { payload: {} })), /passive read/);
+});
+
+test("requests queued behind a reload are refused as revoked and never run", async () => {
+  const { api, port, calls } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  const session = started.grant.session;
+  await Promise.all([
+    controller.handleNativeMessage(reloadRequest(session, { id: "reload-1" }), port),
+    controller.handleNativeMessage(
+      request("click", { id: "click-after", session, generation: 0, payload: { ref: "e1" } }),
+      port,
+    ),
+  ]);
+  const refused = port.messages.find((message) => message.id === "click-after");
+  assert.equal(refused.error.code, "grant-revoked");
+  assert.equal(refused.error.state, "grant-revoked");
+  assert.equal(calls.messages.filter((call) => call.message.type === "read-request").length, 0);
+  assert.deepEqual(calls.reloads, [7]);
+});
+
+test("stop during reload preparation dispatches nothing and no grant shares the closing port", async () => {
+  const { api, port, calls } = fakeApi();
+  const original = api.tabs.sendMessage;
+  let release;
+  const stopping = new Promise((resolve) => {
+    release = resolve;
+  });
+  let stopSeen;
+  const stopRequested = new Promise((resolve) => {
+    stopSeen = resolve;
+  });
+  api.tabs.sendMessage = (tab, message) => {
+    if (message.type !== "stop") return original(tab, message);
+    stopSeen();
+    return stopping;
+  };
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  const reloading = controller.handleNativeMessage(reloadRequest(started.grant.session), port);
+  await stopRequested;
+  const refused = await controller.startCurrent(null, ["read", "interact"]);
+  assert.equal(refused.error.code, "session-active");
+  await controller.stop();
+  release({ ok: true });
+  await reloading;
+
+  assert.deepEqual(calls.reloads, []);
+  assert.equal(port.disconnected, true);
+  assert.equal(
+    port.messages.some((message) => message.type === "response" && message.ok),
+    false,
+  );
+  const nextPort = new FakePort();
+  api.runtime.connectNative = () => nextPort;
+  const next = await controller.startCurrent(null, ["read", "interact"]);
+  assert.equal(next.ok, true);
+});
+
+test("a rejected reload or a tab lost before dispatch keeps the grant revoked", async () => {
+  {
+    const { api, port } = fakeApi();
+    api.tabs.reload = async () => {
+      throw new Error("no such tab");
+    };
+    const controller = createController(api);
+    const started = await controller.startCurrent(null, ["read", "interact"]);
+    await controller.handleNativeMessage(reloadRequest(started.grant.session), port);
+    const response = port.messages.at(-1);
+    assert.equal(response.error.code, "reload-rejected");
+    assert.equal(response.error.state, "grant-revoked");
+    assert.equal(controller.status().active, false);
+    assert.equal(port.disconnected, true);
+  }
+  {
+    const { api, currentTab, port, calls } = fakeApi();
+    const controller = createController(api);
+    const started = await controller.startCurrent(null, ["read", "interact"]);
+    let checks = 0;
+    api.tabs.query = async () => (++checks === 1 ? [currentTab] : []);
+    await controller.handleNativeMessage(reloadRequest(started.grant.session), port);
+    assert.equal(port.messages.at(-1).error.code, "not-current-tab");
+    assert.equal(port.messages.at(-1).error.state, "grant-revoked");
+    assert.deepEqual(calls.reloads, []);
+    assert.equal(controller.status().active, false);
+  }
 });
