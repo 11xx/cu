@@ -551,11 +551,13 @@ CHOOSE THE POSTCONDITION BEFORE INPUT
   that the application accepted it.
 
   The application's answer is often a new window: an error dialog, a
-  confirmation, a chooser. `key`, `click`, and `type` keep listening for windows
-  that open within `input.appearance_settle_ms` of their input and name them in
-  the receipt's `appeared` (with geometry, reachability, and whether they cover
-  the target), plus a line on stderr. Read that window before acting again; it
-  usually holds the reason the action did or did not work. `appeared` says
+  confirmation, a chooser, a menu. `key`, `click`, `type`, `scroll`, and `hover`
+  keep listening for windows that open within `input.appearance_settle_ms` of
+  their input (aimed typing from before its own click, hover through its dwell)
+  and name them in the receipt's `appeared` (with geometry, reachability, and
+  whether they cover the target), plus a line on stderr. Read that window
+  before acting again; it usually holds the reason the action did or did not
+  work. `appeared` says
   "unavailable" when the event stream could not be read, which is not "nothing
   opened".
 

@@ -813,43 +813,50 @@ def hover(
     if not math.isfinite(dwell) or not 0 <= dwell <= MAX_HOVER_DWELL:
         raise ValueError(f"--dwell must be finite and between 0 and {MAX_HOVER_DWELL:g}")
     initial = observe.snapshot()
-    entry = move(
-        cfg,
-        frame_id,
-        at,
-        duration=duration,
-        hz=hz,
-        timeout=move_timeout,
-        dry_run=dry_run,
-    )
-    started = time.monotonic()
-    deadline = started + dwell
-    if not dry_run:
-        while True:
-            snap = observe.snapshot()
-            frame = frames.load(frame_id)
-            live_monitors = snap["monitors"]
-            live_windows = snap["windows"]
-            live_layers = snap.get("layer_surfaces", [])
-            safety.confirm_pointer(
-                cfg,
-                (entry["cursor"]["x"], entry["cursor"]["y"]),
-                snap["cursor_logical"],
-            )
-            _motion_boundary_guard(
-                cfg,
-                frame,
-                snap["cursor_logical"],
-                snap["cursor_logical"],
-                live_monitors,
-                live_windows,
-                live_layers,
-                initial.get("focused"),
-            )
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            time.sleep(min(DWELL_POLL_SECONDS, remaining))
+    # A hover's answer is often a menu or popup that opens during the dwell.
+    watch = None if dry_run else appearance.Watch(cfg["input"]["appearance_settle_ms"]).start()
+    try:
+        entry = move(
+            cfg,
+            frame_id,
+            at,
+            duration=duration,
+            hz=hz,
+            timeout=move_timeout,
+            dry_run=dry_run,
+        )
+        started = time.monotonic()
+        deadline = started + dwell
+        if not dry_run:
+            while True:
+                snap = observe.snapshot()
+                frame = frames.load(frame_id)
+                live_monitors = snap["monitors"]
+                live_windows = snap["windows"]
+                live_layers = snap.get("layer_surfaces", [])
+                safety.confirm_pointer(
+                    cfg,
+                    (entry["cursor"]["x"], entry["cursor"]["y"]),
+                    snap["cursor_logical"],
+                )
+                _motion_boundary_guard(
+                    cfg,
+                    frame,
+                    snap["cursor_logical"],
+                    snap["cursor_logical"],
+                    live_monitors,
+                    live_windows,
+                    live_layers,
+                    initial.get("focused"),
+                )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(DWELL_POLL_SECONDS, remaining))
+        appeared = watch.report(target=initial.get("focused")) if watch else None
+    finally:
+        if watch is not None:
+            watch.close()
     result = {
         "action": "hover",
         "transport": MOTION_TRANSPORT,
@@ -870,6 +877,8 @@ def hover(
         "observation": None,
         "dry_run": dry_run,
     }
+    if appeared is not None:
+        result["appeared"] = appeared
     safety.record(cfg, result)
     return result
 
@@ -1009,13 +1018,16 @@ def scroll(
     landed = target["snapshot"]["cursor_logical"]
     if aimed:
         landed = warp(cfg, aimed["logical"]["x"], aimed["logical"]["y"], dry_run=dry_run)
+    appeared = None
     if not dry_run:
-        with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
-            point = aimed["logical"] if aimed else target["snapshot"]["cursor_logical"]
-            under, landed = _live_pointer_target(
-                cfg, target["frame"], point, target["snapshot"]["monitors"]
-            )
-            device.scroll(dy=dy, dx=dx)
+        with appearance.Watch(cfg["input"]["appearance_settle_ms"]) as watch:
+            with uinput.Device(settle_ms=cfg["input"]["settle_ms"]) as device:
+                point = aimed["logical"] if aimed else target["snapshot"]["cursor_logical"]
+                under, landed = _live_pointer_target(
+                    cfg, target["frame"], point, target["snapshot"]["monitors"]
+                )
+                device.scroll(dy=dy, dx=dx)
+            appeared = watch.report(target=under)
     result = {
         "action": "scroll",
         "dy": dy,
@@ -1030,6 +1042,8 @@ def scroll(
         ),
         "dry_run": dry_run,
     }
+    if appeared is not None:
+        result["appeared"] = appeared
     safety.record(cfg, result)
     return result
 
@@ -1151,26 +1165,32 @@ def type_text(
             backend=backend, verify=verify, replace=replace, pointer=None, dry_run=dry_run,
         )
 
-    pointer = _aimed_click(cfg, frame_id, at, button=button, count=count, dry_run=dry_run)
-    # Set the moment the text is sent, not when it is written down. What the
-    # click needs its own record for is being the only thing that happened;
-    # once keystrokes are on their way the action is the typing, and every
-    # later failure — a read-back that did not match, a clipboard that would
-    # not restore — belongs to it.
-    injected: list[bool] = []
+    # Started before the click, which can itself open the window that answers.
+    watch = None if dry_run else appearance.Watch(cfg["input"]["appearance_settle_ms"]).start()
     try:
-        return _type_into_focus(
-            cfg, text, method=method, restore_clipboard=restore_clipboard,
-            backend=backend, verify=verify, replace=replace, pointer=pointer, injected=injected,
-            dry_run=dry_run,
-        )
-    except BaseException:
-        # The click already happened on someone's desktop. If the text never
-        # got as far as being written down, the log is otherwise silent about
-        # a pointer that moved and a button that went down.
-        if not injected:
-            _record_orphaned_click(cfg, pointer)
-        raise
+        pointer = _aimed_click(cfg, frame_id, at, button=button, count=count, dry_run=dry_run)
+        # Set the moment the text is sent, not when it is written down. What the
+        # click needs its own record for is being the only thing that happened;
+        # once keystrokes are on their way the action is the typing, and every
+        # later failure — a read-back that did not match, a clipboard that would
+        # not restore — belongs to it.
+        injected: list[bool] = []
+        try:
+            return _type_into_focus(
+                cfg, text, method=method, restore_clipboard=restore_clipboard,
+                backend=backend, verify=verify, replace=replace, pointer=pointer,
+                injected=injected, dry_run=dry_run, watch=watch,
+            )
+        except BaseException:
+            # The click already happened on someone's desktop. If the text never
+            # got as far as being written down, the log is otherwise silent about
+            # a pointer that moved and a button that went down.
+            if not injected:
+                _record_orphaned_click(cfg, pointer)
+            raise
+    finally:
+        if watch is not None:
+            watch.close()
 
 
 def _type_into_focus(
@@ -1185,6 +1205,7 @@ def _type_into_focus(
     pointer: dict[str, Any] | None,
     dry_run: bool,
     injected: list[bool] | None = None,
+    watch: appearance.Watch | None = None,
 ) -> dict[str, Any]:
     """Enter text into whatever holds focus, asserting an aim when there was one."""
     backend = backend or cfg["input"]["key_backend"]
@@ -1274,14 +1295,17 @@ def _type_into_focus(
             injected.append(True)  # nothing was sent, and nothing is unrecorded
         return result
 
-    watch = appearance.Watch(cfg["input"]["appearance_settle_ms"]).start()
+    owned = watch is None
+    if owned:
+        watch = appearance.Watch(cfg["input"]["appearance_settle_ms"]).start()
     try:
         _send_typed(cfg, text, result, method=method, select=select, chord=chord,
                     backend=backend, window=window, pointer=pointer, verify=verify,
                     replace=replace, restore_clipboard=restore_clipboard, injected=injected)
         result["appeared"] = watch.report(target=window)
     finally:
-        watch.close()
+        if owned:
+            watch.close()
 
     safety.record(cfg, result)
     if verify and result.get("verified", {}).get("status") == "mismatch":
