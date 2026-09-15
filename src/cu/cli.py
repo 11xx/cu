@@ -829,6 +829,7 @@ def cmd_hover(args: argparse.Namespace) -> int:
         dwell=args.dwell,
         dry_run=args.dry_run,
     )
+    _notice_appeared(result)
     if result["dry_run"]:
         _emit(result, args.json, _render_hover)
         return exits.OK
@@ -1961,6 +1962,7 @@ def cmd_scroll(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
     )
     _emit(result, args.json, _render_action)
+    _notice_appeared(result)
     return exits.OK
 
 
