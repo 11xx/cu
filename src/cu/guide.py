@@ -540,6 +540,15 @@ CHOOSE THE POSTCONDITION BEFORE INPUT
   channel exposes it. An input receipt says that an event was dispatched, never
   that the application accepted it.
 
+  The application's answer is often a new window: an error dialog, a
+  confirmation, a chooser. `key`, `click`, and `type` keep listening for windows
+  that open within `input.appearance_settle_ms` of their input and name them in
+  the receipt's `appeared` (with geometry, reachability, and whether they cover
+  the target), plus a line on stderr. Read that window before acting again; it
+  usually holds the reason the action did or did not work. `appeared` says
+  "unavailable" when the event stream could not be read, which is not "nothing
+  opened".
+
   Keep the observation that can disprove the claim. Filtering every window of a
   class cannot establish that a same-class dialog is absent, and unchanged
   inventory cannot establish unchanged page content. Inspect a surprising

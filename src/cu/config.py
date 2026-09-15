@@ -162,6 +162,10 @@ DEFAULTS: dict[str, Any] = {
         # the first event is written. Events emitted before enumeration are
         # accepted by the kernel and dropped by the compositor.
         "settle_ms": 40,
+        # How long an acting command keeps listening for windows it caused to
+        # open, such as an error dialog; they are named in its receipt. Zero
+        # stops listening, and every action then reports "disabled".
+        "appearance_settle_ms": 250,
         # Which path keystrokes take. "uinput" produces genuine libinput
         # events, which is what makes them indistinguishable from a human, and
         # is the right default. "compositor" injects through Hyprland instead:
@@ -247,7 +251,7 @@ def load(path: Path | None = None) -> dict[str, Any]:
             raise ConfigError(f"{section} must be a table")
     for section, fields in {
         "safety": ("frame_max_age", "cursor_drift_tolerance", "busy_wait_ms"),
-        "input": ("press_ms", "gap_ms", "settle_ms"),
+        "input": ("press_ms", "gap_ms", "settle_ms", "appearance_settle_ms"),
     }.items():
         for field in fields:
             value = cfg[section][field]
