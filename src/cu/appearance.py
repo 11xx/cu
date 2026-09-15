@@ -62,6 +62,7 @@ class Watch:
         self._conn: socket.socket | None = None
         self._known: set[str] = set()
         self._unavailable: str | None = None
+        self._reported = False
 
     def start(self) -> Self:
         """Subscribe and record the windows that already exist."""
@@ -85,11 +86,26 @@ class Watch:
     def __enter__(self) -> Self:
         return self.start()
 
-    def __exit__(self, *exc_info: object) -> None:
+    def __exit__(self, _type: object, error: BaseException | None, _traceback: object) -> None:
+        if error is not None:
+            self.attach(error)
         self.close()
+
+    def attach(self, error: BaseException, target: dict[str, Any] | None = None) -> None:
+        """Name what appeared on a refusal, which the action's own answer may have caused.
+
+        A popup that takes focus mid-action makes the next interlock refuse, and
+        that refusal is exactly when the caller most needs the popup named.
+        Only a refusal carrying details is annotated, and only once.
+        """
+        details = getattr(error, "details", None)
+        if self._reported or not isinstance(details, dict) or "appeared" in details:
+            return
+        details["appeared"] = self.report(target=target)
 
     def report(self, target: dict[str, Any] | None = None) -> dict[str, Any]:
         """Read the settle interval, then name every window that was not there before."""
+        self._reported = True
         if self.settle_ms == 0:
             return {"status": "disabled", "settle_ms": 0, "windows": []}
         if self._conn is None:

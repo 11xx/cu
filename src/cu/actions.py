@@ -966,6 +966,10 @@ def hover(
                     break
                 time.sleep(min(DWELL_POLL_SECONDS, remaining))
         appeared = watch.report(target=initial.get("focused")) if watch else None
+    except BaseException as error:
+        if watch is not None:
+            watch.attach(error, initial.get("focused"))
+        raise
     finally:
         if watch is not None:
             watch.close()
@@ -1300,6 +1304,10 @@ def type_text(
             if not injected:
                 _record_orphaned_click(cfg, pointer)
             raise
+    except BaseException as error:
+        if watch is not None:
+            watch.attach(error)
+        raise
     finally:
         if watch is not None:
             watch.close()
@@ -1415,6 +1423,10 @@ def _type_into_focus(
                     backend=backend, window=window, pointer=pointer, verify=verify,
                     replace=replace, restore_clipboard=restore_clipboard, injected=injected)
         result["appeared"] = watch.report(target=window)
+    except BaseException as error:
+        if owned:
+            watch.attach(error, window)
+        raise
     finally:
         if owned:
             watch.close()
