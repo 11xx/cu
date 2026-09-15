@@ -240,11 +240,13 @@ ACT THROUGH THE FRAME YOU READ
   `present WINDOW` is the separate, explicit arrangement request: it requires
   a visible window, uses its active output unless `--output NAME` selects
   another active output, makes a tiled target floating when needed, and moves
-  its current rectangle to the selected output's center. `--maximize` instead
-  puts the window in the compositor's maximized state on its own output, which
-  is the working state for a browser or any single application a task is
-  inside; an already maximized window, or another output, refuses. It does not
-  guess a resize. Each compositor step is read back, and the
+  its rectangle to the selected output's center. A floating window larger than
+  the output (such as a chooser that opened partly offscreen) is first shrunk
+  to fit inside a small margin, so all of it is reachable; nothing is ever
+  enlarged. `--maximize` instead puts the window in the compositor's maximized
+  state on its own output, which is the working state for a browser or any
+  single application a task is inside; an already maximized window, or another
+  output, refuses. Each compositor step is read back, and the
   result carries the actual before and after state plus an opaque runtime token.
   A window the compositor leaves on another output than the one requested
   refuses as partial (36), with its actual state attached.

@@ -44,6 +44,62 @@ class FakeWindowSeam:
             window["fullscreen"] = 0
             window["logical_rect"] = dict(self.unmaximized_rect)
 
+    def resize(self, address, width, height):
+        window = self.world["windows"][0]
+        self.calls.append(("resize", address, width, height))
+        rect = window["logical_rect"]
+        center_x, center_y = rect["x"] + rect["w"] / 2, rect["y"] + rect["h"] / 2
+        window["logical_rect"] = {
+            "x": center_x - width / 2,
+            "y": center_y - height / 2,
+            "w": width,
+            "h": height,
+        }
+
+
+def test_an_oversized_floating_window_is_fitted_centered_and_restored(presentation_world):
+    world, tiled_rect, store, cfg = presentation_world
+    oversized = {"x": -30, "y": -20, "w": 150, "h": 120}
+    world["windows"][0]["floating"] = True
+    world["windows"][0]["logical_rect"] = dict(oversized)
+    seam = FakeWindowSeam(world, tiled_rect, floating_rect=oversized)
+
+    result = actions.present(
+        cfg, world["windows"][0], seam=seam, store=store, snapshot_reader=_reader(world),
+        dry_run=False,
+    )
+
+    assert [step["operation"] for step in result["steps"]] == ["resize", "move"]
+    assert result["after"]["logical_rect"] == {"x": 5.0, "y": 4.0, "w": 90.0, "h": 72.0}
+
+    restored = actions.restore(
+        cfg, result["token"], seam=seam, store=store, snapshot_reader=_reader(world),
+        dry_run=False,
+    )
+
+    assert restored["steps"] == [{"operation": "resize-and-move", "status": "verified"}]
+    assert restored["after"]["logical_rect"] == oversized
+
+
+def test_a_resize_the_compositor_ignores_refuses(presentation_world):
+    world, tiled_rect, store, cfg = presentation_world
+    oversized = {"x": -30, "y": -20, "w": 150, "h": 120}
+    world["windows"][0]["floating"] = True
+    world["windows"][0]["logical_rect"] = dict(oversized)
+
+    class IgnoredResize(FakeWindowSeam):
+        def resize(self, address, width, height):
+            self.calls.append(("resize", address, width, height))
+
+    seam = IgnoredResize(world, tiled_rect, floating_rect=oversized)
+    with pytest.raises(safety.Refused) as caught:
+        actions.present(
+            cfg, world["windows"][0], seam=seam, store=store, snapshot_reader=_reader(world),
+            dry_run=False,
+        )
+    assert caught.value.code == exits.PRESENTATION_REFUSED
+    assert not any(call[0] == "move" for call in seam.calls)
+
 
 def test_maximize_presents_on_its_own_output_and_restore_recovers(presentation_world):
     world, tiled_rect, store, cfg = presentation_world
@@ -164,6 +220,7 @@ def test_hyprland_seam_dispatches_the_operation(monkeypatch):
     seam.move("0x1", 2500, 150)
     seam.maximize("0x1", True)
     seam.maximize("0x1", False)
+    seam.resize("0x1", 900, 500)
 
     assert calls == [
         'hl.dispatch(hl.dsp.window.float({window = "address:0x1"}))',
@@ -172,6 +229,7 @@ def test_hyprland_seam_dispatches_the_operation(monkeypatch):
         'mode = "maximized", action = "set"}))',
         'hl.dispatch(hl.dsp.window.fullscreen({window = "address:0x1", '
         'mode = "maximized", action = "unset"}))',
+        'hl.dispatch(hl.dsp.window.resize({window = "address:0x1", x = 900, y = 500}))',
     ]
 
 
@@ -424,7 +482,9 @@ def test_floating_presentation_restores_by_move(presentation_world):
     assert world["windows"][0]["logical_rect"] == original
 
 
-def test_partly_off_output_remains_extent_and_reachability_fact(presentation_world):
+def test_a_window_larger_than_a_small_output_is_fitted_with_a_proportional_margin(
+    presentation_world,
+):
     world, tiled_rect, store, cfg = presentation_world
     world["monitors"][0]["logical_rect"] = {"x": 0, "y": 0, "w": 30, "h": 20}
     window = world["windows"][0]
@@ -442,11 +502,8 @@ def test_partly_off_output_remains_extent_and_reachability_fact(presentation_wor
         dry_run=False,
     )
 
-    assert result["after"]["logical_rect"] == {"x": 0.0, "y": 0.0, "w": 40, "h": 30}
-    assert result["after"]["extent"]["status"] == "partially-outside"
-    assert result["after"]["reachability"]["status"] == "partially-reachable"
-    assert result["after"]["extent"]["edge_excess"]["right"] == 10
-    assert result["after"]["reachability"]["edge_excess"]["right"] == 10
+    assert result["after"]["logical_rect"] == {"x": 2.0, "y": 1.0, "w": 27.0, "h": 18.0}
+    assert result["after"]["reachability"]["status"] == "fully-reachable"
 
 
 def test_stale_identity_refuses_and_invalidates_token(presentation_world):
