@@ -172,6 +172,42 @@ def test_window_capture_refusal_names_the_intersecting_window(world, capsys):
     assert "'w': 200" in error
 
 
+def _dialog_over_parent(world, **parent):
+    dialog = world["windows"][0]
+    dialog.update(floating=True, workspace="1", fullscreen=0, allowed_over_fullscreen=False)
+    world["windows"].append({
+        **dialog,
+        "address": "0x2",
+        "class": "browser",
+        "title": "parent",
+        "floating": False,
+        "fullscreen": 0,
+        "allowed_over_fullscreen": True,
+        **parent,
+    })
+    return dialog
+
+
+def test_a_floating_dialog_over_its_tiled_parent_is_captured(world, capsys):
+    _dialog_over_parent(world)
+    assert cli.main(["shot", "--json"]) == exits.OK
+    assert json.loads(capsys.readouterr().out)["window"]["address"] == "0x1"
+
+
+def test_a_dialog_over_a_maximized_parent_needs_the_compositor_to_allow_it(world, capsys):
+    dialog = _dialog_over_parent(world, fullscreen=1)
+    assert cli.main(["shot", "--json"]) == exits.TARGET_NOT_VISIBLE
+    capsys.readouterr()
+    dialog["allowed_over_fullscreen"] = True
+    world["focused"] = dialog
+    assert cli.main(["shot", "--json"]) == exits.OK
+
+
+def test_overlapping_floating_windows_still_refuse(world, capsys):
+    _dialog_over_parent(world, floating=True)
+    assert cli.main(["shot", "--json"]) == exits.TARGET_NOT_VISIBLE
+
+
 def test_window_refusal_text_and_json_share_bounded_obstruction_facts(world, capsys):
     world["windows"].extend(
         {

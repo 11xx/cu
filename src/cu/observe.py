@@ -327,6 +327,9 @@ def windows(mons: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
                 "floating": c["floating"],
                 # 0 none, 1 maximized, 2 fullscreen, as the compositor reports it.
                 "fullscreen": c.get("fullscreen", 0),
+                # Whether the compositor currently draws this window above a
+                # fullscreen or maximized one (it follows focus).
+                "allowed_over_fullscreen": c.get("allowedOverFullscreen", False),
                 "hidden": c.get("hidden", False),
                 "visible": c.get("visible", True) and displayed,
                 # Lower means more recently focused, which is the closest thing
