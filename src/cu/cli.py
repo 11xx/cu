@@ -2612,11 +2612,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_aim(move, required=True)
     move.add_argument(
         "--duration", type=float, default=actions.DEFAULT_MOVE_DURATION,
-        help="Seconds for the bounded native segment (default: 0.25)",
+        help="Seconds for the bounded native segment (default: 0.08)",
     )
     move.add_argument(
         "--hz", type=float, default=actions.DEFAULT_MOVE_HZ,
-        help="Native motion samples per second (default: 60)",
+        help="Native motion samples per second (default: the output's refresh rate)",
     )
     move.add_argument(
         "--timeout", type=float, default=actions.DEFAULT_MOVE_TIMEOUT,
@@ -2638,11 +2638,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_aim(hover, required=True)
     hover.add_argument(
         "--duration", type=float, default=actions.DEFAULT_MOVE_DURATION,
-        help="Seconds for native entry (default: 0.25)",
+        help="Seconds for native entry (default: 0.08)",
     )
     hover.add_argument(
         "--hz", type=float, default=actions.DEFAULT_MOVE_HZ,
-        help="Native entry samples per second (default: 60)",
+        help="Native entry samples per second (default: the output's refresh rate)",
     )
     hover.add_argument(
         "--move-timeout", type=float, default=actions.DEFAULT_MOVE_TIMEOUT,

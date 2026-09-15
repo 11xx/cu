@@ -47,6 +47,14 @@ def _world(monkeypatch, sequence):
     monkeypatch.setattr(observe, "monitors", lambda: [monitor])
     monkeypatch.setattr(observe, "cursor", lambda: cursor[0])
     monkeypatch.setattr(observe, "layer_surfaces", lambda: [])
+    monkeypatch.setattr(
+        observe,
+        "motion_state",
+        lambda _monitors: {
+            "cursor": cursor[0], "monitors": [monitor], "windows": [window],
+            "layer_surfaces": [], "focused": window,
+        },
+    )
     monkeypatch.setattr(checks, "_processes", lambda **_kwargs: [])
     monkeypatch.setattr(capture, "size_of", lambda _path: {"w": 100, "h": 100})
     outputs = iter(sequence[1:])

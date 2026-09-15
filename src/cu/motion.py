@@ -38,6 +38,30 @@ def line(
     ]
 
 
+def eased_line(
+    start: Iterable[float], end: Iterable[float], samples: int
+) -> list[dict[str, float]]:
+    """A straight path whose samples follow a minimum-jerk speed profile.
+
+    The pointer leaves from rest and settles into the endpoint instead of
+    starting and stopping at full speed, which reads as a hand rather than a
+    stepped jump.
+    """
+    straight = line(start, end, samples)
+    first, last = straight[0], straight[-1]
+
+    def progress(t: float) -> float:
+        return t * t * t * (10 - 15 * t + 6 * t * t)
+
+    return [
+        {
+            "x": first["x"] + (last["x"] - first["x"]) * progress(index / samples),
+            "y": first["y"] + (last["y"] - first["y"]) * progress(index / samples),
+        }
+        for index in range(samples + 1)
+    ]
+
+
 def circle(
     center: Iterable[float], radius: float, turns: float, samples: int
 ) -> list[dict[str, float]]:

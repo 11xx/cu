@@ -786,6 +786,14 @@ def _native_move_fixture(monkeypatch):
     monkeypatch.setattr(observe, "windows", lambda _monitors: current)
     monkeypatch.setattr(observe, "cursor", lambda: cursor[0])
     monkeypatch.setattr(observe, "layer_surfaces", lambda: [])
+    monkeypatch.setattr(
+        observe,
+        "motion_state",
+        lambda _monitors: {
+            "cursor": cursor[0], "monitors": [], "windows": current,
+            "layer_surfaces": [], "focused": current[0],
+        },
+    )
     monkeypatch.setattr(checks, "_processes", lambda **_kwargs: [])
     return frame, cursor
 
@@ -827,6 +835,9 @@ def test_native_move_yields_when_pointer_moves_between_samples(
     monkeypatch, duration, expected_events
 ):
     _frame, cursor = _native_move_fixture(monkeypatch)
+    # The fixture frame is smaller than one full cursor step; a shorter step keeps
+    # the target beyond a single event.
+    monkeypatch.setattr(actions, "MAX_CURSOR_STEP", 32.0)
     clock = [0.0]
     moves = []
     bumped = [False]
@@ -939,6 +950,95 @@ def test_native_move_converges_under_sub_unity_pointer_gain(monkeypatch, target)
     assert result["status"] == "converged"
     residual = math.hypot(cursor[0]["x"] - target[0], cursor[0]["y"] - target[1])
     assert residual <= actions.MOTION_TOLERANCE
+
+
+def test_a_route_step_reads_its_delivery_once_instead_of_waiting(monkeypatch):
+    _frame, cursor = _native_move_fixture(monkeypatch)
+    _virtual_clock(monkeypatch)
+    waits = []
+    original = actions._settle_native_delivery
+
+    def spy(*args, **kwargs):
+        waits.append(kwargs.get("wait", actions.NATIVE_SETTLE_TIMEOUT))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(actions, "_settle_native_delivery", spy)
+    # Every event lands after its own read, so each pending delivery is settled
+    # at the next route sample, where a sample period has already passed.
+    pending = []
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def move_relative(self, dx, dy):
+            pending.append((dx, dy))
+
+    real_sleep = actions.time.sleep
+
+    def sleep(seconds):
+        while pending:
+            dx, dy = pending.pop(0)
+            cursor[0] = {"x": cursor[0]["x"] + dx, "y": cursor[0]["y"] + dy}
+        real_sleep(seconds)
+
+    monkeypatch.setattr(actions.time, "sleep", sleep)
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    result = actions.move(CFG, "f1", (60, 60), duration=0.1, hz=60, timeout=2, dry_run=False)
+    assert result["status"] == "converged"
+    assert waits and waits[0] == 0.0
+
+
+def test_a_route_event_that_shows_one_read_late_is_not_taken_for_a_human(monkeypatch):
+    _frame, cursor = _native_move_fixture(monkeypatch)
+    _virtual_clock(monkeypatch)
+    late = []
+
+    def read():
+        # A delivery becomes visible on the third read after its event: not at
+        # the read right after it, not at the next sample's settle read, but at
+        # that sample's state read.
+        for entry in late:
+            entry[2] -= 1
+        while late and late[0][2] < 0:
+            dx, dy, _ = late.pop(0)
+            cursor[0] = {"x": cursor[0]["x"] + dx, "y": cursor[0]["y"] + dy}
+        return cursor[0]
+
+    monkeypatch.setattr(observe, "cursor", read)
+    monkeypatch.setattr(
+        observe,
+        "motion_state",
+        lambda _monitors: {
+            "cursor": read(), "monitors": [], "windows": [_frame["window"] | {
+                "visible": True, "hidden": False, "focus_order": 0, "pid": 1,
+            }],
+            "layer_surfaces": [], "focused": observe.focused(),
+        },
+    )
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def move_relative(self, dx, dy):
+            late.append([dx, dy, 2])
+
+    monkeypatch.setattr(actions.uinput, "Device", Device)
+    result = actions.move(CFG, "f1", (60, 60), duration=0.2, hz=30, timeout=2, dry_run=False)
+    assert result["status"] == "converged"
 
 
 def test_native_move_refuses_events_that_never_reach_the_cursor(monkeypatch):

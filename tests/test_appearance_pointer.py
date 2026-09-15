@@ -121,7 +121,7 @@ def test_a_hover_names_the_window_its_dwell_revealed(monkeypatch):
     monkeypatch.setattr(actions, "move", lambda *a, **k: pytest.fail("hover opened a second watch"))
     monkeypatch.setattr(frames, "load", lambda frame_id: {"id": frame_id})
     monkeypatch.setattr(safety, "confirm_pointer", lambda *a: None)
-    monkeypatch.setattr(actions, "_motion_boundary_guard", lambda *a: None)
+    monkeypatch.setattr(actions, "_motion_boundary_guard", lambda *a, **k: None)
     monkeypatch.setattr(safety, "record", lambda *a: None)
 
     result = actions.hover(_cfg(), "f1", (1, 1), dwell=0, dry_run=False)
