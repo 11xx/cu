@@ -216,8 +216,10 @@ ACT THROUGH THE FRAME YOU READ
 
   `focus` redirects keyboard actions without moving the pointer. `warp` places
   the compositor pointer exactly; it emits no native movement. `move` sends
-  bounded native relative samples over a finite duration, with feedback toward
-  the endpoint and no hidden final warp. Its complete sampled route is checked
+  bounded native relative samples over a finite duration (0.08 s by default),
+  eased from rest into the endpoint and sampled at the refresh rate of the
+  output it is on unless --hz says otherwise, with feedback toward the endpoint
+  and no hidden final warp. Its complete sampled route is checked
   before injection, and live safety is rechecked at each injection boundary;
   the declared timeout includes that preflight. Each submitted event gets a
   bounded delivery-settle read before another correction. Use --duration, --hz,

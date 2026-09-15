@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 from pathlib import Path
 
@@ -50,13 +51,58 @@ def _run(args: list[str], timeout: float = 5.0) -> str:
     return proc.stdout
 
 
+def request_socket() -> Path | None:
+    d = socket_dir()
+    return d / ".socket.sock" if d else None
+
+
+def _request(request: str, timeout: float = 5.0) -> str:
+    """Send one request on the compositor's command socket; the reply ends at EOF.
+
+    The socket answers in a fraction of a millisecond where spawning `hyprctl`
+    costs several, and native movement reads the desktop between every event.
+    """
+    path = request_socket()
+    if path is None or not path.is_socket():
+        raise HyprError("the Hyprland request socket is unavailable")
+    chunks = []
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(timeout)
+            conn.connect(str(path))
+            conn.sendall(request.encode())
+            while chunk := conn.recv(65536):
+                chunks.append(chunk)
+    except OSError as exc:
+        raise HyprError(f"hyprland request {request!r}: {exc}") from exc
+    return b"".join(chunks).decode()
+
+
 def query(what: str) -> object:
     """Run a read-only JSON query such as `monitors` or `clients`."""
-    raw = _run([what, "-j"])
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise HyprError(f"hyprctl {what} -j returned non-JSON: {raw[:200]!r}") from exc
+    return batch([what])[0]
+
+
+def batch(queries: list[str]) -> list[object]:
+    """Run several read-only JSON queries in one compositor request, in order."""
+    if len(queries) == 1:
+        raw = _request(f"j/{queries[0]}")
+    else:
+        raw = _request("[[BATCH]]" + ";".join(f"j/{what}" for what in queries))
+    decoder = json.JSONDecoder()
+    results: list[object] = []
+    index = 0
+    while len(results) < len(queries):
+        while index < len(raw) and raw[index].isspace():
+            index += 1
+        try:
+            value, index = decoder.raw_decode(raw, index)
+        except json.JSONDecodeError as exc:
+            raise HyprError(
+                f"hyprland {' '.join(queries)} returned non-JSON: {raw[:200]!r}"
+            ) from exc
+        results.append(value)
+    return results
 
 
 def lua(code: str) -> str:

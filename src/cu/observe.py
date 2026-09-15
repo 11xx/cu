@@ -169,15 +169,16 @@ def reachability(
     }
 
 
-def monitors() -> list[dict[str, Any]]:
+def monitors(raw: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Monitors with both coordinate spaces stated explicitly.
 
     `width`/`height` from Hyprland are physical pixels while `x`/`y` are a
     logical origin; mixing them is the bug this whole project exists to avoid,
-    so both forms are named rather than left to the caller to derive.
+    so both forms are named rather than left to the caller to derive. `raw` is
+    a compositor reply already fetched in a batch.
     """
     out = []
-    for m in hypr.query("monitors"):
+    for m in hypr.query("monitors") if raw is None else raw:
         scale = m["scale"]
         left, top, right, bottom = m["reserved"]
         out.append(
@@ -185,6 +186,7 @@ def monitors() -> list[dict[str, Any]]:
                 "name": m["name"],
                 "id": m.get("id", len(out)),
                 "scale": scale,
+                "refresh_rate": m.get("refreshRate"),
                 "physical": {"w": m["width"], "h": m["height"]},
                 "logical_rect": _rect(
                     m["x"], m["y"], round(m["width"] / scale), round(m["height"] / scale)
@@ -217,10 +219,10 @@ def primary_output(mons: list[dict[str, Any]]) -> str | None:
     return min(enabled, key=lambda m: m["id"])["name"]
 
 
-def layer_surfaces() -> list[dict[str, Any]]:
+def layer_surfaces(raw: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Layer-shell surfaces in desktop-absolute logical coordinates."""
     out = []
-    for monitor, layers in hypr.query("layers").items():
+    for monitor, layers in (hypr.query("layers") if raw is None else raw).items():
         for level, surfaces in layers["levels"].items():
             for surface in surfaces:
                 out.append(
@@ -294,7 +296,9 @@ def _transient_owner(client: dict[str, Any], addresses: set[str]) -> dict[str, A
     return {"status": "known", "source": field, "address": address}
 
 
-def windows(mons: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+def windows(
+    mons: list[dict[str, Any]] | None = None, raw: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
     """Mapped windows, with the monitor named rather than indexed.
 
     Monitor IDs are resolved to names; IDs need not be contiguous after hotplug.
@@ -303,7 +307,8 @@ def windows(mons: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """
     mons = mons if mons is not None else monitors()
     by_id = {m.get("id", i): m for i, m in enumerate(mons)}
-    clients = [c for c in hypr.query("clients") if c.get("mapped", True)]
+    replied = hypr.query("clients") if raw is None else raw
+    clients = [c for c in replied if c.get("mapped", True)]
     addresses = {
         c.get("address") for c in clients if isinstance(c.get("address"), str)
     }
@@ -380,8 +385,8 @@ def layer_surface_at(
     return max(covering, key=lambda surface: surface["level"], default=None)
 
 
-def focused() -> dict[str, Any] | None:
-    active = hypr.query("activewindow")
+def focused(raw: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    active = hypr.query("activewindow") if raw is None else raw
     if not active or "address" not in active:
         return None
     return {
@@ -392,9 +397,28 @@ def focused() -> dict[str, Any] | None:
     }
 
 
-def cursor() -> dict[str, float]:
-    pos = hypr.query("cursorpos")
+def cursor(raw: dict[str, Any] | None = None) -> dict[str, float]:
+    pos = hypr.query("cursorpos") if raw is None else raw
     return {"x": pos["x"], "y": pos["y"]}
+
+
+def motion_state(mons: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """The cursor with the windows, layers and focus it is checked against.
+
+    One compositor request answers all of them, so a check between two native
+    events sees a single moment rather than several. Monitors are read in the
+    same request unless the caller passes the ones it already holds.
+    """
+    names = ["cursorpos", "clients", "layers", "activewindow"]
+    raw = hypr.batch(names if mons is not None else [*names, "monitors"])
+    live = mons if mons is not None else monitors(raw[4])
+    return {
+        "cursor": cursor(raw[0]),
+        "monitors": live,
+        "windows": windows(live, raw[1]),
+        "layer_surfaces": layer_surfaces(raw[2]),
+        "focused": focused(raw[3]),
+    }
 
 
 def desktop_bounds(mons: list[dict[str, Any]]) -> dict[str, float]:

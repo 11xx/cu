@@ -41,17 +41,23 @@ from .safety import Refused
 
 MOTION_TRANSPORT = "uinput-relative-v1"
 WARP_TRANSPORT = "hyprland-compositor-v1"
-DEFAULT_MOVE_DURATION = 0.25
-DEFAULT_MOVE_HZ = 60.0
+DEFAULT_MOVE_DURATION = 0.08
+# None samples at the refresh rate of the output the movement is on: faster adds
+# events no frame shows, slower shows as a stepped pointer.
+DEFAULT_MOVE_HZ: float | None = None
+FALLBACK_MOVE_HZ = 60.0
 DEFAULT_MOVE_TIMEOUT = 2.0
 MAX_MOVE_DURATION = 10.0
 MIN_MOVE_HZ = 5.0
-MAX_MOVE_HZ = 120.0
+MAX_MOVE_HZ = 360.0
 MAX_MOVE_TIMEOUT = 15.0
-# A larger but still finite relative sample keeps long routes inside the
-# deadline without guessing at a device's acceleration curve. Readback remains
-# authoritative after every sample, and safety checks still guard both ends.
-MAX_NATIVE_DELTA = 32
+# One event moves the cursor at most this far, so a long route stays inside its
+# deadline while no single jump crosses more than a short stretch of screen.
+# Readback remains authoritative after every event, and safety checks still
+# guard both ends.
+MAX_CURSOR_STEP = 128.0
+# The device-unit ceiling for one event, whatever gain the cursor has shown.
+MAX_NATIVE_DELTA = 1024
 MOTION_TOLERANCE = 2.0
 MIN_MOTION_REGION = MOTION_TOLERANCE * 2
 NATIVE_SETTLE_TIMEOUT = 0.1
@@ -59,7 +65,7 @@ NATIVE_SETTLE_POLL_SECONDS = 0.005
 MIN_POINTER_GAIN = 0.1
 # Submitted travel that may leave the cursor unmoved before the device is
 # declared disconnected from it. Any real gain shows well within this.
-MAX_ABSORBED_TRAVEL = 4 * MAX_NATIVE_DELTA
+MAX_ABSORBED_TRAVEL = 128.0
 DEFAULT_HOVER_DWELL = 0.2
 MAX_HOVER_DWELL = 10.0
 DWELL_POLL_SECONDS = 0.05
@@ -377,12 +383,13 @@ def _inside(rect: dict[str, float], point: dict[str, float]) -> bool:
     )
 
 
-def _motion_values(duration: float, hz: float, timeout: float) -> None:
-    if not all(math.isfinite(value) for value in (duration, hz, timeout)):
+def _motion_values(duration: float, hz: float | None, timeout: float) -> None:
+    values = (duration, timeout) if hz is None else (duration, hz, timeout)
+    if not all(math.isfinite(value) for value in values):
         raise ValueError("native movement timing values must be finite")
     if not 0 < duration <= MAX_MOVE_DURATION:
         raise ValueError(f"--duration must be greater than 0 and at most {MAX_MOVE_DURATION:g}")
-    if not MIN_MOVE_HZ <= hz <= MAX_MOVE_HZ:
+    if hz is not None and not MIN_MOVE_HZ <= hz <= MAX_MOVE_HZ:
         raise ValueError(f"--hz must be between {MIN_MOVE_HZ:g} and {MAX_MOVE_HZ:g}")
     if not 0 < timeout <= MAX_MOVE_TIMEOUT:
         raise ValueError(f"--timeout must be greater than 0 and at most {MAX_MOVE_TIMEOUT:g}")
@@ -390,11 +397,34 @@ def _motion_values(duration: float, hz: float, timeout: float) -> None:
         raise ValueError("--timeout must be at least --duration")
 
 
+def _motion_hz(
+    requested: float | None,
+    frame: dict[str, Any],
+    monitors: list[dict[str, Any]],
+    point: dict[str, float],
+) -> float:
+    """The requested rate, or the refresh rate of the output the movement is on."""
+    if requested is not None:
+        return requested
+    bound = frame.get("monitor")
+    name = bound.get("name") if isinstance(bound, dict) else bound
+    output = next((m for m in monitors if m["name"] == name), None) or next(
+        (
+            m for m in monitors
+            if not m.get("disabled", False)
+            and observe.contains(m["logical_rect"], point["x"], point["y"])
+        ),
+        None,
+    )
+    rate = (output or {}).get("refresh_rate") or FALLBACK_MOVE_HZ
+    return max(MIN_MOVE_HZ, min(MAX_MOVE_HZ, float(rate)))
+
+
 def _motion_route(
     start: dict[str, float], target: dict[str, float], duration: float, hz: float
 ) -> list[dict[str, float]]:
     samples = max(1, math.ceil(duration * hz))
-    return motion.line((start["x"], start["y"]), (target["x"], target["y"]), samples)
+    return motion.eased_line((start["x"], start["y"]), (target["x"], target["y"]), samples)
 
 
 def _motion_deadline(deadline: float, phase: str) -> None:
@@ -410,24 +440,12 @@ def _motion_cursor() -> dict[str, float]:
     return observe.cursor()
 
 
-def _motion_windows(monitors: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    metrics.count("native_window_read")
-    return observe.windows(monitors)
-
-
-def _motion_monitors() -> list[dict[str, Any]]:
-    metrics.count("native_monitor_read")
-    return observe.monitors()
-
-
-def _motion_layers() -> list[dict[str, Any]]:
-    metrics.count("native_layer_read")
-    return observe.layer_surfaces()
-
-
-def _motion_focus() -> dict[str, Any] | None:
-    metrics.count("native_focus_read")
-    return observe.focused()
+def _motion_state(frame: dict[str, Any], monitors: list[dict[str, Any]]) -> dict[str, Any]:
+    # Output scale and geometry can change without moving a client, so a frame
+    # bound to an output rereads the monitors in the same request; the frame
+    # transform is never carried across a monitor reconfiguration.
+    metrics.count("native_state_read")
+    return observe.motion_state(None if frame.get("monitor") is not None else monitors)
 
 
 def _motion_route_point_guard(
@@ -467,19 +485,6 @@ def _motion_route_point_guard(
     return under
 
 
-def _motion_live_world(
-    frame: dict[str, Any],
-    monitors: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    # Output scale and geometry can change without moving a client. Refresh
-    # them at the same live boundary as the client and layer stacks so the
-    # frame transform is never carried across a monitor reconfiguration.
-    live_monitors = _motion_monitors() if frame.get("monitor") is not None else monitors
-    live_windows = _motion_windows(live_monitors)
-    live_layers = _motion_layers()
-    return live_monitors, live_windows, live_layers
-
-
 def _motion_boundary_guard(
     cfg: dict[str, Any],
     frame: dict[str, Any],
@@ -489,6 +494,8 @@ def _motion_boundary_guard(
     windows: list[dict[str, Any]],
     layer_surfaces: list[dict[str, Any]],
     expected_focus: dict[str, Any] | None,
+    *,
+    live_focus: dict[str, Any] | None,
 ) -> None:
     """Recheck the live recipient and safety state before one native event."""
     metrics.count("native_injection_boundary")
@@ -522,7 +529,7 @@ def _motion_boundary_guard(
     )
     safety.check_frame(cfg, frame, windows, monitors)
     if expected_focus is not None:
-        safety.confirm_focus(expected_focus, _motion_focus())
+        safety.confirm_focus(expected_focus, live_focus)
 
 
 @contextmanager
@@ -583,13 +590,15 @@ def _settle_native_delivery(
     delta: tuple[int, int],
     frame: dict[str, Any],
     deadline: float,
+    *,
+    wait: float = NATIVE_SETTLE_TIMEOUT,
 ) -> dict[str, float]:
     """Wait briefly for a submitted event to become visible to cursor reads.
 
     Returns the origin when the wait expires unmoved: the compositor may have
     absorbed the event below one reported pixel, which `_PointerGain` bounds.
     """
-    settle_deadline = min(deadline, time.monotonic() + NATIVE_SETTLE_TIMEOUT)
+    settle_deadline = min(deadline, time.monotonic() + wait)
     while True:
         safety.check_abort()
         _motion_deadline(deadline, "native delivery")
@@ -628,6 +637,10 @@ class _PointerGain:
             gain = max(MIN_POINTER_GAIN, self.observed / self.submitted)
         else:
             gain = max(MIN_POINTER_GAIN, 0.5**self.unseen_events)
+        distance = math.hypot(error_x, error_y)
+        if distance > MAX_CURSOR_STEP:
+            error_x *= MAX_CURSOR_STEP / distance
+            error_y *= MAX_CURSOR_STEP / distance
         return (
             max(-MAX_NATIVE_DELTA, min(MAX_NATIVE_DELTA, round(error_x / gain))),
             max(-MAX_NATIVE_DELTA, min(MAX_NATIVE_DELTA, round(error_y / gain))),
@@ -652,6 +665,16 @@ class _PointerGain:
                 "native pointer events never reached the cursor; "
                 "inspect the pointer and device state",
             )
+
+    def arrived(
+        self, origin: dict[str, float], current: dict[str, float], delta: tuple[int, int]
+    ) -> None:
+        """Count an event recorded as unseen whose motion showed at a later read."""
+        size = math.hypot(*delta)
+        moved_x, moved_y = current["x"] - origin["x"], current["y"] - origin["y"]
+        self.observed += max(0.0, (moved_x * delta[0] + moved_y * delta[1]) / size)
+        self.unseen_travel = 0.0
+        self.unseen_events = 0
 
 
 def move(
@@ -717,8 +740,9 @@ def _move(
                 "native movement needs an inspected region at least "
                 f"{MIN_MOTION_REGION:g} logical pixels wide and high",
             )
-        route = _motion_route(start, endpoint, duration, hz)
         monitors = target["snapshot"]["monitors"]
+        hz = _motion_hz(hz, frame, monitors, start)
+        route = _motion_route(start, endpoint, duration, hz)
         windows = target["snapshot"]["windows"]
         layers = target["snapshot"].get("layer_surfaces", [])
         expected_focus = target["snapshot"].get("focused")
@@ -805,30 +829,41 @@ def _move(
             if remaining > 0:
                 time.sleep(min(remaining, max(0.0, deadline - time.monotonic())))
             _motion_deadline(deadline, "scheduled movement")
+            late: tuple[dict[str, float], tuple[int, int]] | None = None
             if pending_own is not None:
                 origin, pending_delta = pending_own
                 with metrics.span("native_delivery"):
-                    actual = _settle_native_delivery(origin, pending_delta, frame, deadline)
+                    # A whole sample period has passed since the event, so one
+                    # read settles it. Waiting longer would stall the route on
+                    # every step the pointer gain absorbs below a pixel.
+                    actual = _settle_native_delivery(
+                        origin, pending_delta, frame, deadline, wait=0.0
+                    )
                 pointer_gain.record(origin, actual, pending_delta)
+                if actual == origin:
+                    late = (origin, pending_delta)
                 last_own_cursor = actual
                 pending_own = None
-                # The bounded settle read is already the safety sample closest
-                # to this boundary. Reading the same cursor again only pays the
-                # IPC cost twice for delayed delivery.
-                current = actual
-            else:
-                current = _motion_cursor()
+            _motion_deadline(deadline, "injection preflight")
+            # One request reads the cursor together with the world it is checked
+            # against, cheap enough to repeat at the output's refresh rate.
+            state = _motion_state(frame, monitors)
+            current = state["cursor"]
+            if late is not None and current != last_own_cursor:
+                # The unseen event arrived after all; it must still agree with
+                # what was submitted, or the displacement is someone else's.
+                _confirm_native_delivery(late[0], current, late[1], frame)
+                pointer_gain.arrived(late[0], current, late[1])
+                last_own_cursor = current
             _confirm_motion_cursor(last_own_cursor, current, phase="sample")
             if not _inside(frame["logical_rect"], current):
                 raise Refused(
                     exits.HUMAN_ACTIVE,
                     "pointer left the inspected native movement region",
                 )
-            _motion_deadline(deadline, "injection preflight")
-            live_monitors, live_windows, live_layers = _motion_live_world(frame, monitors)
             _motion_boundary_guard(
-                cfg, frame, current, waypoint, live_monitors, live_windows, live_layers,
-                expected_focus,
+                cfg, frame, current, waypoint, state["monitors"], state["windows"],
+                state["layer_surfaces"], expected_focus, live_focus=state["focused"],
             )
             dx, dy = pointer_gain.delta(waypoint["x"] - current["x"], waypoint["y"] - current["y"])
             if dx or dy:
@@ -855,13 +890,12 @@ def _move(
                     pointer_gain.record(origin, actual, pending_delta)
                     last_own_cursor = actual
                     pending_own = None
-                else:
-                    actual = _motion_cursor()
+                state = _motion_state(frame, monitors)
+                actual = state["cursor"]
                 _confirm_motion_cursor(last_own_cursor, actual, phase="convergence")
-                live_monitors, live_windows, live_layers = _motion_live_world(frame, monitors)
                 _motion_boundary_guard(
-                    cfg, frame, actual, endpoint, live_monitors, live_windows, live_layers,
-                    expected_focus,
+                    cfg, frame, actual, endpoint, state["monitors"], state["windows"],
+                    state["layer_surfaces"], expected_focus, live_focus=state["focused"],
                 )
                 residual = math.hypot(endpoint["x"] - actual["x"], endpoint["y"] - actual["y"])
                 if residual <= MOTION_TOLERANCE:
@@ -960,6 +994,7 @@ def hover(
                     live_windows,
                     live_layers,
                     initial.get("focused"),
+                    live_focus=snap.get("focused"),
                 )
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
