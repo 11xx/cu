@@ -1881,6 +1881,7 @@ def cmd_present(args: argparse.Namespace) -> int:
         cfg,
         window,
         output_name=args.output,
+        mode="maximize" if args.maximize else "center",
         why=getattr(args, "why", ""),
         dry_run=args.dry_run,
     )
@@ -2549,6 +2550,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         metavar="NAME",
         help="Active output to center the window on (default: its visible output)",
+    )
+    present.add_argument(
+        "--maximize",
+        action="store_true",
+        help="Maximize the window on its own output instead of centering it",
     )
 
     restore = add_injecting(

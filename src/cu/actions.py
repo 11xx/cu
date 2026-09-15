@@ -216,13 +216,14 @@ def present(
     window: dict[str, Any],
     *,
     output_name: str | None = None,
+    mode: str = "center",
     why: str = "",
     dry_run: bool,
     seam: presentation.WindowSeam | None = None,
     store: presentation.TokenStore | None = None,
     snapshot_reader: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Explicitly float and center one visible window, with read-back guards."""
+    """Explicitly center or maximize one visible window, with read-back guards."""
     safety.check_abort()
     safety.check_session()
     safety.check_denylist(cfg, window)
@@ -232,6 +233,7 @@ def present(
             window,
             reader(),
             output_name=output_name,
+            mode=mode,
             snapshot_reader=reader,
             seam=seam or presentation.hyprland_seam(),
             store=store or presentation.RuntimeTokenStore(),
