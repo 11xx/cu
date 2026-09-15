@@ -19,6 +19,8 @@ the extension connects its native host and waits; neither step binds a page.
 A CU session binds and releases tabs from the command line, with no browser click:
 
 ```sh
+cu web tabs --json                  # tab and window ids, and which is active or bound
+cu web tabs --titles --json         # adds titles and URLs, as untrusted page text
 cu web grant --json                 # the active tab, for reads and interaction
 cu web grant --tab 12 --read-only   # a named tab, for reads and waits only
 cu web stop --json
@@ -29,6 +31,11 @@ acting commands. One tab is bound at a time, and granting while one is bound
 refuses as `session-active`. A read grant cannot silently acquire interaction
 authority: stop it and grant again. `cu web stop` revokes the grant, cancels its
 waits, and removes the indicator; it works after a user abort.
+
+`cu web tabs` needs no grant and reads no page. It lists at most 128 tabs, each
+with its tab and window ids, its index, and whether it is active in its window,
+hidden, or bound. `--titles` adds each tab's title and its URL without query
+string or fragment; both are page-controlled text and marked untrusted.
 
 Reload, navigation, moving a tab to another window, tab closure, and native
 disconnect revoke the grant, and nothing carries over to the new document; the
@@ -266,7 +273,7 @@ combined with `--region`.
 ## Transport and refusals
 
 The extension ID is `cu-browser-read@local`, the native host is `org.cu.read`, and
-the protocol is `cu-browser-read`, version **8**. Extension and host versions must
+the protocol is `cu-browser-read`, version **9**. Extension and host versions must
 match. Frames use native-endian uint32 length plus UTF-8 JSON, bounded at 1 MiB.
 Session controls that bind (`grant`) and release (`release`) a tab, and attach
 (`debug-attach`) or detach (`debug-detach`) the debugger, travel the same channel

@@ -32,7 +32,7 @@ from typing import Any, BinaryIO, Self
 from . import png
 
 PROTOCOL = "cu-browser-read"
-VERSION = 8
+VERSION = 9
 MAX_MESSAGE_BYTES = 1 << 20
 MAX_RECV_CHUNK_BYTES = 64 << 10
 MAX_PENDING_REQUESTS = 64
@@ -94,7 +94,7 @@ ACTION_OPERATIONS = (
 # A receipt from any other backend does not describe the operation that was sent.
 _ACTION_BACKENDS = {"reload": "tabs", **dict.fromkeys(TRUSTED_INPUT, "debugger")}
 OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
-CONTROL_OPERATIONS = frozenset({"grant", "release", "debug-attach", "debug-detach"})
+CONTROL_OPERATIONS = frozenset({"grant", "release", "debug-attach", "debug-detach", "tabs"})
 CAPABILITIES = frozenset({"read", "interact"})
 _OBSERVE_FIELDS = frozenset({"include_values", "limit", "selector", "include_details"})
 _CAPTURE_FIELDS = frozenset({"region", "full_page"})
@@ -897,7 +897,17 @@ def validate_control(message: Mapping[str, Any]) -> dict[str, Any]:
     _exact_fields(
         control,
         {"protocol", "version", "type", "id", "operation", "tab_id"},
-        {"protocol", "version", "type", "id", "operation", "tab_id", "capabilities", "cursor"},
+        {
+            "protocol",
+            "version",
+            "type",
+            "id",
+            "operation",
+            "tab_id",
+            "capabilities",
+            "cursor",
+            "include_titles",
+        },
     )
     _validate_envelope(control, "control")
     operation = control["operation"]
@@ -912,6 +922,14 @@ def validate_control(message: Mapping[str, Any]) -> dict[str, Any]:
         "operation": operation,
         "tab_id": None if tab_id is None else _bounded_int(tab_id, "tab_id", 2**31 - 1, minimum=1),
     }
+    if operation != "tabs" and "include_titles" in control:
+        raise ProtocolError(f"{operation} takes no include_titles")
+    if operation == "tabs":
+        if result["tab_id"] is not None:
+            raise ProtocolError("tabs lists every tab and takes no tab_id")
+        result["include_titles"] = _bounded_bool(
+            control.get("include_titles", False), "include_titles"
+        )
     if operation != "grant":
         if "capabilities" in control or "cursor" in control:
             raise ProtocolError(f"{operation} takes no capabilities or cursor")
@@ -928,6 +946,7 @@ def make_control(
     tab_id: int | None = None,
     capabilities: list[str] | None = None,
     cursor: bool | None = None,
+    include_titles: bool | None = None,
 ) -> dict[str, Any]:
     """Build a session control after applying the same allowlist used by the host."""
     control: dict[str, Any] = {
@@ -942,6 +961,8 @@ def make_control(
         control["capabilities"] = capabilities
     if cursor is not None:
         control["cursor"] = cursor
+    if include_titles is not None:
+        control["include_titles"] = include_titles
     return validate_control(control)
 
 
@@ -998,7 +1019,7 @@ def _validate_grants(value: Any) -> list[dict[str, Any]]:
     return grants
 
 
-def _validate_response(message: Mapping[str, Any]) -> dict[str, Any]:
+def _validate_response(message: Mapping[str, Any], *, identity: bool = True) -> dict[str, Any]:
     response = _object(message, "response")
     allowed = {
         "protocol",
@@ -1023,7 +1044,8 @@ def _validate_response(message: Mapping[str, Any]) -> dict[str, Any]:
     if "document_id" in response:
         _bounded_string(response["document_id"], "response document_id", MAX_DOCUMENT_ID_CHARS)
     if ok:
-        _exact_fields(response, {"session", "tab_id", "document_id"}, allowed)
+        if identity:
+            _exact_fields(response, {"session", "tab_id", "document_id"}, allowed)
         if "result" not in response or not isinstance(response["result"], Mapping):
             raise ProtocolError("successful responses require a result object")
     else:
@@ -1349,10 +1371,17 @@ class BrowserReadClient:
         tab_id: int | None = None,
         capabilities: list[str] | None = None,
         cursor: bool | None = None,
+        include_titles: bool | None = None,
         timeout: float | None = None,
     ) -> dict[str, Any]:
-        """Bind or release a tab for the calling CU session; returns no page content."""
-        control = make_control(operation, tab_id=tab_id, capabilities=capabilities, cursor=cursor)
+        """Send one session control: bind, release, attach, detach, or list tabs."""
+        control = make_control(
+            operation,
+            tab_id=tab_id,
+            capabilities=capabilities,
+            cursor=cursor,
+            include_titles=include_titles,
+        )
         wait = self._timeout if timeout is None else timeout
         deadline = _deadline(wait)
         if not self._lock.acquire(timeout=wait):
@@ -1378,7 +1407,7 @@ class BrowserReadClient:
                         raise ProtocolError("helper returned an unsupported message")
                     if response.get("id") != control["id"]:
                         raise MismatchedResponse("helper response id did not match the control")
-                    return _validate_response(response)
+                    return _validate_response(response, identity=control["operation"] != "tabs")
             except TimeoutError as exc:
                 self.close()
                 raise BrowserReadTimeout("session control exceeded its deadline") from exc
@@ -1598,7 +1627,7 @@ def _validate_native_message(message: Mapping[str, Any]) -> dict[str, Any]:
             )
         return result
     if message_type == "response":
-        return _validate_response(value)
+        return _validate_response(value, identity=False)
     raise ProtocolError("unsupported native message type")
 
 
@@ -1769,6 +1798,10 @@ class NativeMessagingHost:
         if pending is None:
             return  # The local caller can time out and close before the browser replies.
         peer, request = pending
+        # Only a tab listing answers without naming the grant it acts under.
+        listing = request.get("type") == "control" and request["operation"] == "tabs"
+        if value["ok"] and not listing and not {"session", "tab_id", "document_id"} <= set(value):
+            raise ProtocolError("successful responses must name their session, tab and document")
         for field in ("session", "tab_id", "document_id"):
             expected = request.get(field)
             if field in value and expected is not None and value[field] != expected:

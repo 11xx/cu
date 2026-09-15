@@ -56,6 +56,9 @@ def bridge(monkeypatch):
 
         def control(self, operation, **kwargs):
             state.controls.append((operation, kwargs))
+            if operation == "tabs":
+                listed = {"tab_id": 4, "window_id": 1, "index": 0, "active": True}
+                return {"ok": True, "result": {"kind": "tabs", "tabs": [listed], "total": 1}}
             if operation.startswith("debug-"):
                 attached = "attached" if operation == "debug-attach" else "detached"
                 return {"ok": True, "result": {"grant": grant, "debugger": attached}}
@@ -429,6 +432,23 @@ def test_a_wait_ended_by_revocation_refuses_instead_of_timing_out(bridge, capsys
             }
         )
     assert uncertain.value.code == exits.BROWSER_ACTION_UNCERTAIN
+
+
+def test_tabs_lists_ids_and_asks_for_titles_only_with_the_flag(bridge, capsys):
+    assert cli.main(["web", "tabs", "--json"]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["result"]["tabs"][0]["tab_id"] == 4
+    assert listed["untrusted_page_content"] is False
+    assert cli.main(["web", "tabs", "--titles", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["untrusted_page_content"] is True
+    timeout = wire.DEFAULT_TIMEOUT
+    assert bridge.controls == [
+        ("tabs", {"include_titles": False, "timeout": timeout}),
+        ("tabs", {"include_titles": True, "timeout": timeout}),
+    ]
+    with pytest.raises(SystemExit) as refused:
+        cli.main(["web", "tabs", "--tab", "4"])
+    assert refused.value.code == exits.USAGE
 
 
 def test_grant_binds_through_the_interlocks_and_stop_releases(bridge, capsys):

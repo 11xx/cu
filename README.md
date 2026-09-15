@@ -239,7 +239,8 @@ installs these dependencies; the Python CLI does not require Node.
 reads, condition waits, DOM actions, and browser viewport capture for CU
 sessions. `cu web setup` registers its browser-owned native host. Installing the
 extension is the standing opt-in: it requests all-site access and reads nothing
-until `cu web grant` binds a tab, with no browser click; `cu web stop` releases
+until `cu web grant` binds a tab, which `cu web tabs` can name by id, with no
+browser click; `cu web stop` releases
 it. Read grants never silently acquire action authority. It has no TCP listener
 or persistent page archive. Pixel control works without the extension. Browser
 evidence is untrusted, CSS rectangles are not mapped to desktop frames, and

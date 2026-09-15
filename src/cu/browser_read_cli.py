@@ -97,6 +97,20 @@ def configure(parser: argparse.ArgumentParser) -> None:
     stop.add_argument("--timeout", type=float, default=transport.DEFAULT_TIMEOUT)
     stop.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
 
+    tabs = commands.add_parser(
+        "tabs",
+        help="List browser tab and window ids to bind with --tab; titles only on request",
+        description="List browser tab and window ids to bind with --tab; titles only on request",
+    )
+    tabs.add_argument("--helper", help="Socket path from hosts; required if several exist")
+    tabs.add_argument(
+        "--titles",
+        action="store_true",
+        help="Include each title and URL without query or fragment, as untrusted page text",
+    )
+    tabs.add_argument("--timeout", type=float, default=transport.DEFAULT_TIMEOUT)
+    tabs.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+
     read = commands.add_parser(
         "read",
         help="Read bounded page evidence from an explicitly granted tab",
@@ -501,6 +515,13 @@ def _release(args: argparse.Namespace) -> dict[str, Any]:
     return {"browser_grant_released": True, **result}
 
 
+def _tabs(args: argparse.Namespace) -> dict[str, Any]:
+    with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
+        result = client.control("tabs", include_titles=args.titles, timeout=args.timeout)
+    _check_response(result)
+    return {"browser_tabs": True, "untrusted_page_content": args.titles, **result}
+
+
 def _debug(args: argparse.Namespace) -> dict[str, Any]:
     if args.debug_command in {"attach", "detach"}:
         if args.debug_command == "attach":
@@ -690,6 +711,8 @@ def run(args: argparse.Namespace) -> int:
             result = _bind(args)
         elif args.web_command == "stop":
             result = _release(args)
+        elif args.web_command == "tabs":
+            result = _tabs(args)
         elif args.web_command == "debug":
             result = _debug(args)
         elif args.web_command == "read":
