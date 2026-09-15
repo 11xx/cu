@@ -167,7 +167,9 @@ def warp(cfg: dict[str, Any], x: float, y: float, *, dry_run: bool) -> dict[str,
     return landed
 
 
-def focus(cfg: dict[str, Any], window: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def focus(
+    cfg: dict[str, Any], window: dict[str, Any], *, dry_run: bool, maximize: bool = True
+) -> dict[str, Any]:
     """Give a window keyboard focus.
 
     `type` and `key` act on whatever is focused, so without this an agent's
@@ -182,8 +184,39 @@ def focus(cfg: dict[str, Any], window: dict[str, Any], *, dry_run: bool) -> dict
         hypr.lua(f'hl.dispatch(hl.dsp.focus({{window = "address:{window["address"]}"}}))')
         safety.confirm_focus(window, observe.focused())
     result = {"action": "focus", "window": _describe(window), "dry_run": dry_run}
+    if maximize and not dry_run:
+        result["presentation"] = _maximize_focused_browser(cfg, window)
     safety.record(cfg, result)
     return result
+
+
+def _maximize_focused_browser(cfg: dict[str, Any], window: dict[str, Any]) -> dict[str, Any]:
+    """Maximize a browser a session focused, and leave its restore to that session.
+
+    Focus has already succeeded, so an arrangement that cannot be made is
+    reported beside it rather than undoing it. Without a session there is no
+    end to restore the window at, so nothing is arranged.
+    """
+    from cu import browser, status
+
+    session = status.current_session()
+    if session is None:
+        return {"status": "not-requested", "reason": "no session would restore it"}
+    if cfg["presentation"]["maximize_on_focus"] == "never":
+        return {"status": "not-requested", "reason": "presentation.maximize_on_focus is never"}
+    if browser.for_window_class(window.get("class") or "") is None:
+        return {"status": "not-requested", "reason": "not an installed browser"}
+    if window.get("fullscreen"):
+        return {"status": "not-needed", "reason": "already maximized or fullscreen"}
+    try:
+        presented = present(
+            cfg, window, mode="maximize", why="maximize the focused browser", dry_run=False
+        )
+    except Refused as refusal:
+        return {"status": "refused", "code": refusal.code, "reason": refusal.reason}
+    if not status.attach_presentation(presented["token"], session):
+        return {"status": "maximized", "token": presented["token"], "restore": "caller"}
+    return {"status": "maximized", "token": presented["token"], "restore": "session end"}
 
 
 def _presentation_guard(cfg: dict[str, Any], window: dict[str, Any]) -> None:

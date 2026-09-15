@@ -235,6 +235,7 @@ def test_every_command_the_tactic_names_exists(command):
     assert command in guide.GUIDE
 
 
-def test_guide_keeps_arrangement_explicit_and_capture_observational():
+def test_guide_bounds_automatic_arrangement_and_keeps_capture_observational():
     assert "Capture does not arrange a window" in guide.GUIDE
-    assert "no automatic" in guide.GUIDE
+    assert "Without a session nothing is arranged" in guide.GUIDE
+    assert "--no-maximize" in guide.GUIDE

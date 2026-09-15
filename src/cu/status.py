@@ -490,6 +490,41 @@ def begin(
     return dict(driver)
 
 
+def _session_key(drivers: list[dict[str, Any]], session: str | None) -> str:
+    key = session or current_session()
+    if key is not None:
+        return key
+    if len(drivers) != 1:
+        ids = ", ".join(d["id"] for d in drivers) or "none"
+        raise ValueError(
+            f"name the session to end with --session; {len(drivers)} are open ({ids})"
+        )
+    return drivers[0]["id"]
+
+
+def attach_presentation(token: str, session: str) -> bool:
+    """Hand a presentation cu made on its own initiative to the session's end.
+
+    Only an arrangement the caller did not ask for is attached: an explicit
+    `cu present` already returned its token to whoever asked. Returns whether
+    the session was open to take it.
+    """
+    with _registry() as drivers:
+        driver = _find(drivers, session)
+        if driver is None:
+            return False
+        driver["presentations"] = [*driver.get("presentations", []), token]
+        return True
+
+
+def presentations(session: str | None = None) -> tuple[str, list[str]]:
+    """The session an end would close, and the presentations it should restore."""
+    with _registry() as drivers:
+        key = _session_key(drivers, session)
+        driver = _find(drivers, key)
+        return key, list(driver.get("presentations", [])) if driver else []
+
+
 def end(session: str | None = None) -> dict[str, Any]:
     """Close one bracket, rather than waiting for it to expire.
 
@@ -501,15 +536,8 @@ def end(session: str | None = None) -> dict[str, Any]:
     there is nothing to confuse it with. With several, the caller is asked
     which, since guessing would clear an indicator that is still true.
     """
-    key = session or current_session()
     with _registry() as drivers:
-        if key is None:
-            if len(drivers) != 1:
-                ids = ", ".join(d["id"] for d in drivers) or "none"
-                raise ValueError(
-                    f"name the session to end with --session; {len(drivers)} are open ({ids})"
-                )
-            key = drivers[0]["id"]
+        key = _session_key(drivers, session)
         ended = _find(drivers, key)
         drivers[:] = [d for d in drivers if d.get("id") != key]
         remaining = len(drivers)
