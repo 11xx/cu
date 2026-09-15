@@ -245,8 +245,13 @@ ACT THROUGH THE FRAME YOU READ
   each interlock runs and the log is written without changing the desktop.
 
   `focus` is the explicit operation that can bring a named window's workspace
-  into view. Capture does not arrange a window. There is no automatic
-  arrangement: presentation is a separate explicit request.
+  into view. Capture does not arrange a window. Focusing an installed browser
+  inside a session also maximizes it, since a task inside a browser works in
+  one window: the receipt's `presentation` names the outcome, ending the
+  session restores the window while it is unchanged, and `--no-maximize` or
+  `presentation.maximize_on_focus = "never"` leaves the arrangement alone.
+  Without a session nothing is arranged, because nothing would restore it.
+  Every other arrangement is a separate explicit request.
   `present WINDOW` is the separate, explicit arrangement request: it requires
   a visible window, uses its active output unless `--output NAME` selects
   another active output, makes a tiled target floating when needed, and moves
@@ -362,7 +367,9 @@ SAY WHAT YOU ARE DOING
   rather than doing something to the desktop, so there is no intent to show.
   Open a session for anything spanning more than a couple of commands —
   without one the indicator clears while you are thinking, which reads to the
-  user as "it finished".
+  user as "it finished". Ending a session restores each browser it maximized
+  on focus, only while that window is unchanged; the result lists every
+  restore, and a refused one leaves the window as it is.
 
   `session begin` prints an id, and every command inside the session should say
   it belongs there: through CU_SESSION as above, or --session ID if you cannot

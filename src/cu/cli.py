@@ -1862,13 +1862,17 @@ def cmd_focus(args: argparse.Namespace) -> int:
     cfg = config.load()
     snap = observe.snapshot()
     window = _resolve_window(args.selector, snap)
-    result = actions.focus(cfg, window, dry_run=args.dry_run)
+    result = actions.focus(
+        cfg, window, dry_run=args.dry_run, maximize=not getattr(args, "no_maximize", False)
+    )
     _emit(
         result,
         args.json,
         lambda r: print(
             f"{'would focus' if r['dry_run'] else 'focused'} "
             f"{r['window']['class']}  {r['window']['title'][:60]}"
+            + ("; maximized until the session ends"
+               if r.get("presentation", {}).get("status") == "maximized" else "")
         ),
     )
     return exits.OK
@@ -2109,15 +2113,42 @@ def cmd_session(args: argparse.Namespace) -> int:
         record = status.begin(purpose, pid=args.pid, exclusive=args.exclusive)
         _emit(record, args.json, lambda r: print(r["id"]))
         return exits.OK
-    record = status.end(getattr(args, "session", None))
-    _emit(
-        record,
-        args.json,
+    key, tokens = status.presentations(getattr(args, "session", None))
+    restored = []
+    if tokens:
+        cfg = config.load()
+        busy_wait = cfg["safety"]["busy_wait_ms"] / 1000
+        # Newest first, so a window presented twice returns through each state.
+        # Restoring changes the desktop, so it takes the same hold and honours
+        # another agent's reservation exactly as an injecting command does.
+        with (
+            context.active(key),
+            desktop.held("session", "restore what the session arranged", wait=busy_wait),
+        ):
+            for token in reversed(tokens):
+                try:
+                    status.check_exclusive(key)
+                    actions.restore(
+                        cfg, token, why="restore what the session arranged", dry_run=False
+                    )
+                    restored.append({"token": token, "status": "restored"})
+                except Refused as refusal:
+                    restored.append(
+                        {"token": token, "status": "refused", "code": refusal.code,
+                         "reason": refusal.reason}
+                    )
+    record = {**status.end(key), "restored": restored}
+
+    def render(r: dict[str, Any]) -> None:
         # A session that had already expired reports that, rather than the
         # "ended" of one that was live a moment ago. They mean different things
         # to whoever is reading: one of them says the bracket was too short.
-        lambda r: print(f"ended {r['ended']}" if r["was_open"] else f"{r['ended']} was not open"),
-    )
+        print(f"ended {r['ended']}" if r["was_open"] else f"{r['ended']} was not open")
+        for item in r["restored"]:
+            print(f"  {item['status']} {item['token']}" + (
+                f": {item['reason']}" if item["status"] == "refused" else ""))
+
+    _emit(record, args.json, render)
     return exits.OK
 
 
@@ -2546,6 +2577,11 @@ def build_parser() -> argparse.ArgumentParser:
     focus.add_argument(
         "selector",
         help="'active', a window address, or a class substring",
+    )
+    focus.add_argument(
+        "--no-maximize",
+        action="store_true",
+        help="Leave a browser's arrangement alone instead of maximizing it for the session",
     )
 
     present = add_injecting(

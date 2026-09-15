@@ -175,6 +175,13 @@ DEFAULTS: dict[str, Any] = {
         # dispatcher, so they always take the uinput path.
         "key_backend": "uinput",
     },
+    # How cu arranges a window it was not explicitly asked to present. A task
+    # inside a browser works in one window, so "browsers" maximizes an installed
+    # browser focused inside a session and ending that session restores it;
+    # "never" leaves every arrangement to `cu present`.
+    "presentation": {
+        "maximize_on_focus": "browsers",
+    },
     # Semantic action -> chord, per window class, with "*" as the entry for
     # applications that have no table of their own. `cu key --action` resolves
     # here and refuses when neither matches, because guessing a chord performs
@@ -267,6 +274,8 @@ def load(path: Path | None = None) -> dict[str, Any]:
         value = cfg["safety"][field]
         if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
             raise ConfigError(f"safety.{field} must be a list of strings")
+    if cfg["presentation"]["maximize_on_focus"] not in ("browsers", "never"):
+        raise ConfigError("presentation.maximize_on_focus must be 'browsers' or 'never'")
     backend = cfg["input"]["key_backend"]
     valid_backends = ("compositor", "uinput")
     if backend not in valid_backends:
