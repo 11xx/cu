@@ -191,6 +191,24 @@ def test_desktop_bounds_with_no_outputs():
     assert observe.desktop_bounds([])["w"] == 0
 
 
+def test_primary_output_is_the_enabled_output_numbered_first(monitors):
+    assert observe.primary_output(monitors) == "DP-1"
+    monitors[0]["id"] = 5
+    assert observe.primary_output(monitors) == "DP-2"
+    monitors[1]["disabled"] = True
+    assert observe.primary_output(monitors) == "DP-1"
+    monitors[0]["disabled"] = True
+    assert observe.primary_output(monitors) is None
+
+
+def test_doctor_names_the_primary_output(monitors, monkeypatch):
+    monkeypatch.setattr(observe, "monitors", lambda: monitors)
+    named = checks.primary_output()
+    assert named["status"] == checks.OK and named["detail"].startswith("DP-1 ")
+    monkeypatch.setattr(observe, "monitors", lambda: [])
+    assert checks.primary_output()["status"] == checks.WARN
+
+
 def test_reachability_reports_intersections_and_full_coverage():
     result = observe.reachability(
         {"x": 10, "y": 20, "w": 30, "h": 40},

@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import hypr
+from . import hypr, observe
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 
@@ -37,6 +37,18 @@ def compositor() -> dict[str, Any]:
         return _check("compositor", OK, hypr.version())
     except hypr.HyprError as exc:
         return _check("compositor", FAIL, str(exc), "Is the compositor running?")
+
+
+def primary_output() -> dict[str, Any]:
+    try:
+        name = observe.primary_output(observe.monitors())
+    except hypr.HyprError as exc:
+        return _check("primary_output", WARN, str(exc), "Is the compositor running?")
+    if name is None:
+        return _check("primary_output", WARN, "no enabled output", "Enable an output.")
+    return _check(
+        "primary_output", OK, f"{name} (lowest enabled output id; computer use works here)"
+    )
 
 
 def lua_api() -> dict[str, Any]:
@@ -257,7 +269,7 @@ def runtime_dir() -> dict[str, Any]:
 def run_all() -> list[dict[str, Any]]:
     results = [compositor()]
     if results[0]["status"] != FAIL:
-        results += [lua_api(), key_dispatcher(), event_socket()]
+        results += [lua_api(), key_dispatcher(), event_socket(), primary_output()]
     results += [runtime_dir(), uinput(), xremap_filter(), session_unlocked(), abort_flag()]
     results += binaries()
     return results
