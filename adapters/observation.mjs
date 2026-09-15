@@ -67,6 +67,23 @@ function validate(request) {
   return { actions, shot };
 }
 
+// A window that opened during the actions is most likely the application's
+// answer, and a capture bound to the old target can exclude it, so the capture
+// widens to the output that holds the new window.
+function appearedWindows(batch) {
+  const steps = Array.isArray(batch?.completed) ? batch.completed : [];
+  return steps.flatMap((step) => {
+    const windows = step?.result?.appeared?.windows;
+    return Array.isArray(windows) ? windows.map((window) => ({ ...window, step: step.step })) : [];
+  });
+}
+
+function captureForAppeared(appeared, requested) {
+  const monitor = appeared.find((window) => typeof window.monitor === "string" && window.monitor)?.monitor;
+  if (!monitor) return null;
+  return { reason: "window-appeared", requested: [...requested], used: ["--output", monitor] };
+}
+
 function parseJsonObject(output, name) {
   const text = output.trim();
   if (!text) throw new Error(`${name} returned no JSON result`);
@@ -147,9 +164,13 @@ export async function observeTogether(request, options = {}) {
         report.correlation = { actions_invocation_id: actionResult.invocation_id };
       }
       if (result.code !== 0) return textResult(report);
+      const appeared = appearedWindows(actionResult);
+      if (appeared.length) report.appeared = appeared;
     } else report.actions = { status: "not-requested" };
     phase = "capture";
-    const result = await runCu(["shot", ...shot, ...common], "", options);
+    const override = report.appeared ? captureForAppeared(report.appeared, shot) : null;
+    if (override) report.capture_override = override;
+    const result = await runCu(["shot", ...(override?.used ?? shot), ...common], "", options);
     if (result.code !== 0) {
       report.error = { phase, code: result.code, detail: result.stderr };
       return textResult(report);

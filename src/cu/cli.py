@@ -2163,6 +2163,7 @@ def cmd_batch(args: argparse.Namespace) -> int:
                      and w["address"] == snap["focused"]["address"]), None)
     completed = []
     failure = None
+    stopped = None
     for index, step in enumerate(parsed, 1):
         output, errors = io.StringIO(), io.StringIO()
         def invoke(step=step, expected=expected):
@@ -2194,8 +2195,15 @@ def cmd_batch(args: argparse.Namespace) -> int:
         if (not args.dry_run and step.command in {"focus", "click", "type"}
                 and result.get("window")):
             expected = result["window"]
-    payload = {"completed": completed, "failed": failure, "dry_run": args.dry_run,
-               "rollback": False, "code": failure["code"] if failure else exits.OK}
+        # The next step was planned before this window existed; it is read first.
+        appeared = ((result or {}).get("appeared") or {}).get("windows") or []
+        if appeared and not args.dry_run and index < len(parsed):
+            stopped = {"step": index, "reason": "window-appeared", "windows": appeared,
+                       "skipped": len(parsed) - index}
+            break
+    payload = {"completed": completed, "failed": failure, "stopped": stopped,
+               "dry_run": args.dry_run, "rollback": False,
+               "code": failure["code"] if failure else exits.OK}
     _emit(payload, args.json, lambda p: print(json.dumps(p, indent=2)))
     return payload["code"]
 

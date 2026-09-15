@@ -440,10 +440,15 @@ SHORT, ALREADY-DECIDED ACTION BATCHES
   The result names completed steps and the failing step, and preserves its exit
   code. An unverified read-back stops with 28. A failed step may have partly
   acted; no rollback or automatic retry occurs. Never replay the successful prefix.
+  A step whose receipt names a window that `appeared` ends the batch there with
+  exit 0 and `stopped` (step, windows, skipped count): the remaining steps were
+  planned before that window existed, so read it before deciding them again.
   Capture after the batch to decide what happens next. A harness can return
   that capture and its descriptor in the same tool result: adapters/pi.ts exposes
   cu_observation, using the portable adapters/observation.mjs contract. It runs
-  cu batch then cu shot, never capturing after a refused action. No observation
+  cu batch then cu shot, never capturing after a refused action; when a step
+  opened a window, the capture widens to that window's output and the report
+  names `appeared` and `capture_override`. No observation
   is published unless the PNG matches the fresh descriptor. Capture failure
   preserves action status; never replay a completed prefix to obtain an image.
   Prefer shot options --landmark/--region for a small control, then explicitly

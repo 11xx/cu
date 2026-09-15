@@ -83,6 +83,14 @@ The text block is JSON with schema `cu-observation/2`:
   application accepted it. Choose a compositor event, changed-pixel frame,
   granted browser state, or completed file/receipt as the postcondition that
   can disprove the next claim.
+- `appeared`, when present, lists windows that CU reported opening right after
+  a completed batch step, each with its `step`. A batch stops after such a step
+  (`actions.result.stopped`) instead of running steps planned before the window
+  existed.
+- `capture_override`, when present, records that the capture used `--output`
+  for the first appeared window's output instead of the requested `shot`,
+  because a capture bound to the old target can exclude the new window; it
+  names both the requested and the used options.
 - `observation` is the unmodified frame descriptor, or null on every failure.
   Its ID, window/content identity, dimensions and logical rectangle belong to
   the sibling PNG. The adapter checks byte count, dimensions and SHA-256 before

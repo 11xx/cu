@@ -471,6 +471,27 @@ def test_batch_stops_after_completed_prefix(world, tmp_path, monkeypatch, capsys
     assert result["failed"]["step"] == 2
 
 
+def test_batch_stops_after_a_step_that_opened_a_window(world, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "batch.json"
+    path.write_text(json.dumps([["key", "--chord", "return"], ["type", "never sent"]]))
+    popup = {"address": "0x2", "class": "portal", "title": "Cannot open file", "monitor": "OUT"}
+    monkeypatch.setattr(actions, "key", lambda *a, **k: {
+        "action": "key", "dry_run": False, "window": None,
+        "appeared": {"status": "observed", "settle_ms": 250, "windows": [popup]},
+    })
+    later = []
+    monkeypatch.setattr(actions, "type_text", lambda *a, **k: later.append("type"))
+
+    assert cli.main(["batch", str(path), "--json"]) == exits.OK
+    result = json.loads(capsys.readouterr().out)
+    assert [item["step"] for item in result["completed"]] == [1]
+    assert result["failed"] is None
+    assert result["stopped"] == {
+        "step": 1, "reason": "window-appeared", "windows": [popup], "skipped": 1,
+    }
+    assert later == []
+
+
 def test_batch_reports_interruption_without_rollback(world, tmp_path, monkeypatch, capsys):
     path = tmp_path / "batch.json"
     path.write_text(json.dumps([["key", "--chord", "a"], ["type", "never sent"]]))
