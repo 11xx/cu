@@ -21,6 +21,7 @@ from typing import Any
 
 from . import (
     actions,
+    appearance,
     browser,
     browser_read_cli,
     capture,
@@ -1932,7 +1933,14 @@ def cmd_click(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
     )
     _emit(result, args.json, _render_action)
+    _notice_appeared(result)
     return exits.OK
+
+
+def _notice_appeared(result: dict[str, Any]) -> None:
+    line = appearance.notice(result)
+    if line:
+        print(line, file=sys.stderr)
 
 
 def cmd_scroll(args: argparse.Namespace) -> int:
@@ -1975,6 +1983,7 @@ def cmd_type(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
     )
     _emit(result, args.json, _render_action)
+    _notice_appeared(result)
     if args.verify and result.get("verified", {}).get("status") == "unverified":
         return exits.VERIFY_UNAVAILABLE
     return exits.OK
@@ -1991,6 +2000,7 @@ def cmd_key(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
     )
     _emit(result, args.json, _render_action)
+    _notice_appeared(result)
     return exits.OK
 
 

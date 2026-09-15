@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from . import (
+    appearance,
     compositor,
     config,
     exits,
@@ -880,7 +881,15 @@ def click(
     count: int = 1,
     dry_run: bool,
 ) -> dict[str, Any]:
-    result = _aimed_click(cfg, frame_id, at, button=button, count=count, dry_run=dry_run)
+    if dry_run:
+        result = _aimed_click(cfg, frame_id, at, button=button, count=count, dry_run=dry_run)
+    else:
+        with appearance.Watch(cfg["input"]["appearance_settle_ms"]) as watch:
+            result = _aimed_click(cfg, frame_id, at, button=button, count=count, dry_run=dry_run)
+            frame = result.get("_frame") or {}
+            result["appeared"] = watch.report(
+                target=frame.get("window") or frame.get("target_window")
+            )
     safety.record(cfg, _loggable(result))
     return _loggable(result)
 
@@ -1263,6 +1272,42 @@ def _type_into_focus(
             injected.append(True)  # nothing was sent, and nothing is unrecorded
         return result
 
+    watch = appearance.Watch(cfg["input"]["appearance_settle_ms"]).start()
+    try:
+        _send_typed(cfg, text, result, method=method, select=select, chord=chord,
+                    backend=backend, window=window, pointer=pointer, verify=verify,
+                    replace=replace, restore_clipboard=restore_clipboard, injected=injected)
+        result["appeared"] = watch.report(target=window)
+    finally:
+        watch.close()
+
+    safety.record(cfg, result)
+    if verify and result.get("verified", {}).get("status") == "mismatch":
+        raise Refused(
+            exits.VERIFY_FAILED,
+            f"{result['verified']['detail']}. The text was sent but did not "
+            "arrive intact; read the field before retyping.",
+        )
+    return result
+
+
+def _send_typed(
+    cfg: dict[str, Any],
+    text: str,
+    result: dict[str, Any],
+    *,
+    method: str,
+    select: str | None,
+    chord: str | None,
+    backend: str,
+    window: dict[str, Any],
+    pointer: dict[str, Any] | None,
+    verify: bool,
+    replace: bool,
+    restore_clipboard: bool,
+    injected: list[bool] | None,
+) -> None:
+    """Inject the text, and its read-back when asked, into the checked window."""
     if method == "clipboard":
         can_restore = restore_clipboard and shutil.which("wl-paste") is not None
         previous = _clipboard_read() if can_restore else None
@@ -1313,15 +1358,6 @@ def _type_into_focus(
             finally:
                 if restore_clipboard:
                     _clipboard_write(previous) if previous is not None else _clipboard_clear()
-
-    safety.record(cfg, result)
-    if verify and result.get("verified", {}).get("status") == "mismatch":
-        raise Refused(
-            exits.VERIFY_FAILED,
-            f"{result['verified']['detail']}. The text was sent but did not "
-            "arrive intact; read the field before retyping.",
-        )
-    return result
 
 
 def read_back(
@@ -1498,13 +1534,16 @@ def key(
         raise Refused(exits.USAGE, "give either --action or --chord")
 
     uinput.parse_chord(resolved)  # fail before the device exists, not after
+    appeared = None
     if not dry_run:
-        send_chords(
-            cfg,
-            [resolved] * repeat,
-            backend,
-            before_send=lambda: _recheck_keyboard(cfg, window),
-        )
+        with appearance.Watch(cfg["input"]["appearance_settle_ms"]) as watch:
+            send_chords(
+                cfg,
+                [resolved] * repeat,
+                backend,
+                before_send=lambda: _recheck_keyboard(cfg, window),
+            )
+            appeared = watch.report(target=window)
 
     result = {
         "action": "key",
@@ -1515,6 +1554,8 @@ def key(
         "window": _describe(window),
         "dry_run": dry_run,
     }
+    if appeared is not None:
+        result["appeared"] = appeared
     if record:
         safety.record(cfg, result)
     return result
