@@ -47,6 +47,18 @@ async function waitFor(predicate, message) {
   assert.fail(message);
 }
 
+test("the pinned task summary holds no task cards or controls", () => {
+  const dom = fixture();
+  try {
+    assert.match(styleSource, /\.task-summary\s*\{[^}]*position:\s*sticky/);
+    const summary = dom.window.document.querySelector(".task-summary");
+    assert.equal(summary.querySelector("#task-list, .task-card, button, details"), null);
+    assert.ok(dom.window.document.querySelector(".task-catalog #task-list .task-card"));
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("native basics retain a failed first attempt before a passing retry", () => {
   const dom = fixture();
   try {

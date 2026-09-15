@@ -69,9 +69,11 @@ and page wall time; controller tokens, monetary cost and subscription usage are
 intentionally `null` until an external trial records them. Suite progress counts
 tasks with at least one `PASS`, while first-attempt completion remains visible.
 
-The compact task summary stays visible above the interaction region, including
-the selected objective, status and completion count. Capability availability is
-shown separately: the native input capability is available, while extension
+The compact task summary, holding suite progress and the run, stays pinned at the
+top of the page while it scrolls. Task cards, run controls and capability
+availability scroll in normal flow, so the pinned summary never covers a task's
+interaction region at any window size; the selected objective and attempt status
+lead that region. Capability availability is shown separately: the native input capability is available, while extension
 grants and real-file output are unavailable for this synthetic suite. An
 unavailable capability is not a task score.
 
