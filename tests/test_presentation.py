@@ -33,6 +33,90 @@ class FakeWindowSeam:
         window["logical_rect"]["x"] = x
         window["logical_rect"]["y"] = y
 
+    def maximize(self, address, enabled):
+        window = self.world["windows"][0]
+        self.calls.append(("maximize", address, enabled))
+        if enabled:
+            self.unmaximized_rect = dict(window["logical_rect"])
+            window["fullscreen"] = 1
+            window["logical_rect"] = dict(self.world["monitors"][0]["logical_rect"])
+        else:
+            window["fullscreen"] = 0
+            window["logical_rect"] = dict(self.unmaximized_rect)
+
+
+def test_maximize_presents_on_its_own_output_and_restore_recovers(presentation_world):
+    world, tiled_rect, store, cfg = presentation_world
+    seam = FakeWindowSeam(world, tiled_rect)
+
+    result = actions.present(
+        cfg,
+        world["windows"][0],
+        mode="maximize",
+        seam=seam,
+        store=store,
+        snapshot_reader=_reader(world),
+        dry_run=False,
+    )
+
+    assert result["mode"] == "maximize"
+    assert result["after"]["fullscreen"] == 1
+    assert result["after"]["logical_rect"] == {"x": 0, "y": 0, "w": 100, "h": 80}
+    assert result["steps"] == [{"operation": "maximize", "status": "verified"}]
+
+    restored = actions.restore(
+        cfg, result["token"], seam=seam, store=store, snapshot_reader=_reader(world), dry_run=False
+    )
+
+    assert restored["mode"] == "maximize"
+    assert restored["after"]["fullscreen"] == 0
+    assert restored["after"]["logical_rect"] == tiled_rect
+    assert restored["steps"] == [{"operation": "unmaximize", "status": "verified"}]
+    assert seam.calls == [("maximize", "0x1", True), ("maximize", "0x1", False)]
+
+
+def test_maximize_refuses_another_output_and_an_already_maximized_window(presentation_world):
+    world, tiled_rect, store, cfg = presentation_world
+    world["monitors"].append(
+        {"name": "SECOND", "scale": 1, "logical_rect": {"x": 100, "y": 0, "w": 100, "h": 80}}
+    )
+    seam = FakeWindowSeam(world, tiled_rect)
+    present = dict(
+        mode="maximize", seam=seam, store=store, snapshot_reader=_reader(world), dry_run=False
+    )
+
+    with pytest.raises(safety.Refused) as other_output:
+        actions.present(cfg, world["windows"][0], output_name="SECOND", **present)
+    assert other_output.value.code == exits.PRESENTATION_REFUSED
+
+    world["windows"][0]["fullscreen"] = 1
+    with pytest.raises(safety.Refused) as already:
+        actions.present(cfg, world["windows"][0], **present)
+    assert already.value.code == exits.PRESENTATION_REFUSED
+    assert seam.calls == []
+
+
+def test_a_maximize_the_compositor_ignores_refuses_without_a_token(presentation_world):
+    world, tiled_rect, store, cfg = presentation_world
+
+    class IgnoredMaximize(FakeWindowSeam):
+        def maximize(self, address, enabled):
+            self.calls.append(("maximize", address, enabled))
+
+    seam = IgnoredMaximize(world, tiled_rect)
+    with pytest.raises(safety.Refused) as caught:
+        actions.present(
+            cfg,
+            world["windows"][0],
+            mode="maximize",
+            seam=seam,
+            store=store,
+            snapshot_reader=_reader(world),
+            dry_run=False,
+        )
+    assert caught.value.code == exits.PRESENTATION_REFUSED
+    assert caught.value.details["token_status"] == "invalidated"
+
 
 @pytest.fixture
 def presentation_world(tmp_path, monkeypatch):
@@ -78,10 +162,16 @@ def test_hyprland_seam_dispatches_the_operation(monkeypatch):
     seam = presentation.hyprland_seam()
     seam.toggle_floating("0x1")
     seam.move("0x1", 2500, 150)
+    seam.maximize("0x1", True)
+    seam.maximize("0x1", False)
 
     assert calls == [
         'hl.dispatch(hl.dsp.window.float({window = "address:0x1"}))',
         'hl.dispatch(hl.dsp.window.move({window = "address:0x1", x = 2500, y = 150}))',
+        'hl.dispatch(hl.dsp.window.fullscreen({window = "address:0x1", '
+        'mode = "maximized", action = "set"}))',
+        'hl.dispatch(hl.dsp.window.fullscreen({window = "address:0x1", '
+        'mode = "maximized", action = "unset"}))',
     ]
 
 

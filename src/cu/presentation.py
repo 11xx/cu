@@ -60,10 +60,11 @@ class TokenStore(Protocol):
 
 @dataclass(frozen=True)
 class WindowSeam:
-    """The two compositor operations presentation is allowed to request."""
+    """The compositor operations presentation is allowed to request."""
 
     toggle_floating: Callable[[str], None]
     move: Callable[[str, float, float], None]
+    maximize: Callable[[str, bool], None]
 
 
 def hyprland_seam() -> WindowSeam:
@@ -86,7 +87,14 @@ def hyprland_seam() -> WindowSeam:
             f"x = {_number(x)}, y = {_number(y)}}}))"
         )
 
-    return WindowSeam(toggle_floating=toggle_floating, move=move)
+    def maximize(address: str, enabled: bool) -> None:
+        hypr.lua(
+            "hl.dispatch(hl.dsp.window.fullscreen("
+            f'{{window = "address:{_address(address)}", mode = "maximized", '
+            f'action = "{"set" if enabled else "unset"}"}}))'
+        )
+
+    return WindowSeam(toggle_floating=toggle_floating, move=move, maximize=maximize)
 
 
 def _address(value: str) -> str:
@@ -223,6 +231,8 @@ def state(window: dict[str, Any]) -> dict[str, Any]:
         or not isinstance(window.get("floating"), bool)
         or not isinstance(window.get("visible", True), bool)
         or not isinstance(window.get("hidden", False), bool)
+        or isinstance(window.get("fullscreen", 0), bool)
+        or not isinstance(window.get("fullscreen", 0), int)
     ):
         raise PresentationFailure("stale", "the observed window state is incomplete")
     if any(
@@ -241,6 +251,7 @@ def state(window: dict[str, Any]) -> dict[str, Any]:
         "floating": window["floating"],
         "visible": window.get("visible", True),
         "hidden": window.get("hidden", False),
+        "fullscreen": window.get("fullscreen", 0),
         "logical_rect": {name: rect[name] for name in ("x", "y", "w", "h")},
     }
 
@@ -291,6 +302,7 @@ def _arrangement_matches(expected: dict[str, Any], actual: dict[str, Any]) -> bo
             "floating",
             "visible",
             "hidden",
+            "fullscreen",
             "logical_rect",
         )
     )
@@ -482,10 +494,12 @@ def _token_payload(
     output: dict[str, Any],
     *,
     complete: bool,
+    mode: str = "center",
 ) -> dict[str, Any]:
     return {
         "schema": TOKEN_SCHEMA,
         "token": token,
+        "mode": mode,
         "before": before,
         "presented": presented,
         "output": output,
@@ -501,8 +515,11 @@ def _save_presented(
     output: dict[str, Any],
     *,
     complete: bool,
+    mode: str = "center",
 ) -> None:
-    store.write(token, _token_payload(token, before, presented, output, complete=complete))
+    store.write(
+        token, _token_payload(token, before, presented, output, complete=complete, mode=mode)
+    )
 
 
 def _saved_state(value: Any) -> dict[str, Any]:
@@ -550,8 +567,12 @@ def present(
     store: TokenStore,
     guard: Callable[[dict[str, Any]], None],
     dry_run: bool,
+    mode: str = "center",
 ) -> dict[str, Any]:
-    """Float and center one visible window, recording verified before/after state."""
+    """Center or maximize one visible window, recording verified before/after state."""
+
+    if mode not in {"center", "maximize"}:
+        raise PresentationFailure("refused", f"unknown presentation mode {mode!r}")
 
     before = state(window)
     before_diagnostic = _diagnostic(
@@ -564,11 +585,25 @@ def present(
             details={"before": before, "actual": _diagnostic(window, snapshot.get("monitors", []))},
         )
     output = _output(snapshot, window, output_name)
+    if mode == "maximize":
+        return _present_maximized(
+            window,
+            snapshot,
+            before,
+            before_diagnostic,
+            output,
+            snapshot_reader=snapshot_reader,
+            seam=seam,
+            store=store,
+            guard=guard,
+            dry_run=dry_run,
+        )
     destination = _destination(before["logical_rect"], output)
     planned = ["move"] if before["floating"] else ["toggle-floating", "move"]
     if dry_run:
         return {
             "action": "present",
+            "mode": "center",
             "window": _diagnostic(window, snapshot.get("monitors", [])),
             "output": output,
             "before": before_diagnostic,
@@ -790,6 +825,7 @@ def present(
         _save_presented(store, token, before, final_state, output, complete=True)
         return {
             "action": "present",
+            "mode": "center",
             "window": _diagnostic(final_window, final_snapshot.get("monitors", [])),
             "output": output,
             "before": before_diagnostic,
@@ -797,6 +833,145 @@ def present(
             "steps": steps,
             "token": token,
             "changed": before != final_state,
+            "dry_run": False,
+        }
+    except PresentationFailure as exc:
+        if exc.kind in {"stale", "changed"} or (
+            not steps and not _failure_changed_state(exc, before)
+        ):
+            with suppress(PresentationFailure):
+                store.invalidate(token)
+            exc.details["token_status"] = "invalidated"
+        if "token" not in exc.details:
+            exc.details["token"] = token
+        raise
+
+
+def _present_maximized(
+    window: dict[str, Any],
+    snapshot: dict[str, Any],
+    before: dict[str, Any],
+    before_diagnostic: dict[str, Any] | None,
+    output: dict[str, Any],
+    *,
+    snapshot_reader: Callable[[], dict[str, Any]],
+    seam: WindowSeam,
+    store: TokenStore,
+    guard: Callable[[dict[str, Any]], None],
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Maximize a window on its own output, where the compositor keeps it."""
+
+    monitors = snapshot.get("monitors", [])
+    if output["name"] != before["monitor"]:
+        raise PresentationFailure(
+            "refused",
+            "maximizing presents a window on its own output only",
+            details={"before": before, "output": output},
+        )
+    if before["fullscreen"]:
+        raise PresentationFailure(
+            "refused",
+            "the window is already maximized or fullscreen",
+            details={"before": before, "actual": _diagnostic(window, monitors)},
+        )
+    if dry_run:
+        return {
+            "action": "present",
+            "mode": "maximize",
+            "window": _diagnostic(window, monitors),
+            "output": output,
+            "before": before_diagnostic,
+            "after": _diagnostic(window, monitors),
+            "planned": {"operations": ["maximize"]},
+            "steps": [],
+            "token": None,
+            "changed": False,
+            "dry_run": True,
+        }
+
+    token = store.create(
+        _token_payload("pending", before, before, output, complete=False, mode="maximize")
+    )
+    steps: list[dict[str, Any]] = []
+    try:
+        _read_and_check(
+            address=before["address"],
+            expected=before,
+            snapshot_reader=snapshot_reader,
+            guard=guard,
+            before=before,
+            output=output,
+            token=token,
+            steps=steps,
+            require_arrangement=True,
+        )
+        try:
+            seam.maximize(before["address"], True)
+        except Exception as exc:
+            live, read_snapshot = _observed(snapshot_reader, before["address"])
+            raise _failure(
+                "refused" if live is None or state(live) == before else "partial",
+                "the compositor refused the maximize operation",
+                before=before,
+                actual=live,
+                snapshot=read_snapshot,
+                output=output,
+                token=token,
+                steps=steps,
+            ) from exc
+        live, read_snapshot = _observed(snapshot_reader, before["address"])
+        if live is None:
+            raise _failure(
+                "stale",
+                "the window disappeared after maximizing",
+                before=before,
+                actual=None,
+                snapshot=read_snapshot,
+                output=output,
+                token=token,
+                steps=steps,
+            )
+        after = state(live)
+        if not _identity_matches(before, after):
+            raise _failure(
+                "stale",
+                "the window identity changed after maximizing",
+                before=before,
+                actual=live,
+                snapshot=read_snapshot,
+                output=output,
+                token=token,
+                steps=steps,
+            )
+        if (
+            not after["fullscreen"]
+            or not after["visible"]
+            or after["hidden"]
+            or after["monitor"] != output["name"]
+        ):
+            raise _failure(
+                "refused" if after == before else "partial",
+                "the maximize operation did not verify",
+                before=before,
+                actual=live,
+                snapshot=read_snapshot,
+                output=output,
+                token=token,
+                steps=steps,
+            )
+        steps.append({"operation": "maximize", "status": "verified"})
+        _save_presented(store, token, before, after, output, complete=True, mode="maximize")
+        return {
+            "action": "present",
+            "mode": "maximize",
+            "window": _diagnostic(live, read_snapshot.get("monitors", [])),
+            "output": output,
+            "before": before_diagnostic,
+            "after": _diagnostic(live, read_snapshot.get("monitors", [])),
+            "steps": steps,
+            "token": token,
+            "changed": True,
             "dry_run": False,
         }
     except PresentationFailure as exc:
@@ -826,6 +1001,9 @@ def restore(
     before = _saved_state(payload.get("before"))
     presented = _saved_state(payload.get("presented"))
     output = _saved_output(payload.get("output"))
+    mode = payload.get("mode", "center")
+    if mode not in {"center", "maximize"}:
+        raise PresentationFailure("token", "the presentation token has an unknown mode")
     address = presented.get("address")
     if not isinstance(address, str):
         raise PresentationFailure("token", "the presentation token has no window identity")
@@ -904,7 +1082,10 @@ def restore(
             require_arrangement=True,
         )
         try:
-            if before.get("floating"):
+            if mode == "maximize":
+                seam.maximize(address, False)
+                operation = "unmaximize"
+            elif before.get("floating"):
                 target_rect = before.get("logical_rect")
                 seam.move(address, target_rect["x"], target_rect["y"])
                 operation = "move"
@@ -964,6 +1145,7 @@ def restore(
         store.invalidate(token)
         return {
             "action": "restore",
+            "mode": mode,
             "window": _diagnostic(live, read_snapshot.get("monitors", [])),
             "before": before,
             "presented": presented,
