@@ -204,6 +204,19 @@ def monitors() -> list[dict[str, Any]]:
     return out
 
 
+def primary_output(mons: list[dict[str, Any]]) -> str | None:
+    """The output computer use works on: the enabled one the compositor numbered first.
+
+    Hyprland reports no primary flag. Its lowest output id is the first output
+    it configured, which is stable across focus changes and pointer movement,
+    unlike the focused output.
+    """
+    enabled = [m for m in mons if not m.get("disabled", False)]
+    if not enabled:
+        return None
+    return min(enabled, key=lambda m: m["id"])["name"]
+
+
 def layer_surfaces() -> list[dict[str, Any]]:
     """Layer-shell surfaces in desktop-absolute logical coordinates."""
     out = []
@@ -401,6 +414,7 @@ def snapshot() -> dict[str, Any]:
         w["focused"] = focus is not None and w["address"] == focus["address"]
     return {
         "monitors": mons,
+        "primary_output": primary_output(mons),
         "desktop_logical_bounds": desktop_bounds(mons),
         "windows": wins,
         "layer_surfaces": layer_surfaces(),

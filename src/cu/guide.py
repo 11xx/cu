@@ -70,6 +70,12 @@ OBSERVE BEFORE YOU LOOK
   not that it received the click: layer input regions may pass events through.
   A screenshot is for reading *content*, not for locating windows.
 
+  `primary_output` names the output computer use works on: the enabled output
+  the compositor numbered first, which does not follow the pointer or focus.
+  Launch and present task windows there (`cu doctor` reports it too), and keep
+  them there: moving a window to another output is not something presentation
+  can do.
+
 CAPTURE ONLY WHAT YOU NEED TO READ
   cu shot --window active        The usual first call.
   cu shot --output OUTPUT-A      A whole monitor.
