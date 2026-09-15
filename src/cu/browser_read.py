@@ -1872,6 +1872,14 @@ class NativeMessagingHost:
         self._selector.register(listener, selectors.EVENT_READ, ("listener", listener))
         self._selector.register(self.stdin, selectors.EVENT_READ, ("native", self.stdin))
         os.set_blocking(self.stdout.fileno(), False)
+        # A signal that lands just before the selector blocks would otherwise
+        # leave its Python handler waiting for the next unrelated event; the
+        # wakeup socket makes every delivered signal an event of its own.
+        wakeup_read, wakeup_write = socket.socketpair()
+        wakeup_read.setblocking(False)
+        wakeup_write.setblocking(False)
+        previous_wakeup = signal.set_wakeup_fd(wakeup_write.fileno(), warn_on_full_buffer=False)
+        self._selector.register(wakeup_read, selectors.EVENT_READ, ("signal", wakeup_read))
         try:
             self._send_native(self._ready())
             while self._running:
@@ -1886,11 +1894,19 @@ class NativeMessagingHost:
                         if not self._read_native():
                             self._running = False
                             break
+                    elif kind == "signal":
+                        with suppress(BlockingIOError):
+                            value.recv(64)
                     else:
                         self._read_local(value)
         except (BrokenPipeError, ConnectionError, OSError, ProtocolError):
             return 2
         finally:
+            signal.set_wakeup_fd(previous_wakeup)
+            with suppress(KeyError, ValueError):
+                self._selector.unregister(wakeup_read)
+            wakeup_read.close()
+            wakeup_write.close()
             self._running = False
             for peer in list(self.peers):
                 self._remove_peer(peer)
