@@ -35,10 +35,17 @@ else if (args[0] === 'batch') {
       return;
     }
     const code = mode === 'refuse' ? 40 : 0;
-    console.log(JSON.stringify({code, completed: code ? [] : [{step: 1}], failed: code ? {step: 1, code} : null}));
+    const step = mode === 'appeared'
+      ? {step: 1, result: {appeared: {status: 'observed', windows: [{address: '0x2', monitor: 'DP-1', title: 'Cannot open file'}]}}}
+      : {step: 1};
+    console.log(JSON.stringify({code, completed: code ? [] : [step], failed: code ? {step: 1, code} : null}));
     process.exitCode = code;
   });
 } else {
+  if (mode === 'appeared') {
+    const path = require('node:path');
+    require('node:fs').writeFileSync(path.join(path.dirname(process.argv[1]), 'shot-args.json'), JSON.stringify(args));
+  }
   if (mode === 'refuse') throw new Error('capture must not run after refusal');
   if (mode === 'capture-fail') { console.error('capture unavailable'); process.exitCode = 1; }
   else console.log(${JSON.stringify(JSON.stringify(frame))});
@@ -54,6 +61,27 @@ test("one result carries unchanged descriptor and exact PNG", async t => {
   assert.equal(result.details.actions.status, "completed");
   assert.deepEqual(JSON.parse(result.content[0].text).observation, frame);
   assert.deepEqual(Buffer.from(result.content[1].data, "base64"), png);
+});
+
+test("a window that appeared during the actions widens the capture to its output", async t => {
+  const { executable } = await fixture(t, "appeared");
+  const result = await observeTogether(
+    { actions: [["key", "--chord", "return"]], shot: ["--window", "active"] },
+    { executable },
+  );
+  assert.equal(result.details.ok, true);
+  assert.deepEqual(result.details.appeared, [
+    { address: "0x2", monitor: "DP-1", title: "Cannot open file", step: 1 },
+  ]);
+  assert.deepEqual(result.details.capture_override, {
+    reason: "window-appeared",
+    requested: ["--window", "active"],
+    used: ["--output", "DP-1"],
+  });
+  const { readFile } = await import("node:fs/promises");
+  const { dirname } = await import("node:path");
+  const shotArgs = JSON.parse(await readFile(join(dirname(executable), "shot-args.json"), "utf8"));
+  assert.deepEqual(shotArgs.slice(0, 3), ["shot", "--output", "DP-1"]);
 });
 
 test("read-only call makes no action-success claim", async t => {
