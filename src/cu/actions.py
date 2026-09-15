@@ -56,6 +56,10 @@ MOTION_TOLERANCE = 2.0
 MIN_MOTION_REGION = MOTION_TOLERANCE * 2
 NATIVE_SETTLE_TIMEOUT = 0.1
 NATIVE_SETTLE_POLL_SECONDS = 0.005
+MIN_POINTER_GAIN = 0.1
+# Submitted travel that may leave the cursor unmoved before the device is
+# declared disconnected from it. Any real gain shows well within this.
+MAX_ABSORBED_TRAVEL = 4 * MAX_NATIVE_DELTA
 DEFAULT_HOVER_DWELL = 0.2
 MAX_HOVER_DWELL = 10.0
 DWELL_POLL_SECONDS = 0.05
@@ -547,7 +551,11 @@ def _settle_native_delivery(
     frame: dict[str, Any],
     deadline: float,
 ) -> dict[str, float]:
-    """Wait briefly for a submitted event to become visible to cursor reads."""
+    """Wait briefly for a submitted event to become visible to cursor reads.
+
+    Returns the origin when the wait expires unmoved: the compositor may have
+    absorbed the event below one reported pixel, which `_PointerGain` bounds.
+    """
     settle_deadline = min(deadline, time.monotonic() + NATIVE_SETTLE_TIMEOUT)
     while True:
         safety.check_abort()
@@ -563,11 +571,54 @@ def _settle_native_delivery(
             return current
         remaining = settle_deadline - time.monotonic()
         if remaining <= 0:
+            return origin
+        time.sleep(min(NATIVE_SETTLE_POLL_SECONDS, remaining))
+
+
+class _PointerGain:
+    """Size relative events by the gain the cursor readback has shown.
+
+    Sensitivity and acceleration scale every relative event, and the cursor is
+    reported in whole pixels, so an event can move the pointer less than one
+    reported pixel and leave no trace. Deltas grow until motion shows, then
+    follow the observed ratio of cursor travel to submitted travel.
+    """
+
+    def __init__(self) -> None:
+        self.submitted = 0.0
+        self.observed = 0.0
+        self.unseen_travel = 0.0
+        self.unseen_events = 0
+
+    def delta(self, error_x: float, error_y: float) -> tuple[int, int]:
+        if self.observed > 0:
+            gain = max(MIN_POINTER_GAIN, self.observed / self.submitted)
+        else:
+            gain = max(MIN_POINTER_GAIN, 0.5**self.unseen_events)
+        return (
+            max(-MAX_NATIVE_DELTA, min(MAX_NATIVE_DELTA, round(error_x / gain))),
+            max(-MAX_NATIVE_DELTA, min(MAX_NATIVE_DELTA, round(error_y / gain))),
+        )
+
+    def record(
+        self, origin: dict[str, float], current: dict[str, float], delta: tuple[int, int]
+    ) -> None:
+        size = math.hypot(*delta)
+        self.submitted += size
+        if current != origin:
+            moved_x, moved_y = current["x"] - origin["x"], current["y"] - origin["y"]
+            self.observed += max(0.0, (moved_x * delta[0] + moved_y * delta[1]) / size)
+            self.unseen_travel = 0.0
+            self.unseen_events = 0
+            return
+        self.unseen_travel += size
+        self.unseen_events += 1
+        if self.unseen_travel > MAX_ABSORBED_TRAVEL:
             raise Refused(
                 exits.MOTION_NOT_CONVERGED,
-                "native pointer event was not visible before its bounded delivery wait expired",
+                "native pointer events never reached the cursor; "
+                "inspect the pointer and device state",
             )
-        time.sleep(min(NATIVE_SETTLE_POLL_SECONDS, remaining))
 
 
 def move(
@@ -678,6 +729,7 @@ def move(
     period = 1 / hz
     actual = start
     pending_own: tuple[dict[str, float], tuple[int, int]] | None = None
+    pointer_gain = _PointerGain()
     with _motion_device(cfg) as device:
         _motion_deadline(deadline, "device setup")
         settled = _motion_cursor()
@@ -696,6 +748,7 @@ def move(
                 origin, pending_delta = pending_own
                 with metrics.span("native_delivery"):
                     actual = _settle_native_delivery(origin, pending_delta, frame, deadline)
+                pointer_gain.record(origin, actual, pending_delta)
                 last_own_cursor = actual
                 pending_own = None
                 # The bounded settle read is already the safety sample closest
@@ -716,8 +769,7 @@ def move(
                 cfg, frame, current, waypoint, live_monitors, live_windows, live_layers,
                 expected_focus,
             )
-            dx = max(-MAX_NATIVE_DELTA, min(MAX_NATIVE_DELTA, round(waypoint["x"] - current["x"])))
-            dy = max(-MAX_NATIVE_DELTA, min(MAX_NATIVE_DELTA, round(waypoint["y"] - current["y"])))
+            dx, dy = pointer_gain.delta(waypoint["x"] - current["x"], waypoint["y"] - current["y"])
             if dx or dy:
                 origin = dict(current)
                 with metrics.span("native_delivery"):
@@ -729,6 +781,7 @@ def move(
                         pending_own = (origin, (dx, dy))
                     else:
                         _confirm_native_delivery(origin, delivered, (dx, dy), frame)
+                        pointer_gain.record(origin, delivered, (dx, dy))
                         last_own_cursor = delivered
             actual = last_own_cursor
         with metrics.span("native_convergence"):
@@ -738,9 +791,9 @@ def move(
                     origin, pending_delta = pending_own
                     with metrics.span("native_delivery"):
                         actual = _settle_native_delivery(origin, pending_delta, frame, deadline)
+                    pointer_gain.record(origin, actual, pending_delta)
                     last_own_cursor = actual
                     pending_own = None
-                    actual = last_own_cursor
                 else:
                     actual = _motion_cursor()
                 _confirm_motion_cursor(last_own_cursor, actual, phase="convergence")
@@ -752,13 +805,8 @@ def move(
                 residual = math.hypot(endpoint["x"] - actual["x"], endpoint["y"] - actual["y"])
                 if residual <= MOTION_TOLERANCE:
                     break
-                dx = max(
-                    -MAX_NATIVE_DELTA,
-                    min(MAX_NATIVE_DELTA, round(endpoint["x"] - actual["x"])),
-                )
-                dy = max(
-                    -MAX_NATIVE_DELTA,
-                    min(MAX_NATIVE_DELTA, round(endpoint["y"] - actual["y"])),
+                dx, dy = pointer_gain.delta(
+                    endpoint["x"] - actual["x"], endpoint["y"] - actual["y"]
                 )
                 if dx or dy:
                     origin = dict(actual)
@@ -771,6 +819,7 @@ def move(
                             pending_own = (origin, (dx, dy))
                         else:
                             _confirm_native_delivery(origin, delivered, (dx, dy), frame)
+                            pointer_gain.record(origin, delivered, (dx, dy))
                             last_own_cursor = delivered
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
