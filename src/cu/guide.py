@@ -568,11 +568,14 @@ CHOOSE THE POSTCONDITION BEFORE INPUT
   that the application accepted it.
 
   The application's answer is often a new window: an error dialog, a
-  confirmation, a chooser, a menu. `key`, `click`, `type`, `scroll`, and `hover`
-  keep listening for windows that open within `input.appearance_settle_ms` of
-  their input (aimed typing from before its own click, hover through its dwell)
+  confirmation, a chooser, a menu. `key`, `click`, `type`, `scroll`, `move`, and
+  `hover` keep listening for windows that open within
+  `input.appearance_settle_ms` of their input (aimed typing from before its own
+  click, hover through its dwell; `browser` actions through the chord they send)
   and name them in the receipt's `appeared` (with geometry, reachability, and
-  whether they cover the target), plus a line on stderr. Read that window
+  whether they cover the target), plus a line on stderr. A refusal carries the
+  same `appeared` in its details when a window opened before the interlock said
+  no, since a popup that takes focus is often why it did. Read that window
   before acting again; it usually holds the reason the action did or did not
   work. `appeared` says
   "unavailable" when the event stream could not be read, which is not "nothing

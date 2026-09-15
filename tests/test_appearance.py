@@ -1,7 +1,9 @@
 import copy
 import socket
 
-from cu import actions, appearance, cli, config, hypr, observe, safety
+import pytest
+
+from cu import actions, appearance, cli, config, exits, hypr, observe, safety
 
 
 def test_a_key_receipt_names_the_dialog_its_keystroke_opened(monkeypatch, capsys):
@@ -103,3 +105,75 @@ def test_disabled_and_unavailable_say_which_silence_it_is():
     with appearance.Watch(50, connect=refuse, snapshot=dict) as watch:
         report = watch.report()
     assert report["status"] == "unavailable" and "event socket" in report["reason"]
+
+
+REAL_WATCH = appearance.Watch
+
+
+def _popup_watch(settle_ms, theirs_holder, popup, base=None):
+    """A real watch over a socketpair whose second snapshot shows the popup."""
+    ours, theirs = socket.socketpair()
+    theirs_holder.append(theirs)
+    base = base or []
+    snapshots = [{"windows": base}, {"windows": [*base, popup]}]
+    return REAL_WATCH(settle_ms, connect=lambda: ours, snapshot=lambda: snapshots.pop(0))
+
+
+def test_a_refusal_leaving_a_watch_names_the_window_that_answered():
+    held = []
+    popup = _window("0xabc", cls="portal", title="Cannot open file")
+    with pytest.raises(safety.Refused) as caught, _popup_watch(30, held, popup):
+        held[0].sendall(b"openwindow>>abc,2,portal,Cannot open file\n")
+        raise safety.Refused(exits.FOCUS_CHANGED, "focus moved to a new window")
+    held[0].close()
+    appeared = caught.value.details["appeared"]
+    assert appeared["status"] == "observed"
+    assert [w["title"] for w in appeared["windows"]] == ["Cannot open file"]
+
+
+def test_a_watch_reads_once_and_leaves_plain_errors_alone():
+    held = []
+    popup = _window("0xabc")
+    watch = _popup_watch(30, held, popup)
+    with pytest.raises(safety.Refused) as caught, watch:
+        watch.report()
+        raise safety.Refused(exits.FOCUS_CHANGED, "after the report", details={"why": "x"})
+    assert caught.value.details == {"why": "x"}
+    held[0].close()
+
+    plain = appearance.Watch(30, connect=lambda: socket.socketpair()[0], snapshot=lambda: {})
+    with pytest.raises(ValueError), plain:
+        raise ValueError("not an interlock")
+
+
+def test_the_cli_names_an_appeared_window_on_a_refusal(capsys):
+    popup = appearance._describe(_window("0xabc", title="Cannot open file"), None)
+
+    def refused():
+        raise safety.Refused(
+            exits.FOCUS_CHANGED,
+            "focus moved",
+            details={"appeared": {"status": "observed", "settle_ms": 250, "windows": [popup]}},
+        )
+
+    assert cli._safe_call(refused, as_json=False) == exits.FOCUS_CHANGED
+    err = capsys.readouterr().err
+    assert "Cannot open file" in err and "cu: refused: focus moved" in err
+
+
+def test_a_move_refused_by_its_own_popup_names_it(monkeypatch):
+    held = []
+    popup = _window("0xabc", cls="menu", title="submenu")
+    monkeypatch.setattr(
+        actions.appearance, "Watch", lambda settle_ms: _popup_watch(settle_ms, held, popup)
+    )
+
+    def refuse_mid_move(*_args, **_kwargs):
+        held[0].sendall(b"openwindow>>abc,2,menu,submenu\n")
+        raise safety.Refused(exits.FOCUS_CHANGED, "expected the fixture to hold focus")
+
+    monkeypatch.setattr(actions, "_move", refuse_mid_move)
+    with pytest.raises(safety.Refused) as caught:
+        actions.move(copy.deepcopy(config.DEFAULTS), "f1", (1, 1), dry_run=False)
+    held[0].close()
+    assert [w["title"] for w in caught.value.details["appeared"]["windows"]] == ["submenu"]

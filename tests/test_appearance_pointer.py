@@ -1,6 +1,8 @@
 import copy
 from typing import ClassVar
 
+import pytest
+
 from cu import actions, config, frames, observe, safety, uinput
 
 POPUP = {"address": "0x2", "class": "portal", "title": "menu", "monitor": "OUT"}
@@ -115,7 +117,8 @@ def test_a_hover_names_the_window_its_dwell_revealed(monkeypatch):
         moved.append(list(RecordingWatch.instances[0].events))
         return {"cursor": {"x": 5, "y": 5}, "placement": "native", "delivery": "delivered"}
 
-    monkeypatch.setattr(actions, "move", move)
+    monkeypatch.setattr(actions, "_move", move)
+    monkeypatch.setattr(actions, "move", lambda *a, **k: pytest.fail("hover opened a second watch"))
     monkeypatch.setattr(frames, "load", lambda frame_id: {"id": frame_id})
     monkeypatch.setattr(safety, "confirm_pointer", lambda *a: None)
     monkeypatch.setattr(actions, "_motion_boundary_guard", lambda *a: None)
@@ -126,3 +129,36 @@ def test_a_hover_names_the_window_its_dwell_revealed(monkeypatch):
     assert moved == [["start"]]
     assert RecordingWatch.instances[0].events == ["start", "report", "close"]
     assert result["appeared"]["windows"] == [POPUP]
+
+
+def test_a_move_names_the_window_its_crossing_opened_and_logs_it(monkeypatch):
+    RecordingWatch.instances = []
+    monkeypatch.setattr(actions.appearance, "Watch", RecordingWatch)
+    target = {"address": "0x1", "class": "app", "title": "fixture"}
+    calls = []
+
+    def inner(cfg, frame_id, at, **kwargs):
+        calls.append((list(RecordingWatch.instances[0].events), kwargs["record"]))
+        return {"action": "move", "target_window": target, "dry_run": False}
+
+    recorded = []
+    monkeypatch.setattr(actions, "_move", inner)
+    monkeypatch.setattr(safety, "record", lambda cfg, result: recorded.append(dict(result)))
+
+    result = actions.move(_cfg(), "f1", (1, 1), dry_run=False)
+
+    assert calls == [(["start"], False)]
+    assert RecordingWatch.instances[0].events == ["start", "report", "close"]
+    assert result["appeared"]["windows"] == [POPUP]
+    assert [entry["appeared"]["windows"] for entry in recorded] == [[POPUP]]
+
+
+def test_a_dry_run_move_opens_no_watch(monkeypatch):
+    RecordingWatch.instances = []
+    monkeypatch.setattr(actions.appearance, "Watch", RecordingWatch)
+    monkeypatch.setattr(actions, "_move", lambda *a, **k: {"action": "move", "dry_run": True})
+
+    result = actions.move(_cfg(), "f1", (1, 1), dry_run=True)
+
+    assert RecordingWatch.instances == []
+    assert "appeared" not in result

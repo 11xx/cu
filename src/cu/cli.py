@@ -2893,6 +2893,8 @@ def _safe_call(call, *, as_json: bool = False) -> int:
         # the response the taxonomy prescribes is printed alongside it.
         if exc.details:
             _emit_error(exc.code, exc.reason, details=exc.details, as_json=as_json)
+        # A window the action opened can be the reason it was refused.
+        _notice_appeared(exc.details)
         print(f"cu: refused: {exc.reason}", file=sys.stderr)
         print(f"cu: {exits.RESPONSE[exc.code]}", file=sys.stderr)
         return exc.code

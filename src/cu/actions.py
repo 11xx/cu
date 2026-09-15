@@ -664,7 +664,34 @@ def move(
     timeout: float = DEFAULT_MOVE_TIMEOUT,
     dry_run: bool,
 ) -> dict[str, Any]:
-    """Move the native pointer along a bounded, feedback-driven segment."""
+    """Move the native pointer along a bounded, feedback-driven segment.
+
+    Crossing into a control can open a menu or tooltip window, so the movement
+    names what appeared while it ran.
+    """
+    if dry_run:
+        return _move(cfg, frame_id, at, duration=duration, hz=hz, timeout=timeout, dry_run=True)
+    with appearance.Watch(cfg["input"]["appearance_settle_ms"]) as watch:
+        result = _move(
+            cfg, frame_id, at, duration=duration, hz=hz, timeout=timeout, dry_run=False,
+            record=False,
+        )
+        result["appeared"] = watch.report(target=result.get("target_window"))
+    safety.record(cfg, result)
+    return result
+
+
+def _move(
+    cfg: dict[str, Any],
+    frame_id: str,
+    at: tuple[float, float],
+    *,
+    duration: float = DEFAULT_MOVE_DURATION,
+    hz: float = DEFAULT_MOVE_HZ,
+    timeout: float = DEFAULT_MOVE_TIMEOUT,
+    dry_run: bool,
+    record: bool = True,
+) -> dict[str, Any]:
     _motion_values(duration, hz, timeout)
     started = time.monotonic()
     deadline = started + timeout
@@ -756,7 +783,8 @@ def move(
                 "events": 0,
             },
         })
-        safety.record(cfg, result)
+        if record:
+            safety.record(cfg, result)
         return result
 
     period = 1 / hz
@@ -876,7 +904,8 @@ def move(
             },
         }
     )
-    safety.record(cfg, result)
+    if record:
+        safety.record(cfg, result)
     return result
 
 
@@ -898,7 +927,8 @@ def hover(
     # A hover's answer is often a menu or popup that opens during the dwell.
     watch = None if dry_run else appearance.Watch(cfg["input"]["appearance_settle_ms"]).start()
     try:
-        entry = move(
+        # The entry runs inside this watch, which spans the dwell as well.
+        entry = _move(
             cfg,
             frame_id,
             at,
@@ -936,6 +966,10 @@ def hover(
                     break
                 time.sleep(min(DWELL_POLL_SECONDS, remaining))
         appeared = watch.report(target=initial.get("focused")) if watch else None
+    except BaseException as error:
+        if watch is not None:
+            watch.attach(error, initial.get("focused"))
+        raise
     finally:
         if watch is not None:
             watch.close()
@@ -1270,6 +1304,10 @@ def type_text(
             if not injected:
                 _record_orphaned_click(cfg, pointer)
             raise
+    except BaseException as error:
+        if watch is not None:
+            watch.attach(error)
+        raise
     finally:
         if watch is not None:
             watch.close()
@@ -1385,6 +1423,10 @@ def _type_into_focus(
                     backend=backend, window=window, pointer=pointer, verify=verify,
                     replace=replace, restore_clipboard=restore_clipboard, injected=injected)
         result["appeared"] = watch.report(target=window)
+    except BaseException as error:
+        if owned:
+            watch.attach(error, window)
+        raise
     finally:
         if owned:
             watch.close()
