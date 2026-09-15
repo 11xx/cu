@@ -202,11 +202,29 @@ def require_budget(path: Path, profile: dict[str, Any]) -> None:
         )
 
 
+def _rendered_above(target: dict[str, Any], other: dict[str, Any]) -> bool:
+    """Whether the compositor's stacking rules put the target over the other window.
+
+    Hyprland's rules, verified live by pixel: a floating window renders above
+    tiled windows on its workspace, and above a maximized or fullscreen window
+    only while the compositor marks it allowed over fullscreen. Two floating
+    windows have no reported order.
+    """
+    if not target.get("floating") or other.get("floating"):
+        return False
+    if target.get("workspace") != other.get("workspace"):
+        return False
+    if other.get("fullscreen", 0):
+        return bool(target.get("allowed_over_fullscreen"))
+    return True
+
+
 def require_visible(window: dict[str, Any], rect: dict[str, float], snap: dict[str, Any]) -> None:
     """Refuse window identity when reported geometry cannot establish clear pixels.
 
-    Focus history is not a stacking order. Any overlapping visible window is
-    ambiguous, even when the requested window was focused most recently.
+    Focus history is not a stacking order. An overlapping visible window is
+    ambiguous unless the compositor's stacking rules put the requested window
+    above it, which is how a dialog over its own parent stays capturable.
     Output/region capture remains available without asserting a window identity.
     """
     live = next((w for w in snap["windows"] if w["address"] == window["address"]), None)
@@ -226,6 +244,7 @@ def require_visible(window: dict[str, Any], rect: dict[str, float], snap: dict[s
             other["address"] != target["address"] and other.get("visible", True)
             and not other.get("hidden", False)
             and intersects(rect, other["logical_rect"])
+            and not _rendered_above(target, other)
         ):
             overlap = _intersection(rect, other["logical_rect"])
             overlaps.append(_window_detail(target, other, overlap))

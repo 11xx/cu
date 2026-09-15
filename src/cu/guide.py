@@ -90,7 +90,11 @@ CAPTURE ONLY WHAT YOU NEED TO READ
 
   A window or landmark capture refuses with 27 if the target is off-workspace,
   hidden, or overlaps another visible window or a top/overlay layer. Focus
-  history cannot prove stacking, so even a possibly-behind window is ambiguous.
+  history cannot prove stacking, so even a possibly-behind window is ambiguous,
+  except where the compositor's stacking rules decide it: a floating window (a
+  dialog, a chooser) over tiled windows on its workspace, or over a maximized
+  one while the compositor allows it over fullscreen, is captured. Two
+  overlapping floating windows still refuse.
   Capture never focuses or switches workspaces. Explicitly arrange the target,
   or use --output/--region for pixels that assert no particular window identity.
   An output or region can carry an explicit recipient assertion with
