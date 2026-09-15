@@ -65,6 +65,7 @@ class WindowSeam:
     toggle_floating: Callable[[str], None]
     move: Callable[[str, float, float], None]
     maximize: Callable[[str, bool], None]
+    resize: Callable[[str, float, float], None]
 
 
 def hyprland_seam() -> WindowSeam:
@@ -94,7 +95,17 @@ def hyprland_seam() -> WindowSeam:
             f'action = "{"set" if enabled else "unset"}"}}))'
         )
 
-    return WindowSeam(toggle_floating=toggle_floating, move=move, maximize=maximize)
+    def resize(address: str, width: float, height: float) -> None:
+        # Hyprland keeps the window's center where it was; callers move afterwards.
+        hypr.lua(
+            "hl.dispatch(hl.dsp.window.resize("
+            f'{{window = "address:{_address(address)}", '
+            f"x = {_number(width)}, y = {_number(height)}}}))"
+        )
+
+    return WindowSeam(
+        toggle_floating=toggle_floating, move=move, maximize=maximize, resize=resize
+    )
 
 
 def _address(value: str) -> str:
@@ -369,6 +380,24 @@ def _output(
     }
 
 
+#: Most logical pixels kept clear on each side of a window fitted to its output;
+#: a small output keeps 5% of its size per side instead.
+FIT_MARGIN = 24
+
+
+def _fitted_size(rect: dict[str, Any], output: dict[str, Any]) -> dict[str, float] | None:
+    """The size that makes a window wholly reachable on the output, or None if it fits."""
+    bounds = output["logical_rect"]
+    limit_w = bounds["w"] - 2 * min(FIT_MARGIN, bounds["w"] * 0.05)
+    limit_h = bounds["h"] - 2 * min(FIT_MARGIN, bounds["h"] * 0.05)
+    if rect["w"] <= limit_w and rect["h"] <= limit_h:
+        return None
+    return {
+        "w": float(math.floor(min(rect["w"], limit_w))),
+        "h": float(math.floor(min(rect["h"], limit_h))),
+    }
+
+
 def _destination(rect: dict[str, Any], output: dict[str, Any]) -> dict[str, float]:
     bounds = output["logical_rect"]
     x = bounds["x"] + max(0.0, (bounds["w"] - rect["w"]) / 2)
@@ -600,6 +629,8 @@ def present(
         )
     destination = _destination(before["logical_rect"], output)
     planned = ["move"] if before["floating"] else ["toggle-floating", "move"]
+    if before["floating"] and _fitted_size(before["logical_rect"], output) is not None:
+        planned.insert(0, "resize")
     if dry_run:
         return {
             "action": "present",
@@ -693,6 +724,74 @@ def present(
                 )
             steps.append({"operation": "toggle-floating", "status": "verified"})
             expected = after_float
+            _save_presented(store, token, before, expected, output, complete=False)
+
+        fitted = _fitted_size(expected["logical_rect"], output)
+        if fitted is not None:
+            _read_and_check(
+                address=before["address"],
+                expected=expected,
+                snapshot_reader=snapshot_reader,
+                guard=guard,
+                before=before,
+                output=output,
+                token=token,
+                steps=steps,
+                require_arrangement=True,
+            )
+            try:
+                seam.resize(before["address"], fitted["w"], fitted["h"])
+            except Exception as exc:
+                live, read_snapshot = _observed(snapshot_reader, before["address"])
+                actual_state = state(live) if live is not None else None
+                raise _failure(
+                    "refused" if actual_state == expected else "partial",
+                    "the compositor refused the presentation resize",
+                    before=before,
+                    actual=live,
+                    snapshot=read_snapshot,
+                    output=output,
+                    token=token,
+                    steps=steps,
+                ) from exc
+            live, read_snapshot = _observed(snapshot_reader, before["address"])
+            if live is None:
+                raise _failure(
+                    "stale",
+                    "the window disappeared after the presentation resize",
+                    before=before,
+                    actual=None,
+                    snapshot=read_snapshot,
+                    output=output,
+                    token=token,
+                    steps=steps,
+                )
+            after_resize = state(live)
+            if not _identity_matches(expected, after_resize):
+                raise _failure(
+                    "stale",
+                    "the window identity changed after the presentation resize",
+                    before=before,
+                    actual=live,
+                    snapshot=read_snapshot,
+                    output=output,
+                    token=token,
+                    steps=steps,
+                )
+            resized = after_resize["logical_rect"]
+            if resized["w"] != fitted["w"] or resized["h"] != fitted["h"]:
+                raise _failure(
+                    "refused" if after_resize == expected else "partial",
+                    "the presentation resize did not verify its size",
+                    before=before,
+                    actual=live,
+                    snapshot=read_snapshot,
+                    output=output,
+                    token=token,
+                    steps=steps,
+                )
+            steps.append({"operation": "resize", "status": "verified"})
+            expected = after_resize
             _save_presented(store, token, before, expected, output, complete=False)
 
         destination = _destination(expected["logical_rect"], output)
@@ -1087,8 +1186,12 @@ def restore(
                 operation = "unmaximize"
             elif before.get("floating"):
                 target_rect = before.get("logical_rect")
-                seam.move(address, target_rect["x"], target_rect["y"])
+                shown = presented["logical_rect"]
                 operation = "move"
+                if (target_rect["w"], target_rect["h"]) != (shown["w"], shown["h"]):
+                    seam.resize(address, target_rect["w"], target_rect["h"])
+                    operation = "resize-and-move"
+                seam.move(address, target_rect["x"], target_rect["y"])
             else:
                 seam.toggle_floating(address)
                 operation = "toggle-floating"

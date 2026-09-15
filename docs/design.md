@@ -435,12 +435,13 @@ explicit focus request. Capture remains observational and does not rearrange a
 window. `cu present WINDOW` is the separate, explicit arrangement operation.
 It requires a visible window, selects that window's active output unless the
 caller names another active output, makes a tiled window floating when needed,
-and centers its current rectangle on the selected output. With `--maximize` it
-instead sets the compositor's maximized state on the window's own output, and
-`cu restore` unsets it, verifying the saved rectangle. The implemented Hyprland
-seam uses only the verified floating-state, move, and maximized-state
-operations; it does not guess resize, true fullscreen, workspace, or rule
-behavior.
+and centers its rectangle on the selected output, first shrinking a floating
+window larger than the output to fit inside a small margin; restore returns the
+saved size before the saved position. With `--maximize` it instead sets the
+compositor's maximized state on the window's own output, and `cu restore` unsets
+it, verifying the saved rectangle. The implemented Hyprland seam uses only the
+verified floating-state, move, resize, and maximized-state operations; it does
+not guess true fullscreen, workspace, or rule behavior.
 Because the move changes position only, a floating window can land inside
 another output's area while the compositor keeps it on its workspace's monitor;
 presentation then refuses as partial instead of reporting the requested output.
