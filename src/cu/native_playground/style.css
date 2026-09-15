@@ -30,6 +30,15 @@ h3 {
   box-shadow: 0 3px 12px #15253c2b;
 }
 
+/* Everything that grows with the suite scrolls in normal flow: a pinned block
+   taller than the viewport would cover the interaction region beneath it. */
+.task-catalog {
+  margin: 16px 0;
+  padding: 16px;
+  background: #e3ebf8;
+  border: 1px solid #9ab;
+}
+
 #suite-progress,
 #interaction-status,
 #capabilities {
