@@ -30,7 +30,7 @@ from cu.browser_read import (
     write_frame,
 )
 
-PROTOCOL = {"protocol": "cu-browser-read", "version": 8}
+PROTOCOL = {"protocol": "cu-browser-read", "version": 9}
 
 
 def response(request: dict[str, object], *, response_id: str | None = None) -> dict[str, object]:
@@ -283,6 +283,17 @@ def test_capture_region_is_explicitly_css_viewport_geometry():
             "capture",
             {"region": {"x": 0, "y": 0, "width": 1, "height": 1, "space": "image-pixels"}},
         )
+
+
+def test_tabs_control_lists_every_tab_and_takes_titles_only_on_request():
+    assert make_control("tabs")["include_titles"] is False
+    assert make_control("tabs", include_titles=True)["include_titles"] is True
+    with pytest.raises(ProtocolError, match="no tab_id"):
+        make_control("tabs", tab_id=7)
+    with pytest.raises(ProtocolError, match="no include_titles"):
+        make_control("grant", include_titles=True)
+    with pytest.raises(ProtocolError, match="no capabilities"):
+        make_control("tabs", capabilities=["read"])
 
 
 def test_full_page_capture_is_exclusive_with_a_region():

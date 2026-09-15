@@ -1169,6 +1169,54 @@ function readyMessage() {
   };
 }
 
+test("tabs lists ids without a grant and adds titles and query-free URLs only on request", async () => {
+  const { api, port } = fakeApi();
+  api.tabs.query = async () => [
+    { id: 7, windowId: 3, index: 0, active: true, hidden: false, title: "Inbox", url: "https://mail.test/u/0?token=secret#thread" },
+    { id: 9, windowId: 4, index: 2, active: false, title: "Docs", url: "https://docs.test/page" },
+  ];
+  const controller = createController(api);
+  controller.connectNative();
+  const tabs = (overrides = {}) => ({ ...control("tabs", { id: "tabs-1" }), ...overrides });
+
+  await controller.handleNativeMessage(tabs(), port);
+  const plain = port.messages.at(-1);
+  assert.equal(plain.ok, true, JSON.stringify(plain));
+  assert.equal(plain.result.kind, "tabs");
+  assert.equal(plain.result.total, 2);
+  assert.deepEqual(plain.result.tabs[1], {
+    tab_id: 9,
+    window_id: 4,
+    index: 2,
+    active: false,
+    hidden: false,
+    granted: false,
+  });
+  assert.equal(JSON.stringify(plain).includes("Inbox"), false);
+  assert.equal(JSON.stringify(plain).includes("mail.test"), false);
+
+  await controller.handleNativeMessage(tabs({ include_titles: true }), port);
+  const titled = port.messages.at(-1).result.tabs[0];
+  assert.equal(titled.title, "Inbox");
+  assert.equal(titled.url, "https://mail.test/u/0");
+  assert.equal(port.messages.at(-1).result.titles, "included-untrusted");
+
+  await controller.handleNativeMessage(
+    control("grant", { id: "grant-tabs", capabilities: ["read", "interact"] }),
+    port,
+  );
+  await controller.handleNativeMessage(tabs(), port);
+  assert.equal(port.messages.at(-1).result.tabs[0].granted, true);
+
+  await controller.handleNativeMessage(tabs({ tab_id: 7 }), port);
+  assert.equal(port.messages.at(-1).error.code, "invalid-request");
+  await controller.handleNativeMessage(
+    { ...control("release", { id: "release-titles" }), include_titles: true },
+    port,
+  );
+  assert.equal(port.messages.at(-1).error.code, "invalid-request");
+});
+
 function control(operation, overrides = {}) {
   return {
     protocol: PROTOCOL,

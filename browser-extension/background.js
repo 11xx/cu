@@ -10,12 +10,13 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 8;
+  const VERSION = 9;
   const CAPABILITIES = new Set(["read", "interact"]);
   const READ_OPERATIONS = new Set(["observe", "query", "wait", "ax-query", "console", "network"]);
   // Evidence the worker reads through an attached debugger; collectors never see it.
   const DEBUGGER_READS = new Set(["ax-query", "console", "network"]);
-  const CONTROL_OPERATIONS = new Set(["grant", "release", "debug-attach", "debug-detach"]);
+  const CONTROL_OPERATIONS = new Set(["grant", "release", "debug-attach", "debug-detach", "tabs"]);
+  const MAX_LISTED_TABS = 128;
   const MAX_DEBUG_ENTRIES = 100;
   const MAX_DEBUG_TEXT_CHARS = 512;
   const AX_STATES = new Set([
@@ -471,10 +472,28 @@
     exactKeys(
       message,
       new Set(["protocol", "version", "type", "id", "operation", "tab_id"]),
-      new Set(["protocol", "version", "type", "id", "operation", "tab_id", "capabilities", "cursor"]),
+      new Set([
+        "protocol",
+        "version",
+        "type",
+        "id",
+        "operation",
+        "tab_id",
+        "capabilities",
+        "cursor",
+        "include_titles",
+      ]),
     );
     if (message.protocol !== PROTOCOL || message.version !== VERSION || message.type !== "control")
       throw new ValidationError("unsupported session control envelope");
+    if (message.include_titles !== undefined) {
+      if (message.operation !== "tabs")
+        throw new ValidationError(`${message.operation} takes no include_titles`);
+      if (typeof message.include_titles !== "boolean")
+        throw new ValidationError("include_titles must be a boolean");
+    }
+    if (message.operation === "tabs" && message.tab_id !== null)
+      throw new ValidationError("tabs lists every tab and takes no tab_id");
     if (!validRequestId(message.id)) throw new ValidationError("control id is invalid");
     if (!CONTROL_OPERATIONS.has(message.operation))
       throw new ValidationError("operation is not a supported session control");
@@ -493,6 +512,7 @@
       tab_id: message.tab_id,
       capabilities: validateCapabilities(message.capabilities),
       cursor: message.cursor,
+      include_titles: message.include_titles === true,
     };
   }
   function errorResponse(id, code, message, extra = {}) {
@@ -621,8 +641,8 @@
   function isAction(operation) {
     return ACTION_OPERATIONS.has(operation);
   }
-  // Query strings and fragments often carry tokens, so debugger evidence keeps
-  // only the scheme, origin and path.
+  // Query strings and fragments often carry tokens, so URLs leave the extension
+  // with only the scheme, origin and path.
   function urlWithoutQuery(value) {
     if (typeof value !== "string" || value.length === 0) return null;
     try {
@@ -1980,6 +2000,49 @@
         grant.debugger = false;
         if (state.nativeReady) postNative(grantMessage(), port);
         reply(grant, { grant: copyGrant(grant), debugger: "detached" });
+        return;
+      }
+      if (control.operation === "tabs") {
+        let tabs;
+        try {
+          tabs = await api.tabs.query({});
+        } catch (_) {
+          postNative(
+            errorResponse(control.id, "tabs-unavailable", "the browser did not list its tabs"),
+            port,
+          );
+          return;
+        }
+        const listed = (Array.isArray(tabs) ? tabs : []).filter((tab) =>
+          Number.isSafeInteger(tab?.id),
+        );
+        postNative(
+          {
+            protocol: PROTOCOL,
+            version: VERSION,
+            type: "response",
+            id: control.id,
+            ok: true,
+            result: {
+              kind: "tabs",
+              tabs: listed.slice(0, MAX_LISTED_TABS).map((tab) => ({
+                tab_id: tab.id,
+                window_id: Number.isSafeInteger(tab.windowId) ? tab.windowId : null,
+                index: Number.isSafeInteger(tab.index) ? tab.index : null,
+                active: tab.active === true,
+                hidden: tab.hidden === true,
+                granted: state.grant?.tab_id === tab.id,
+                ...(control.include_titles
+                  ? { title: clippedText(tab.title), url: urlWithoutQuery(tab.url) }
+                  : {}),
+              })),
+              total: listed.length,
+              truncated: listed.length > MAX_LISTED_TABS,
+              titles: control.include_titles ? "included-untrusted" : "omitted",
+            },
+          },
+          port,
+        );
         return;
       }
       if (control.operation === "release") {
