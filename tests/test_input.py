@@ -9,6 +9,7 @@ in the wrong window.
 from __future__ import annotations
 
 import json
+import math
 
 import pytest
 
@@ -897,6 +898,62 @@ def test_native_move_accepts_delayed_own_event_delivery(monkeypatch):
     assert result["cursor"] == {"x": 40.0, "y": 40.0}
 
 
+def _gain_device(cursor, gain, moves):
+    """A pointer whose compositor scales deltas and reports whole pixels."""
+    exact = [cursor[0]["x"], cursor[0]["y"]]
+
+    class Device:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def move_relative(self, dx, dy):
+            moves.append((dx, dy))
+            exact[0] += dx * gain
+            exact[1] += dy * gain
+            cursor[0] = {"x": float(round(exact[0])), "y": float(round(exact[1]))}
+
+    return Device
+
+
+def _virtual_clock(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(actions.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        actions.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+
+
+@pytest.mark.parametrize("target", [(13, 10), (80, 60)])
+def test_native_move_converges_under_sub_unity_pointer_gain(monkeypatch, target):
+    _frame, cursor = _native_move_fixture(monkeypatch)
+    _virtual_clock(monkeypatch)
+    moves = []
+    monkeypatch.setattr(actions.uinput, "Device", _gain_device(cursor, 0.4, moves))
+    result = actions.move(CFG, "f1", target, duration=0.3, hz=60, timeout=2, dry_run=False)
+    assert result["status"] == "converged"
+    residual = math.hypot(cursor[0]["x"] - target[0], cursor[0]["y"] - target[1])
+    assert residual <= actions.MOTION_TOLERANCE
+
+
+def test_native_move_refuses_events_that_never_reach_the_cursor(monkeypatch):
+    _frame, cursor = _native_move_fixture(monkeypatch)
+    _virtual_clock(monkeypatch)
+    moves = []
+    monkeypatch.setattr(actions.uinput, "Device", _gain_device(cursor, 0.0, moves))
+    with pytest.raises(Refused) as caught:
+        actions.move(CFG, "f1", (80, 60), duration=0.3, hz=60, timeout=10, dry_run=False)
+    assert caught.value.code == exits.MOTION_NOT_CONVERGED
+    assert "never reached the cursor" in caught.value.reason
+    unseen = sum(math.hypot(dx, dy) for dx, dy in moves)
+    assert unseen <= actions.MAX_ABSORBED_TRAVEL + 2 * actions.MAX_NATIVE_DELTA
+
+
 def test_native_move_refuses_a_start_outside_the_inspected_frame(monkeypatch):
     frame, _cursor = _native_move_fixture(monkeypatch)
     frame["logical_rect"] = {"x": 20, "y": 20, "w": 80, "h": 80}
@@ -1485,12 +1542,8 @@ def test_native_cli_classifies_scaled_and_quantized_delivery(
     monkeypatch.setattr(actions.uinput, "Device", Device)
     monkeypatch.setattr(actions.hypr, "move_cursor", lambda *_: pytest.fail("native move warped"))
     code = cli.main(["move", "--frame", "f1", "--at", "30,30", "--json"])
-    if quantized and gain == 0.5:
-        # The first half-pixel delta rounds back to the origin. With no
-        # observable delivery, CU must not label it human or stack more input.
-        assert code == exits.MOTION_NOT_CONVERGED
-        assert len(emitted) == 1
-        return
+    # A half-pixel delta can round back to the origin; it is absorbed gain, not
+    # a human, and the next deltas grow until the motion shows.
     assert code == exits.OK
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "converged"

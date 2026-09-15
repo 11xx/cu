@@ -326,11 +326,14 @@ def test_native_host_refuses_a_page_response_that_names_no_grant(tmp_path, monke
 
 def test_native_host_cancels_a_disconnected_waiter(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    # Unbuffered, so a frame that arrives with the previous one stays in the
+    # pipe where the selector below can see it.
     process = subprocess.Popen(
         [sys.executable, "-m", "cu.browser_read", "host"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        bufsize=0,
     )
     try:
         with selectors.DefaultSelector() as selector:
