@@ -243,6 +243,8 @@ ACT THROUGH THE FRAME YOU READ
   its current rectangle to the selected output's center. It does not guess a
   resize or fullscreen operation. Each compositor step is read back, and the
   result carries the actual before and after state plus an opaque runtime token.
+  A window the compositor leaves on another output than the one requested
+  refuses as partial (36), with its actual state attached.
   `restore TOKEN` changes the window only while its identity and presented
   geometry, floating, workspace, output, and visibility state still match the
   token. A mismatch invalidates the token and refuses without overwriting the
