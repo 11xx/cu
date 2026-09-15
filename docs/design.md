@@ -438,6 +438,9 @@ caller names another active output, makes a tiled window floating when needed,
 and centers its current rectangle on the selected output. The implemented
 Hyprland seam uses only the verified floating-state and move operations; it
 does not guess resize, maximize, fullscreen, workspace, or rule behavior.
+Because the move changes position only, a floating window can land inside
+another output's area while the compositor keeps it on its workspace's monitor;
+presentation then refuses as partial instead of reporting the requested output.
 
 Each mutating step is followed by a fresh identity and geometry read-back. A
 successful result records actual before/after state and returns an opaque token

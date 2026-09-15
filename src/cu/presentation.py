@@ -774,6 +774,19 @@ def present(
                 token=token,
                 steps=steps,
             )
+        # A pixel move can land a floating window inside another output's area
+        # while the compositor keeps it on its workspace's monitor.
+        if final_state["monitor"] != output["name"]:
+            raise _failure(
+                "partial",
+                "the window did not reach the requested output",
+                before=before,
+                actual=final_window,
+                snapshot=final_snapshot,
+                output=output,
+                token=token,
+                steps=steps,
+            )
         _save_presented(store, token, before, final_state, output, complete=True)
         return {
             "action": "present",

@@ -139,6 +139,58 @@ def test_partial_readback_is_typed_and_reports_actual_state(presentation_world):
     ]
 
 
+def _second_output(world):
+    world["monitors"].append(
+        {"name": "SECOND", "scale": 1, "logical_rect": {"x": 100, "y": 0, "w": 100, "h": 80}}
+    )
+
+
+def test_present_refuses_an_output_the_window_did_not_reach(presentation_world):
+    world, tiled_rect, store, cfg = presentation_world
+    _second_output(world)
+    seam = FakeWindowSeam(world, tiled_rect, floating_rect={"x": 9, "y": 4, "w": 42, "h": 32})
+
+    with pytest.raises(safety.Refused) as caught:
+        actions.present(
+            cfg,
+            world["windows"][0],
+            output_name="SECOND",
+            seam=seam,
+            store=store,
+            snapshot_reader=_reader(world),
+            dry_run=False,
+        )
+
+    assert caught.value.code == exits.PRESENTATION_PARTIAL
+    assert caught.value.details["actual"]["monitor"] == "OUT"
+    assert caught.value.details["actual"]["logical_rect"]["x"] == 129.0
+
+
+def test_present_accepts_an_output_the_window_reached(presentation_world):
+    world, tiled_rect, store, cfg = presentation_world
+    _second_output(world)
+
+    class OutputFollowingSeam(FakeWindowSeam):
+        def move(self, address, x, y):
+            super().move(address, x, y)
+            self.world["windows"][0]["monitor"] = "SECOND" if x >= 100 else "OUT"
+
+    seam = OutputFollowingSeam(world, tiled_rect, floating_rect={"x": 9, "y": 4, "w": 42, "h": 32})
+
+    result = actions.present(
+        cfg,
+        world["windows"][0],
+        output_name="SECOND",
+        seam=seam,
+        store=store,
+        snapshot_reader=_reader(world),
+        dry_run=False,
+    )
+
+    assert result["after"]["monitor"] == "SECOND"
+    assert result["output"]["name"] == "SECOND"
+
+
 def test_present_records_verified_before_and_after_and_restore_recovers(
     presentation_world,
 ):
