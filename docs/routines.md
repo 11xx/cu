@@ -24,7 +24,7 @@ exception wins over a completed membership entry for the same artifact, so a
 collision or delayed item returns to the caller's decision boundary. The
 context's run record preserves round shape (`full-start`, `prepared-page`,
 `warm-follow-up`, or `cold-resume`), attempt identity, first-attempt status and
-outcome, failures, and explicit recovery IDs. The P08 fixture exposes both the
+outcome, failures, and explicit recovery IDs. The complete-task fixture (`tests/benchmark_task.py`) exposes both the
 resume decision and eventual outcome without turning a recovery into a new
 first-attempt result.
 

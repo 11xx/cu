@@ -32,8 +32,7 @@ cu export --frame f3 --retain ./evidence/f3.png --json
 
 The local consumer fixture in `tests/evidence_consumer.py` checks the envelope,
 coordinate spaces, coverage, provenance, derived input references, and retained
-digest. VidSem and Iterum have no resolved implementation consumer contract in
-this repository, so no cross-product adapter is implied by this fixture. Export
+digest; it is a local fixture, not an adapter for any other product. Export
 never focuses, takes the desktop lock, moves the pointer, touches the clipboard,
 or injects input. Browser CSS rectangles and imported historical/video frames
 remain outside this contract.
