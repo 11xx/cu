@@ -238,8 +238,9 @@ ACT THROUGH THE FRAME YOU READ
   Native movement yields with 41 for unexplained movement between settled
   samples. Pending-event readback allows acceleration overshoot and bounded
   rounding relative to the submitted delta; it cannot identify a coincident
-  human movement consistent with that event. If delivery remains unobservable,
-  movement stops with 32 instead of emitting more input. A watched hover
+  human movement consistent with that event. An event too small to show is
+  followed by a larger one; once a bounded amount of submitted travel has left
+  the cursor unmoved, movement stops with 32. A watched hover
   rechecks abort, focus, and pointer ownership and is bounded to ten seconds;
   it yields instead of completing after an interruption.
 

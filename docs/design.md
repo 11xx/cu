@@ -160,10 +160,13 @@ against the submitted relative delta: positive forward motion and at most the
 endpoint tolerance of transverse deviation. Acceleration may overshoot a sampled
 waypoint; reducing distance to that waypoint is not a delivery requirement.
 Cursor readback alone cannot distinguish an own event from a coincident human
-movement consistent with that event. A submitted event gets a bounded delivery
-settle read before another correction; an event that never becomes visible
-(including subpixel motion rounded back to the origin) yields with
-`MOTION_NOT_CONVERGED` rather than being replayed or attributed to a human. A click remains: warp through IPC, assert
+movement consistent with that event. Each event is sized by the cursor travel
+that earlier events actually produced, and no single event is aimed more than a
+short fixed distance. An event whose read-back shows no motion may have moved the
+pointer less than one reported pixel, so the next one is sized larger and a late
+arrival is still checked against its submitted delta; once a bounded amount of
+submitted travel has left the cursor unmoved, movement stops with
+`MOTION_NOT_CONVERGED` rather than being attributed to a human. A click remains: warp through IPC, assert
 the expected window is still under the point, then press and release through
 uinput.
 
