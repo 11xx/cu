@@ -311,8 +311,11 @@ includes status publication and stdout flush. Capture component timings separate
 acquisition, baseline/probe decode, crop/compare, intentional waits, descriptor
 publication and output publication. Native component timings separate preflight,
 device setup/teardown, delivery and convergence; operation counts identify
-monitor, cursor, window, layer, focus and native-delta observations. Process startup,
-metrics emission, harness transport and model inference are explicitly excluded.
+snapshots, batched desktop-state reads, cursor reads, injection boundaries and
+native delta events. Components are exclusive: time inside a span nested in
+another counts toward the inner component only, so the components and
+`other_seconds` add up to the total. Process startup, metrics emission, harness
+transport and model inference are explicitly excluded.
 `wait.elapsed_seconds` continues to start after baseline decoding, so it is not
 total command latency.
 The report carries the current invocation ID and any explicitly supplied CU or
