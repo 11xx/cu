@@ -671,7 +671,8 @@ OPTIONAL FIREFOX CU BROWSER
   return bounded evidence buffered since attach (browser error log entries include
   ones already recorded for the page): failures only, request metadata
   without query strings, headers, or bodies, and accessibility roles, names, and
-  states with values omitted unless `--values`. Any end of the grant, `debug
+  states with values omitted unless `--values`, and sensitive-looking fields
+  redacted as in page reads. Any end of the grant, `debug
   detach`, or a detach from the banner ends the attachment. Firefox refuses these
   commands. With it attached, `cu web action click|hover|type|key|scroll --input
   debugger` sends real input to the point the collector checked (the same

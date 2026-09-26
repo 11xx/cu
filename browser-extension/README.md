@@ -230,8 +230,9 @@ and error-level browser log entries, with text clipped. `network` keeps method,
 resource type, URL without query string or fragment, status, MIME type, completion
 and failure; never headers, bodies or cookies. `ax` returns accessibility roles,
 names, descriptions and states from the browser's own tree, filtered by role and
-accessible name, with values omitted unless `--values` is given. All of it is
-untrusted page evidence. Firefox has no extension debugger, so these commands
+accessible name, with values omitted unless `--values` is given. A value whose
+accessible name or description matches the page read's sensitive-field check is
+returned as `value_state: "redacted"`. All of it is untrusted page evidence. Firefox has no extension debugger, so these commands
 refuse there as `debugger-unsupported`.
 
 With the debugger attached, `--input debugger` sends real input instead of page

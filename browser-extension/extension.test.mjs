@@ -1525,6 +1525,57 @@ test("accessibility evidence queries by role and name and omits values unless as
   assert.equal(port.messages.at(-1).result.nodes[0].value, "typed");
 });
 
+test("accessibility values of sensitive fields are redacted like a page read", async () => {
+  const { api, port } = fakeApi();
+  debuggerFake(api, {
+    "Accessibility.getFullAXTree": {
+      nodes: [
+        {
+          nodeId: "30",
+          role: { value: "textbox" },
+          name: { value: "Security code" },
+          value: { value: "4417" },
+        },
+        {
+          nodeId: "31",
+          role: { value: "textbox" },
+          name: { value: "Code" },
+          description: { value: "One-time code from the app" },
+          value: { value: "902113" },
+        },
+        {
+          nodeId: "32",
+          role: { value: "textbox" },
+          name: { value: "City" },
+          value: { value: "Lisbon" },
+        },
+      ],
+    },
+  });
+  const controller = createController(api);
+  controller.connectNative();
+  const session = await grantWithDebugger(controller, port);
+  await controller.handleNativeMessage(
+    request("ax-query", { id: "ax3", session, payload: { include_values: true } }),
+    port,
+  );
+  const nodes = port.messages.at(-1).result.nodes;
+  assert.deepEqual(
+    nodes.map((node) => [node.name, node.value, node.value_state ?? null]),
+    [
+      ["Security code", null, "redacted"],
+      ["Code", null, "redacted"],
+      ["City", "Lisbon", null],
+    ],
+  );
+  assert.equal(/4417|902113/.test(JSON.stringify(nodes)), false);
+});
+
+test("the worker's sensitive-field pattern is the collector's", () => {
+  assert.equal(background.SENSITIVE_PATTERN.source, collectorModule.SENSITIVE_PATTERN.source);
+  assert.equal(background.SENSITIVE_PATTERN.flags, collectorModule.SENSITIVE_PATTERN.flags);
+});
+
 test("full-page capture renders through the attached debugger and checks its budget first", async () => {
   const { api, port } = fakeApi();
   const calls = debuggerFake(api);

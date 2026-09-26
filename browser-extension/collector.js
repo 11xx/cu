@@ -1980,6 +1980,7 @@
     MAX_ELEMENTS,
     READ_OPERATIONS,
     ACTION_OPERATIONS,
+    SENSITIVE_PATTERN: sensitivePattern,
     ValidationError,
     validatePayload,
     validateRequest,
