@@ -2157,6 +2157,20 @@ MAX_BATCH_BYTES = 65536
 BATCH_COMMANDS = frozenset({"focus", "warp", "move", "click", "scroll", "type", "key", "browser"})
 
 
+# argparse accepts any unambiguous prefix of a long option, so an exact-match
+# filter would let `--sess` through as `--session`.
+BATCH_FORBIDDEN_OPTIONS = ("--session", "--why", "--dry-run", "--help")
+
+
+def _batch_forbidden_option(token: str) -> bool:
+    name = token.split("=", 1)[0]
+    if name == "-h":
+        return True
+    return name.startswith("--") and len(name) > 2 and any(
+        option.startswith(name) for option in BATCH_FORBIDDEN_OPTIONS
+    )
+
+
 def cmd_batch(args: argparse.Namespace) -> int:
     """Execute a bounded, pre-parsed sequence under the caller's desktop hold."""
     try:
@@ -2174,8 +2188,7 @@ def cmd_batch(args: argparse.Namespace) -> int:
         if (
             not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv)
             or argv[0] not in BATCH_COMMANDS
-            or any(a.split("=", 1)[0] in {"--session", "--why", "--dry-run", "--help", "-h"}
-                   for a in argv)
+            or any(_batch_forbidden_option(a) for a in argv)
             or (argv[0] == "type" and len(argv) > 1 and argv[1] == "-")
         ):
             raise ValueError(f"batch step {index} is not an allowed action argv array")
