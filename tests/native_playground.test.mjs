@@ -215,6 +215,47 @@ test("reset task, retry and reset run are distinct operations", () => {
   assert.equal(stateApi.completionFor(state).passed, 0);
 });
 
+test("resetting a running attempt keeps it as an aborted first attempt", () => {
+  let state = stateApi.createRunState({ run_id: "run-reset", at: 0 });
+  state = stateApi.reduce(state, {
+    type: "START",
+    task_id: "native-basics",
+    attempt_id: "attempt-abandoned",
+    at: 0,
+  });
+  state = stateApi.reduce(state, {
+    type: "ENTRY_INPUT",
+    task_id: "native-basics",
+    value: "wrong",
+    at: 1,
+  });
+  state = stateApi.reduce(state, { type: "RESET_TASK", task_id: "native-basics", at: 2 });
+  const reset = state.tasks["native-basics"];
+  assert.equal(reset.status, "not-started");
+  assert.equal(reset.current_attempt, null);
+  assert.equal(reset.attempts.length, 1);
+  assert.equal(reset.attempts[0].attempt_id, "attempt-abandoned");
+  assert.equal(reset.attempts[0].outcome, "ABORTED");
+  assert.equal(reset.attempts[0].reason.cause, "reset");
+
+  state = stateApi.reduce(state, {
+    type: "START",
+    task_id: "native-basics",
+    attempt_id: "attempt-second",
+    at: 3,
+  });
+  state = stateApi.reduce(state, {
+    type: "APPLY",
+    task_id: "native-basics",
+    entry: "4242",
+    notes: "Luna was here",
+    at: 4,
+  });
+  const completion = stateApi.completionFor(state);
+  assert.equal(completion.passed, 1);
+  assert.equal(completion.first_attempt_passed, 0);
+});
+
 test("phase-A tasks are seed-varied, replayable and visibly specified", () => {
   const first = stateApi.createRunState({ run_id: "run-alpha", suite_seed: "alpha" });
   const replay = stateApi.createRunState({ run_id: "run-alpha-replay", suite_seed: "alpha" });
