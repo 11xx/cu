@@ -25,6 +25,9 @@ class Measurement:
         self.seconds: dict[str, float] = dict.fromkeys(COMPONENTS, 0.0)
         self.operations: dict[str, int] = defaultdict(int)
         self.frames: list[dict[str, Any]] = []
+        # Time spent in spans opened inside the span at the same depth, so
+        # each component counts only its own work and the components add up.
+        self._nested: list[float] = []
 
     def report(self, code: int) -> dict[str, Any]:
         total = time.monotonic() - self.started
@@ -54,10 +57,14 @@ def span(name: str):
         yield
         return
     started = time.monotonic()
+    measurement._nested.append(0.0)
     try:
         yield
     finally:
-        measurement.seconds[name] += time.monotonic() - started
+        elapsed = time.monotonic() - started
+        measurement.seconds[name] += elapsed - measurement._nested.pop()
+        if measurement._nested:
+            measurement._nested[-1] += elapsed
         measurement.operations[name] += 1
 
 

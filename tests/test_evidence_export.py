@@ -221,3 +221,11 @@ def test_cli_export_is_read_only_and_returns_the_envelope(tmp_path, capsys):
     assert result["schema"] == "cu-evidence/1"
     assert result["status"] == "ok"
     assert result["invocation_id"]
+
+
+def test_producer_version_is_the_installed_distribution():
+    import importlib.metadata
+
+    from cu import evidence
+
+    assert evidence._producer({})["version"] == importlib.metadata.version("cu")

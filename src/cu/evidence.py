@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import math
 import numbers
 import re
@@ -132,13 +133,21 @@ def _unavailable(frame: dict[str, Any], reason: str) -> dict[str, Any]:
     }
 
 
+def _version() -> str:
+    """The installed distribution's version; a source tree without metadata says so."""
+    try:
+        return importlib.metadata.version("cu")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 def _producer(frame: dict[str, Any]) -> dict[str, Any]:
     configuration = {
         key: frame[key] for key in ("profile", "capture_scale") if key in frame
     }
     return {
         "name": "cu",
-        "version": "0.1.0",
+        "version": _version(),
         "profile": frame.get("profile"),
         "configuration": configuration,
     }

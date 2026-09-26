@@ -1785,7 +1785,24 @@
     if (action.type === "RESET_TASK") {
       const definition = DEFINITION_BY_ID[taskId];
       const initial = definition.initial_state({ fixture: task.fixture });
-      return replaceTask(state, taskId, (current) => ({
+      // A running attempt ends with a receipt of its own; resetting over it
+      // would let the next attempt pass as the first.
+      const settled =
+        task.status === "running" && task.current_attempt
+          ? finish(
+              state,
+              taskId,
+              "ABORTED",
+              {
+                code: "task-reset",
+                cause: "reset",
+                message: "The task was reset while this attempt was running.",
+              },
+              { state: task.current_attempt.state },
+              at,
+            )
+          : state;
+      return replaceTask(settled, taskId, (current) => ({
         ...current,
         status: "not-started",
         draft: copy(initial),

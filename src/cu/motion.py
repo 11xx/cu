@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
-from itertools import pairwise
 
 MAX_PATH_POINTS = 4096
 
@@ -85,7 +84,11 @@ def circle(
 
 
 def validate(points: list[dict[str, float]], bounds: dict[str, float]) -> None:
-    """Require every sampled point and segment endpoint inside a safe rectangle."""
+    """Require every sampled point inside a safe rectangle.
+
+    A rectangle is convex, so the segment between two points inside it lies
+    inside it too; checking the points checks the whole path.
+    """
     if not points:
         raise PathError("a path must contain at least one point")
     for point in points:
@@ -96,14 +99,3 @@ def validate(points: list[dict[str, float]], bounds: dict[str, float]) -> None:
             and bounds["y"] <= point["y"] <= bounds["y"] + bounds["h"]
         ):
             raise PathError("path leaves the inspected safe region")
-    # A rectangle is convex, so a segment whose endpoints are inside it is also
-    # inside it. Checking every segment keeps that invariant explicit for paths
-    # generated outside this module.
-    for first, second in pairwise(points):
-        if not (
-            bounds["x"] <= first["x"] <= bounds["x"] + bounds["w"]
-            and bounds["y"] <= first["y"] <= bounds["y"] + bounds["h"]
-            and bounds["x"] <= second["x"] <= bounds["x"] + bounds["w"]
-            and bounds["y"] <= second["y"] <= bounds["y"] + bounds["h"]
-        ):
-            raise PathError("path segment leaves the inspected safe region")

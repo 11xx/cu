@@ -17,6 +17,10 @@
   const DEBUGGER_READS = new Set(["ax-query", "console", "network"]);
   const CONTROL_OPERATIONS = new Set(["grant", "release", "debug-attach", "debug-detach", "tabs"]);
   const MAX_LISTED_TABS = 128;
+  // The collector's sensitive-field check, applied to accessible names, so the
+  // debugger's tree cannot return a value a page read would redact.
+  const SENSITIVE_PATTERN =
+    /(?:pass(?:word)?|secret|token|api[\s_-]*key|access[\s_-]*key|auth|otp|one[\s_-]*time|credit[\s_-]*card|card[\s_-]*(?:number|security)|security[\s_-]*code|verification[\s_-]*code|\bpin\b|cvv|cvc)/i;
   const MAX_DEBUG_ENTRIES = 100;
   const MAX_DEBUG_TEXT_CHARS = 512;
   const AX_STATES = new Set([
@@ -1702,6 +1706,14 @@
       if (state.nativeReady) postNative(grantMessage(), state.nativePort);
       return null;
     }
+    function axValue(node) {
+      const labels = [node.name?.value, node.description?.value].filter(
+        (label) => typeof label === "string",
+      );
+      if (labels.some((label) => SENSITIVE_PATTERN.test(label)))
+        return { value: null, value_state: "redacted" };
+      return { value: node.value === undefined ? null : clippedText(node.value.value) };
+    }
     async function accessibilityNodes(debug, payload) {
       const send = (method, params) =>
         api.debugger.sendCommand({ tabId: debug.tabId }, method, params);
@@ -1725,9 +1737,7 @@
           role: clippedText(node.role?.value) || null,
           name: clippedText(node.name?.value) || null,
           description: clippedText(node.description?.value) || null,
-          ...(payload.include_values
-            ? { value: node.value === undefined ? null : clippedText(node.value.value) }
-            : {}),
+          ...(payload.include_values ? axValue(node) : {}),
           states: Object.fromEntries(
             (Array.isArray(node.properties) ? node.properties : [])
               .filter((property) => AX_STATES.has(property?.name))
@@ -2235,6 +2245,7 @@
     LIMITS,
     READ_OPERATIONS,
     ACTION_OPERATIONS,
+    SENSITIVE_PATTERN,
     ValidationError,
     validatePayload,
     validateRequest,

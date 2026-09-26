@@ -26,8 +26,8 @@ return to the task controller. Worker time, CU/application/transport/model
 boundaries, tool/image and token counters, actual billing, quota consumption,
 and estimates are separate fields with explicit coverage.
 
-The collector consumes the delegate's public round/context fields; it does not
-implement worker lifecycle or change agent-delegate. Exploratory collection may
+The collector consumes the delegating harness's public round/context fields; it
+does not implement worker lifecycle. Exploratory collection may
 run without a baseline, while economic conclusions require comparable verified
 outcomes and actual reported billing. The trial does not add a supervisor,
 queue, daemon, permanent input device, quota retry loop, or autonomous pixel

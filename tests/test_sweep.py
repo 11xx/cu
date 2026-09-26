@@ -552,6 +552,16 @@ def test_batch_unverified_readback_stops_following_key(world, tmp_path, monkeypa
     assert result["failed"]["step"] == 1
 
 
+@pytest.mark.parametrize("token", ["--sess", "--sess=x", "--wh", "--dry", "--he", "-h"])
+def test_batch_refuses_abbreviated_outer_options(token, world, tmp_path, monkeypatch):
+    path = tmp_path / "batch.json"
+    path.write_text(json.dumps([["key", "--chord", "a", token, "x"]]))
+    sent = []
+    monkeypatch.setattr(actions, "send_chords", lambda *a, **k: sent.append(True))
+    assert cli.main(["batch", str(path)]) == exits.USAGE
+    assert sent == []
+
+
 def test_batch_validates_all_steps_before_any_input(world, tmp_path, monkeypatch):
     path = tmp_path / "batch.json"
     path.write_text(json.dumps([["key", "--chord", "a"], ["abort", "--clear"]]))

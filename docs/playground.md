@@ -20,8 +20,9 @@ forbidden effect or a deadline produces `FAIL`. User abort and runner
 cancellation produce `ABORTED` with a cause. A successful objective produces
 `PASS`. **Retry**, **Reset task** and **Reset run** are separate operations:
 retry starts a new attempt, task reset returns that task to `not-started` while
-retaining terminal attempt receipts, and run reset creates a new run while
-moving the prior run into run history.
+retaining terminal attempt receipts (a running attempt first ends as `ABORTED`
+with cause `reset`, so it still counts as an attempt), and run reset creates a
+new run while moving the prior run into run history.
 
 Dispatch desk shows a destination, quantity and notes brief. Replace all three
 values and submit once; typing without submission stays pending, while a wrong

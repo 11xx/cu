@@ -17,7 +17,7 @@ The envelope records the fixture revision and seed, mode, round shape, runtime
 identity, item receipts, every attempt, failures, recovery IDs, verifier
 counts, and separate application/CU/harness/model timing fields. It also
 contains the caller-managed routine context and the resume decision that joins
-the verified prefix to the P08 attempt receipts. The allowed round shapes are
+the verified prefix to the fixture's attempt receipts. The allowed round shapes are
 `full-start`, `prepared-page`, `warm-follow-up`, and `cold-resume`. A failed
 attempt remains present when recovery creates a new retry attempt.
 `--interrupted` records an aborted partial run and the context refuses resume;
