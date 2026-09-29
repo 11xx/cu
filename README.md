@@ -1,4 +1,4 @@
-# ai-agent-computer-use
+# cu
 
 Computer use for AI coding harnesses on Linux/Wayland, targeting Hyprland.
 
@@ -260,13 +260,13 @@ They name no path, colour, or monitor, so they are included by relative path
 and styled by the configuration that includes them:
 
 ```yuck
-(include "../../code/ai-agent-computer-use/eww/cu.yuck")
+(include "../../code/cu/eww/cu.yuck")
 ...
 (cu-indicator)
 ```
 
 ```scss
-@import "../../code/ai-agent-computer-use/eww/cu.scss";
+@import "../../code/cu/eww/cu.scss";
 .cu__driver  { color: $yellow; }
 .cu__aborted { color: $red; }
 ```

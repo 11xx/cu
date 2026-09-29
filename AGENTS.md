@@ -1,4 +1,4 @@
-# ai-agent-computer-use
+# cu
 
 `cu`: a deterministic CLI that lets a multimodal agent see the screen and drive
 the pointer, keyboard, windows, and browsers of a real Linux/Wayland desktop,
