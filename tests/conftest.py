@@ -5,11 +5,23 @@ reads — under `XDG_RUNTIME_DIR`. A test that exercises a command through
 `cli.main` writes there like any other caller, so without this the suite
 publishes into the desktop it is being run on: the indicator claims an agent is
 driving because pytest said so.
+
+Action logging resolves an explicit configured path independently of XDG
+state directories. Tests redirect that resolver so desktop audit records
+contain only actions from real sessions.
 """
 
 from __future__ import annotations
 
 import pytest
+
+from cu import config
+
+
+@pytest.fixture(autouse=True)
+def isolated_action_log(tmp_path, monkeypatch):
+    path = tmp_path / "state" / "actions.jsonl"
+    monkeypatch.setattr(config, "log_path", lambda _cfg: path)
 
 
 @pytest.fixture(autouse=True)
