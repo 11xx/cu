@@ -32,7 +32,7 @@ from typing import Any, BinaryIO, Self
 from . import png
 
 PROTOCOL = "cu-browser-read"
-VERSION = 10
+VERSION = 11
 MAX_MESSAGE_BYTES = 1 << 20
 MAX_RECV_CHUNK_BYTES = 64 << 10
 MAX_PENDING_REQUESTS = 64
@@ -57,12 +57,16 @@ MAX_ACTION_VALUE_CHARS = 1024
 MAX_WAIT_MS = 10_000
 MAX_WAIT_POLL_MS = 1_000
 MAX_DEBUG_ENTRIES = 100
+MAX_EXPORT_BYTES = 1 << 20
+MAX_EXPORT_CHUNK_CHARS = 16 << 10
 MAX_ERROR_CODE_CHARS = 64
 MAX_ERROR_MESSAGE_CHARS = 256
 SOCKET_PREFIX = "helper-"
 SOCKET_SUFFIX = ".sock"
 
-READ_OPERATIONS = frozenset({"observe", "query", "wait", "ax-query", "console", "network"})
+READ_OPERATIONS = frozenset(
+    {"observe", "query", "wait", "ax-query", "console", "network", "export-text"}
+)
 # Evidence read through an attached Chromium debugger rather than the page collector.
 DEBUGGER_READS = frozenset({"ax-query", "console", "network"})
 # Real input sent through an attached Chromium debugger rather than page events.
@@ -169,6 +173,8 @@ def protocol_limits() -> dict[str, int | float]:
         "max_elements": MAX_ELEMENTS,
         "max_capture_bytes": MAX_CAPTURE_BYTES,
         "max_capture_pixels": MAX_CAPTURE_PIXELS,
+        "max_export_bytes": MAX_EXPORT_BYTES,
+        "max_export_chunk_chars": MAX_EXPORT_CHUNK_CHARS,
         "max_action_value_chars": MAX_ACTION_VALUE_CHARS,
         "max_wait_ms": MAX_WAIT_MS,
         "max_wait_poll_ms": MAX_WAIT_POLL_MS,
@@ -425,6 +431,21 @@ def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
     if not isinstance(operation, str) or operation not in OPERATIONS:
         raise ProtocolError("operation is not a supported passive read or browser action")
     payload_object = _object({} if payload is None else payload, "payload")
+    if operation == "export-text":
+        _exact_fields(
+            payload_object, {"snapshot"}, {"snapshot", "selector", "offset", "allow_partial"}
+        )
+        snapshot = _bounded_string(payload_object["snapshot"], "snapshot", 24)
+        if re.fullmatch(r"[0-9a-f]{24}", snapshot) is None:
+            raise ProtocolError("snapshot must contain 24 lowercase hexadecimal characters")
+        return {
+            "snapshot": snapshot,
+            "selector": _selector(payload_object.get("selector")),
+            "offset": _bounded_int(payload_object.get("offset", 0), "offset", MAX_EXPORT_BYTES),
+            "allow_partial": _bounded_bool(
+                payload_object.get("allow_partial", False), "allow_partial"
+            ),
+        }
     if operation == "capture":
         _exact_fields(payload_object, set(), set(_CAPTURE_FIELDS))
         if "full_page" in payload_object:
@@ -843,7 +864,7 @@ def validate_request(message: Mapping[str, Any]) -> dict[str, Any]:
     generation = request["generation"]
     if generation is not None:
         _bounded_int(generation, "generation", 2**53 - 1)
-    if operation in ACTION_OPERATIONS and generation is None:
+    if (operation in ACTION_OPERATIONS or operation == "export-text") and generation is None:
         raise ProtocolError(
             "browser actions are not passive read operations without an observed generation"
         )

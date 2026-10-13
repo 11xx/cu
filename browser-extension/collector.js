@@ -12,11 +12,12 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 10;
+  const VERSION = 11;
   const CAPABILITIES = new Set(["read", "interact"]);
   const PROTOCOL_OPERATIONS = new Set([
     "observe",
     "query",
+    "export-text",
     "click",
     "focus",
     "fill",
@@ -30,7 +31,7 @@
     "trusted-key",
     "trusted-scroll",
   ]);
-  const READ_OPERATIONS = new Set(["observe", "query"]);
+  const READ_OPERATIONS = new Set(["observe", "query", "export-text"]);
   // Debugger input: the collector only locates and checks its target point.
   const TRUSTED_INPUT = new Set([
     "trusted-click",
@@ -66,7 +67,7 @@
   const MAX_WAIT_POLL_MS = 1000;
   const MAX_WAIT_TEXT_CHARS = 512;
   const MAX_ACTION_VALUE_CHARS = 1024;
-  const READ_OPERATIONS_FOR_PROTOCOL = new Set(["observe", "query", "wait"]);
+  const READ_OPERATIONS_FOR_PROTOCOL = new Set(["observe", "query", "wait", "export-text"]);
   const OBSERVE_FIELDS = new Set(["include_values", "limit", "selector", "include_details"]);
   const QUERY_FIELDS = new Set([
     "search",
@@ -216,6 +217,21 @@
   function validatePayload(operation, payload) {
     const value = payload === undefined || payload === null ? {} : payload;
     if (!isRecord(value)) throw new ValidationError("payload must be an object");
+    if (operation === "export-text") {
+      exactKeys(
+        value,
+        new Set(["snapshot"]),
+        new Set(["snapshot", "selector", "offset", "allow_partial"]),
+      );
+      if (typeof value.snapshot !== "string" || !/^[0-9a-f]{24}$/.test(value.snapshot))
+        throw new ValidationError("snapshot must contain 24 lowercase hexadecimal characters");
+      return {
+        snapshot: value.snapshot,
+        selector: selectorValue(value.selector),
+        offset: boundedInteger(value.offset ?? 0, "offset", 1048576),
+        allow_partial: boundedBoolean(value.allow_partial ?? false, "allow_partial"),
+      };
+    }
     let allowed = READ_OPERATIONS.has(operation)
       ? operation === "observe"
         ? OBSERVE_FIELDS
@@ -429,7 +445,7 @@
       throw new ValidationError("operation is not supported");
     const generation = message.generation;
     if (generation !== null) boundedInteger(generation, "generation", Number.MAX_SAFE_INTEGER);
-    if (ACTION_OPERATIONS.has(operation) && generation === null)
+    if ((ACTION_OPERATIONS.has(operation) || operation === "export-text") && generation === null)
       throw new ValidationError("actions require an observed generation");
     return {
       protocol: PROTOCOL,
@@ -490,21 +506,7 @@
         return;
       }
       if (node.nodeType !== undefined && node.nodeType !== 1) return;
-      if (
-        ["input", "textarea", "select", "script", "style", "noscript", "iframe"].includes(
-          tagName(node),
-        )
-      )
-        return;
-      if (node.hidden || attribute(node, "aria-hidden") === "true") return;
-      const style = node.ownerDocument?.defaultView?.getComputedStyle?.(node);
-      if (
-        style &&
-        (style.display === "none" ||
-          style.visibility === "hidden" ||
-          style.visibility === "collapse")
-      )
-        return;
+      if (excludedTextNode(node)) return;
       for (const child of node.childNodes || []) {
         if (visited >= nodeBudget || length >= maximum) break;
         visit(child);
@@ -514,6 +516,125 @@
     const result = textState(parts.join(" "), maximum);
     result.truncated = Boolean(result.truncated || visited >= nodeBudget || length >= maximum);
     return result;
+  }
+  function excludedTextNode(node) {
+    if (ownedOverlay(node)) return true;
+    if (
+      ["input", "textarea", "select", "script", "style", "noscript", "iframe"].includes(
+        tagName(node),
+      )
+    )
+      return true;
+    if (node.hidden || attribute(node, "aria-hidden") === "true") return true;
+    const style = node.ownerDocument?.defaultView?.getComputedStyle?.(node);
+    return Boolean(
+      style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility)),
+    );
+  }
+  // Export walks the same readable nodes, preserving block and preformatted boundaries.
+  function exportReadableText(root) {
+    const maximum = 1048576;
+    const encoder = new TextEncoder();
+    const parts = [];
+    let bytes = 0;
+    let visited = 0;
+    let truncated = false;
+    const blocks = new Set([
+      "p",
+      "div",
+      "section",
+      "article",
+      "li",
+      "tr",
+      "pre",
+      "br",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+    ]);
+    function append(raw) {
+      const remaining = maximum - bytes;
+      let text = raw
+        .slice(0, remaining + 1)
+        .replace(/\r\n?/g, "\n")
+        .replace(/\0/g, "");
+      if (raw.length > remaining + 1) truncated = true;
+      let encoded = encoder.encode(text);
+      if (encoded.length > remaining) {
+        let low = 0;
+        let high = text.length;
+        while (low < high) {
+          const middle = Math.ceil((low + high) / 2);
+          if (encoder.encode(text.slice(0, middle)).length <= remaining) low = middle;
+          else high = middle - 1;
+        }
+        if (low && /[\uD800-\uDBFF]/.test(text[low - 1])) low--;
+        text = text.slice(0, low);
+        encoded = encoder.encode(text);
+        truncated = true;
+      }
+      parts.push(text);
+      bytes += encoded.length;
+    }
+    function excluded(node) {
+      const names = [
+        attribute(node, "id"),
+        attribute(node, "name"),
+        attribute(node, "autocomplete"),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const style = node.ownerDocument?.defaultView?.getComputedStyle?.(node);
+      return (
+        excludedTextNode(node) ||
+        sensitivePattern.test(names) ||
+        /session|cookie/i.test(names) ||
+        node.isContentEditable === true ||
+        ["", "true", "plaintext-only"].includes(attribute(node, "contenteditable")) ||
+        ["textbox", "searchbox", "combobox"].includes(attribute(node, "role")) ||
+        style?.opacity === "0" ||
+        style?.contentVisibility === "hidden"
+      );
+    }
+    for (let ancestor = root.parentElement, hops = 0; ancestor; ancestor = ancestor.parentElement) {
+      if (++hops > MAX_SCANNED_NODES) return { text: "", bytes: 0, truncated: true };
+      if (excluded(ancestor)) return { text: "", bytes: 0, truncated: false };
+    }
+    const stack = [{ node: root, entered: false }];
+    while (stack.length && !truncated) {
+      const frame = stack[stack.length - 1];
+      if (!frame.entered) {
+        frame.entered = true;
+        if (++visited > MAX_SCANNED_NODES) {
+          truncated = true;
+          break;
+        }
+        if (frame.node.nodeType === 3) {
+          append(frame.node.data);
+          stack.pop();
+          continue;
+        }
+        if (frame.node.nodeType !== 1 || excluded(frame.node)) {
+          stack.pop();
+          continue;
+        }
+        frame.block = blocks.has(tagName(frame.node));
+        if (frame.block && bytes) append("\n");
+        frame.child = frame.node.firstChild;
+      }
+      if (frame.child) {
+        const child = frame.child;
+        frame.child = child.nextSibling;
+        stack.push({ node: child, entered: false });
+      } else {
+        if (frame.block && !truncated) append("\n");
+        stack.pop();
+      }
+    }
+    return { text: parts.join(""), bytes, truncated };
   }
   function documentText(doc) {
     const root = doc.body || doc.documentElement;
@@ -873,11 +994,13 @@
     let overlay = null;
     let overlayShown = false;
     const waits = new Set();
+    let textSnapshot = null;
     function currentField(element) {
       return fieldValue(element, true, accessibleName(element, doc));
     }
     function bumpGeneration() {
       generation += 1;
+      textSnapshot = null;
     }
     let fullPageRender = null;
     // A full-page render resizes and scrolls the view itself, so while one runs
@@ -1002,6 +1125,7 @@
       listeners.length = 0;
       endFullPageRender();
       lastReads.clear();
+      textSnapshot = null;
       removeOverlay();
       for (const wait of [...waits]) wait.cancel(new WaitCancelled());
       waits.clear();
@@ -1043,6 +1167,66 @@
         if (error instanceof ValidationError) throw error;
         throw new ValidationError("selector is invalid");
       }
+    }
+    function exportText(request) {
+      const payload = request.payload;
+      if (!textSnapshot || textSnapshot.id !== payload.snapshot) {
+        if (payload.offset !== 0)
+          return refusal(request, "stale-generation", "the text snapshot is no longer available");
+        const roots = scopeRoots(payload.selector);
+        if (roots.length !== 1)
+          return refusal(request, "export-scope", "text export requires one readable scope");
+        const collected = exportReadableText(roots[0]);
+        if (collected.truncated && !payload.allow_partial)
+          return refusal(request, "export-budget", "text exceeds the byte or source-node budget");
+        textSnapshot = {
+          ...collected,
+          id: payload.snapshot,
+          selector: payload.selector,
+          partial: payload.allow_partial,
+          generation,
+          expires: Date.now() + 30000,
+        };
+      }
+      const snapshot = textSnapshot;
+      if (
+        snapshot.expires < Date.now() ||
+        snapshot.generation !== generation ||
+        snapshot.selector !== payload.selector ||
+        snapshot.partial !== payload.allow_partial ||
+        payload.offset > snapshot.text.length
+      )
+        return refusal(request, "stale-generation", "the text snapshot is no longer current");
+      let end = Math.min(snapshot.text.length, payload.offset + 16384);
+      if (end < snapshot.text.length && /[\uD800-\uDBFF]/.test(snapshot.text[end - 1])) end--;
+      return responseFor(request, true, {
+        schema: "cu-browser-text-chunk/1",
+        kind: "export-text",
+        document_id: documentId,
+        generation,
+        snapshot: snapshot.id,
+        scope: { selector: snapshot.selector },
+        redaction_policy: "readable-nodes/1",
+        completeness: snapshot.truncated
+          ? "truncated"
+          : snapshot.text.length
+            ? "complete"
+            : "empty",
+        omissions: [
+          "form-values-and-defaults",
+          "hidden-nodes",
+          "scripts-and-styles",
+          "sensitive-field-containers",
+          "iframes",
+          "shadow-roots",
+          "virtualized-content",
+          "browser-chrome",
+        ],
+        total_bytes: snapshot.bytes,
+        offset: payload.offset,
+        next_offset: end < snapshot.text.length ? end : null,
+        chunk: snapshot.text.slice(payload.offset, end),
+      });
     }
     function collectElements(payload, match = () => true, offset = 0) {
       const roots = scopeRoots(payload.selector);
@@ -1728,7 +1912,10 @@
             },
           };
         }
-        if (Object.prototype.hasOwnProperty.call(message, "full_page") && message.full_page !== true)
+        if (
+          Object.prototype.hasOwnProperty.call(message, "full_page") &&
+          message.full_page !== true
+        )
           return {
             ok: false,
             error: {
@@ -1848,6 +2035,7 @@
       if (message.type === "target-point") return targetPoint(request);
       if (request.operation === "wait") return waitFor(request);
       try {
+        if (request.operation === "export-text") return exportText(request);
         if (!READ_OPERATIONS.has(request.operation)) return action(request);
         const body =
           request.operation === "observe" ? observe(request.payload) : query(request.payload);

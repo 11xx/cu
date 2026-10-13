@@ -358,7 +358,10 @@ test("a full-page render's own resize and scroll do not advance the generation",
   assert.equal(collector.generation, generation + 1);
 
   const next = { ...identity, generation: generation + 1 };
-  assert.equal((await collector.handle({ type: "capture-prep", ...next, full_page: true })).ok, true);
+  assert.equal(
+    (await collector.handle({ type: "capture-prep", ...next, full_page: true })).ok,
+    true,
+  );
   document.querySelector("button").textContent = "Changed";
   const finished = collector.handle({ type: "capture-finish", ...next, full_page: true });
   assert.equal(finished.error.code, "stale-generation");
@@ -394,4 +397,112 @@ test("DOM comments do not break structured result reads", (t) => {
   const result = read("#card");
   assert.equal(result.ok, true);
   assert.equal(result.result.elements.items[0].time_candidates.items[0].value, "13:44");
+});
+
+const exportSnapshot = "0123456789abcdef01234567";
+function exportChunks(send, selector = null, allow_partial = false) {
+  const chunks = [];
+  let offset = 0;
+  do {
+    const reply = send(
+      "export-text",
+      { snapshot: exportSnapshot, selector, allow_partial, offset },
+      0,
+    );
+    assert.equal(reply.ok, true, JSON.stringify(reply.error));
+    assert.ok(Buffer.byteLength(JSON.stringify(reply)) < 1048576);
+    chunks.push(reply.result);
+    offset = reply.result.next_offset;
+  } while (offset !== null);
+  return chunks;
+}
+
+test("text export keeps scoped blocks and excludes private/default/hidden content before IPC", (t) => {
+  const canary = "FORM_SECRET_CANARY";
+  const { send } = fixture(
+    t,
+    `<div>unrelated</div><main id="scope"><p>First</p><pre>line one\nline two</pre>
+    <input value="${canary}"><textarea>${canary}</textarea><select><option>${canary}</option></select>
+    <script>${canary}</script><style>body::after { content: "${canary}"; }</style><div hidden>${canary}</div>
+    <div style="display:none">${canary}</div><div id="session-token">${canary}</div>
+    <iframe srcdoc="${canary}"></iframe><p>Last</p></main>`,
+    { interact: false },
+  );
+  const replies = exportChunks(send, "#scope");
+  const text = replies.map((reply) => reply.chunk).join("");
+  assert.match(text, /First\n/);
+  assert.match(text, /line one\nline two/);
+  assert.match(text, /Last/);
+  assert.doesNotMatch(JSON.stringify(replies), new RegExp(canary + "|unrelated"));
+  assert.equal(replies[0].completeness, "complete");
+  assert.ok(replies[0].omissions.includes("virtualized-content"));
+});
+
+test("text export exceeds the observation cap and preserves Unicode across small chunks", (t) => {
+  const source = "a".repeat(16383) + "😀" + "Searchable line\n".repeat(12000) + "TAIL_NEEDLE";
+  const { send } = fixture(t, `<pre>${source}</pre>`, { interact: false });
+  const replies = exportChunks(send);
+  const text = replies.map((reply) => reply.chunk).join("");
+  assert.equal(text, source + "\n");
+  assert.ok(replies.length > 10);
+  assert.equal(replies[0].total_bytes, Buffer.byteLength(text));
+  for (const reply of replies) assert.doesNotMatch(reply.chunk, /[\uD800-\uDBFF]$/);
+  assert.ok(text.indexOf("TAIL_NEEDLE") > 162000);
+});
+
+test("text export refuses byte overflow unless partial evidence is explicit", (t) => {
+  const { send } = fixture(t, `<pre>${"界".repeat(400000)}</pre>`, { interact: false });
+  const refused = send("export-text", { snapshot: exportSnapshot }, 0);
+  assert.equal(refused.error.code, "export-budget");
+  assert.equal("result" in refused, false);
+  const replies = exportChunks(send, null, true);
+  assert.equal(replies[0].completeness, "truncated");
+  const text = replies.map((reply) => reply.chunk).join("");
+  assert.ok(Buffer.byteLength(text) <= 1048576);
+  assert.doesNotMatch(text, /�/);
+});
+
+test("text export refuses ambiguous scopes and hidden ancestor content stays empty", (t) => {
+  const { send } = fixture(t, '<div hidden><p id="scope">HIDDEN_CANARY</p></div><p>other</p>');
+  assert.equal(
+    send("export-text", { snapshot: exportSnapshot, selector: "p" }, 0).error.code,
+    "export-scope",
+  );
+  assert.equal(
+    send("export-text", { snapshot: exportSnapshot, selector: "#absent" }, 0).error.code,
+    "export-scope",
+  );
+  const replies = exportChunks(send, "#scope");
+  assert.equal(replies[0].completeness, "empty");
+  assert.equal(replies[0].chunk, "");
+});
+
+test("text export refuses stale chunks and clears snapshots when stopped", async (t) => {
+  const { send, document, collector } = fixture(t, `<pre>${"a".repeat(40000)}</pre>`, {
+    interact: false,
+  });
+  const first = send("export-text", { snapshot: exportSnapshot }, 0).result;
+  document.querySelector("pre").append("changed");
+  assert.equal(
+    send("export-text", { snapshot: exportSnapshot, offset: first.next_offset }, 0).error.code,
+    "stale-generation",
+  );
+  collector.handle({ type: "stop", session: "session-1" });
+  assert.equal(send("export-text", { snapshot: exportSnapshot }, 0).error.code, "no-session");
+  collector.handle({ type: "start", session: "session-1", capabilities: ["read"] });
+  assert.equal(
+    send(
+      "export-text",
+      { snapshot: exportSnapshot, offset: first.next_offset },
+      collector.generation,
+    ).error.code,
+    "stale-generation",
+  );
+});
+
+test("text export reports source-node truncation and rejects a missing generation", (t) => {
+  const { send } = fixture(t, `<main>${"<span>x</span>".repeat(5100)}</main>`);
+  assert.equal(send("export-text", { snapshot: exportSnapshot }).error.code, "invalid-request");
+  assert.equal(send("export-text", { snapshot: exportSnapshot }, 0).error.code, "export-budget");
+  assert.equal(exportChunks(send, null, true)[0].completeness, "truncated");
 });

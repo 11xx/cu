@@ -282,7 +282,7 @@ combined with `--region`.
 ## Transport and refusals
 
 The extension ID is `cu-browser-read@local`, the native host is `org.cu.read`, and
-the protocol is `cu-browser-read`, version **10**. Extension and host versions must
+the protocol is `cu-browser-read`, version **11**. Extension and host versions must
 match. Frames use native-endian uint32 length plus UTF-8 JSON, bounded at 1 MiB.
 Session controls that bind (`grant`) and release (`release`) a tab, and attach
 (`debug-attach`) or detach (`debug-detach`) the debugger, travel the same channel
@@ -317,3 +317,35 @@ lint, and package-build gates. The Node suite exercises JSDOM's DOM implementati
 focus, rendering, or real site acceptance. Live acceptance requires temporary
 installation and a nonsensitive fixture in an explicitly authorized browser
 window, including revocation and negative controls.
+
+## Readable text artifacts
+
+`cu web export-text --selector 'main' --timeout 30 --json` writes the readable text
+of one CSS scope to a private UTF-8 runtime artifact. Omit `--selector` for the
+whole top-level document. A selector matching zero or multiple scopes refuses.
+The command uses the owning CU session's read grant and performs no input.
+
+The browser walks at most 10,000 nodes and retains at most 1 MiB of UTF-8 text,
+preserving block and preformatted line boundaries. It excludes form values and
+defaults, editable fields, hidden nodes, scripts/styles, the CU indicator and
+containers whose identifiers name sensitive fields. The `readable-nodes/1`
+policy does not redact arbitrary page prose or promise secret-free text. Iframe,
+shadow-root, virtualized content and browser chrome omissions are explicit.
+
+Each `cu-browser-text-chunk/1` message carries the same random snapshot ID,
+document, generation, scope, policy, completeness and total byte count. Chunks
+contain at most 16,384 UTF-16 units and never split a surrogate pair. One snapshot
+is held per collector, expires after 30 seconds and is cleared by freshness
+changes or Stop. Budget overflow returns exit 57 unless `--allow-partial` accepts
+`truncated` evidence. Empty readable content produces an `empty` artifact.
+Navigation, ownership loss, Stop, malformed chunks or a changed generation
+prevent file publication.
+
+The `cu-browser-text-artifact/1` receipt contains only metadata: path, bytes,
+SHA-256, tab/document/generation, snapshot, scope, policy, completeness and
+omissions. It carries no input authority. The owned runtime directory is 0700;
+files are created exclusively at 0600, storage symlinks are refused, and at most
+sixteen artifacts are retained. Subsequent local searches need no browser read.
+The collector/native-host/CLI contract has disposable DOM and transport fixtures;
+installed-browser acceptance must verify each deployment's extension and host
+versions together.

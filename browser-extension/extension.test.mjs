@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { JSDOM } from "jsdom";
 import background from "./background.js";
 import collectorModule from "./collector.js";
 
@@ -1172,7 +1173,15 @@ function readyMessage() {
 test("tabs lists ids without a grant and adds titles and query-free URLs only on request", async () => {
   const { api, port } = fakeApi();
   api.tabs.query = async () => [
-    { id: 7, windowId: 3, index: 0, active: true, hidden: false, title: "Inbox", url: "https://mail.test/u/0?token=secret#thread" },
+    {
+      id: 7,
+      windowId: 3,
+      index: 0,
+      active: true,
+      hidden: false,
+      title: "Inbox",
+      url: "https://mail.test/u/0?token=secret#thread",
+    },
     { id: 9, windowId: 4, index: 2, active: false, title: "Docs", url: "https://docs.test/page" },
   ];
   const controller = createController(api);
@@ -1426,7 +1435,10 @@ test("debugger evidence keeps failures and request metadata without queries or h
   const session = await grantWithDebugger(controller, port);
   const tab = { tabId: 7 };
   const log = (value) => ({ type: "string", value });
-  controller.handleDebuggerEvent(tab, "Runtime.consoleAPICalled", { type: "log", args: [log("no")] });
+  controller.handleDebuggerEvent(tab, "Runtime.consoleAPICalled", {
+    type: "log",
+    args: [log("no")],
+  });
   controller.handleDebuggerEvent(tab, "Runtime.consoleAPICalled", {
     type: "error",
     args: [log("boom"), { type: "number", value: 3 }],
@@ -1473,7 +1485,10 @@ test("debugger evidence keeps failures and request metadata without queries or h
     canceled: true,
   });
 
-  await controller.handleNativeMessage(request("console", { id: "c1", session, payload: {} }), port);
+  await controller.handleNativeMessage(
+    request("console", { id: "c1", session, payload: {} }),
+    port,
+  );
   const evidence = port.messages.at(-1).result;
   assert.equal(evidence.backend, "debugger");
   assert.deepEqual(
@@ -1529,7 +1544,9 @@ test("accessibility evidence queries by role and name and omits values unless as
       ],
     },
     "Accessibility.getFullAXTree": {
-      nodes: [{ nodeId: "20", ignored: false, role: { value: "textbox" }, value: { value: "typed" } }],
+      nodes: [
+        { nodeId: "20", ignored: false, role: { value: "textbox" }, value: { value: "typed" } },
+      ],
     },
   });
   const controller = createController(api);
@@ -2018,4 +2035,33 @@ test("the Chromium controller holds collector ports and a closed one ends that t
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(controller.status().active, false);
   assert.equal(nativePort.messages.at(-1).reason, "collector-disconnected");
+});
+
+test("background carries sanitized text chunks under a read grant and revokes on Stop", async (t) => {
+  const { api, port } = fakeApi();
+  const dom = new JSDOM('<main><p>Search me</p><input value="FORM_SECRET_CANARY"></main>', {
+    pretendToBeVisual: true,
+  });
+  const collector = createCollector(dom.window.document, { idFactory: () => "document-1" });
+  api.tabs.sendMessage = async (_, message) => collector.handle(message);
+  t.after(() => {
+    collector.dispose();
+    dom.window.close();
+  });
+  const controller = createController(api);
+  const started = await controller.startCurrent();
+  const read = request("export-text", {
+    session: started.grant.session,
+    generation: 0,
+    payload: { snapshot: "0123456789abcdef01234567", selector: "main" },
+  });
+  await controller.handleNativeMessage(read, port);
+  const response = port.messages.at(-1);
+  assert.equal(response.ok, true);
+  assert.match(response.result.chunk, /Search me/);
+  assert.equal(response.result.context.tab_id, 7);
+  assert.doesNotMatch(JSON.stringify(port.messages), /FORM_SECRET_CANARY/);
+  await controller.stop();
+  await controller.handleNativeMessage({ ...read, id: "after-stop" }, port);
+  assert.equal(port.messages.at(-1).ok, false);
 });

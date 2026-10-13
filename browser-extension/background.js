@@ -10,9 +10,17 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 10;
+  const VERSION = 11;
   const CAPABILITIES = new Set(["read", "interact"]);
-  const READ_OPERATIONS = new Set(["observe", "query", "wait", "ax-query", "console", "network"]);
+  const READ_OPERATIONS = new Set([
+    "observe",
+    "query",
+    "wait",
+    "ax-query",
+    "console",
+    "network",
+    "export-text",
+  ]);
   // Evidence the worker reads through an attached debugger; collectors never see it.
   const DEBUGGER_READS = new Set(["ax-query", "console", "network"]);
   const CONTROL_OPERATIONS = new Set(["grant", "release", "debug-attach", "debug-detach", "tabs"]);
@@ -110,6 +118,8 @@
     max_elements: MAX_ELEMENTS,
     max_capture_bytes: MAX_CAPTURE_BYTES,
     max_capture_pixels: MAX_CAPTURE_PIXELS,
+    max_export_bytes: 1048576,
+    max_export_chunk_chars: 16384,
     max_action_value_chars: 1024,
     max_wait_ms: 10000,
     max_wait_poll_ms: 1000,
@@ -199,6 +209,21 @@
   function validatePayload(operation, payload) {
     const value = payload === undefined || payload === null ? {} : payload;
     if (!isRecord(value)) throw new ValidationError("payload must be an object");
+    if (operation === "export-text") {
+      exactKeys(
+        value,
+        new Set(["snapshot"]),
+        new Set(["snapshot", "selector", "offset", "allow_partial"]),
+      );
+      if (typeof value.snapshot !== "string" || !/^[0-9a-f]{24}$/.test(value.snapshot))
+        throw new ValidationError("snapshot must contain 24 lowercase hexadecimal characters");
+      return {
+        snapshot: value.snapshot,
+        selector: validateSelector(value.selector),
+        offset: boundedInteger(value.offset ?? 0, "offset", 1048576),
+        allow_partial: boundedBoolean(value.allow_partial ?? false, "allow_partial"),
+      };
+    }
     if (operation === "capture") {
       exactKeys(value, new Set(), new Set(["region", "full_page"]));
       if (Object.prototype.hasOwnProperty.call(value, "full_page")) {
@@ -240,7 +265,9 @@
     if (operation === "trusted-scroll") {
       exactKeys(value, new Set(["dx", "dy"]), new Set(["ref", "dx", "dy"]));
       return {
-        ...(Object.prototype.hasOwnProperty.call(value, "ref") ? { ref: validateRef(value.ref) } : {}),
+        ...(Object.prototype.hasOwnProperty.call(value, "ref")
+          ? { ref: validateRef(value.ref) }
+          : {}),
         dx: boundedSignedInteger(value.dx, "dx", 10000),
         dy: boundedSignedInteger(value.dy, "dy", 10000),
       };
@@ -446,7 +473,7 @@
       throw new ValidationError("operation is not a supported passive read or browser action");
     const generation = message.generation;
     if (generation !== null) boundedInteger(generation, "generation", Number.MAX_SAFE_INTEGER);
-    if (ACTION_OPERATIONS.has(operation) && generation === null)
+    if ((ACTION_OPERATIONS.has(operation) || operation === "export-text") && generation === null)
       throw new ValidationError(
         "browser actions are not passive read operations without an observed generation",
       );
@@ -1216,7 +1243,10 @@
           });
         content = { width: size.width, height: size.height, space: "css-document" };
         const ratio = before.viewport.device_pixel_ratio;
-        if (Math.ceil(content.width * ratio) * Math.ceil(content.height * ratio) > MAX_CAPTURE_PIXELS)
+        if (
+          Math.ceil(content.width * ratio) * Math.ceil(content.height * ratio) >
+          MAX_CAPTURE_PIXELS
+        )
           throw Object.assign(new ValidationError("the full page exceeds the pixel budget"), {
             code: "capture-budget",
           });
@@ -1916,7 +1946,11 @@
           if (request.operation !== "trusted-hover") {
             const press = { ...at, button: "left", clickCount: 1 };
             await input("Input.dispatchMouseEvent", { type: "mousePressed", ...press, buttons: 1 });
-            await input("Input.dispatchMouseEvent", { type: "mouseReleased", ...press, buttons: 0 });
+            await input("Input.dispatchMouseEvent", {
+              type: "mouseReleased",
+              ...press,
+              buttons: 0,
+            });
           }
           if (request.operation === "trusted-type")
             await input("Input.insertText", { text: payload.text });
@@ -2036,9 +2070,17 @@
       }
       if (control.operation === "debug-detach") {
         const grant = state.grant;
-        if (!state.debug || !grant || (control.tab_id !== null && control.tab_id !== grant.tab_id)) {
+        if (
+          !state.debug ||
+          !grant ||
+          (control.tab_id !== null && control.tab_id !== grant.tab_id)
+        ) {
           postNative(
-            errorResponse(control.id, "debugger-not-attached", "no debugger is attached to that tab"),
+            errorResponse(
+              control.id,
+              "debugger-not-attached",
+              "no debugger is attached to that tab",
+            ),
             port,
           );
           return;

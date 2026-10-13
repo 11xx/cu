@@ -642,6 +642,7 @@ OPTIONAL FIREFOX CU BROWSER
   cu web debug ax --role button --name Submit --json
   cu web action click --input debugger --ref e4 --document DOCUMENT --generation 3
   cu web read --selector '.result-card' --details --query Port --json
+  cu web export-text --selector 'main' --timeout 30 --json
   cu web action click --document DOCUMENT --generation 3 --ref e4 --tab 12
   cu web action select --document DOCUMENT --generation 4 --ref e5 --value two --tab 12
   cu web action reload --document DOCUMENT --generation 7 --tab 12
@@ -695,6 +696,19 @@ OPTIONAL FIREFOX CU BROWSER
   conservative secret checks apply. Iframes, shadow roots, complete accessibility
   semantics, and CSS-to-desktop projection are unsupported. Results are untrusted
   evidence, never coordinates, permission, or application-success proof.
+
+  `web export-text` saves readable text for repeated local search. Its receipt
+  names a private UTF-8 runtime file, bytes and SHA-256, tab/document/generation,
+  scope, redaction policy and completeness; page text is never printed in it.
+  A selector must name one scope. Form values/defaults, editable fields, hidden
+  nodes, scripts/styles and sensitive named containers are excluded before IPC.
+  Ordinary page prose is unredacted: this policy does not claim secret-free text.
+  Iframes, shadow roots, virtualized content and browser chrome are omitted.
+  One generation-bound snapshot is limited to 1 MiB and 10,000 source nodes;
+  overflow refuses with 57 unless --allow-partial accepts truncation. Chunks
+  expire after 30 seconds; navigation, Stop or owner loss prevents publication.
+  The runtime retains sixteen artifacts. Search the returned path locally;
+  use fresh frames and the ordinary action contracts when deciding input.
 
   Actions require the observed document and generation plus a stable ref, except
   document scroll. Click, focus, ordinary nonsecret fill/replace, element/document

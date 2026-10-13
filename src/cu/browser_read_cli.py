@@ -14,10 +14,11 @@ import shlex
 import stat
 import struct
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
-from . import browser, config, exits, observe, png, safety, status
+from . import browser, browser_text, config, exits, observe, png, safety, status
 from . import browser_read as transport
 from .safety import Refused
 
@@ -129,6 +130,16 @@ def configure(parser: argparse.ArgumentParser) -> None:
     read.add_argument("--page", type=int, default=0)
     read.add_argument("--limit", type=int, default=20)
     read.add_argument("--values", action="store_true", help="Include nonsecret field values")
+
+    export = commands.add_parser(
+        "export-text", help="Save scoped readable text to a private runtime artifact for search",
+    )
+    _common(export)
+    export.add_argument("--selector", help="Exactly one readable CSS scope; defaults to document")
+    export.add_argument(
+        "--allow-partial", action="store_true", help="Accept byte or node truncation"
+    )
+    export.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
 
     action = commands.add_parser(
         "action",
@@ -352,7 +363,7 @@ def _check_response(result: dict[str, Any]) -> dict[str, Any]:
         else exits.BROWSER_ACTION_UNCERTAIN
         if reason == "action-uncertain"
         else exits.BROWSER_READ_BUDGET
-        if reason in {"capture-budget", "observation-too-large"}
+        if reason in {"capture-budget", "observation-too-large", "export-budget"}
         else exits.BROWSER_READ_PROTOCOL
         if reason in {"capture-format", "capture-scale-mismatch", "capture-identity-mismatch"}
         else exits.BROWSER_READ_TIMEOUT
@@ -401,6 +412,64 @@ def _read(args: argparse.Namespace) -> dict[str, Any]:
         )
     _check_response(result)
     return {"evidence_only": True, "untrusted_page_content": True, **result}
+
+
+def _export_text(args: argparse.Namespace) -> dict[str, Any]:
+    snapshot = secrets.token_hex(12)
+    payload = transport.validate_payload("export-text", {
+        "snapshot": snapshot, "selector": args.selector, "allow_partial": args.allow_partial,
+    })
+    offset = 0
+    data = bytearray()
+    metadata = None
+    deadline = time.monotonic() + transport._validate_timeout(args.timeout)
+    with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
+        grant = _grant(args, client)
+        generation = args.generation if args.generation is not None else grant["generation"]
+        for _ in range(128):
+            safety.check_abort()
+            current = _grant(args, client)
+            if _identity(current) != _identity(grant):
+                raise Refused(exits.BROWSER_DOCUMENT_STALE, "the text export grant changed")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise transport.BrowserReadTimeout("browser text export exceeded its deadline")
+            result = client.request(
+                "export-text", **_identity(grant), generation=generation,
+                payload={**payload, "offset": offset}, timeout=remaining,
+            )
+            _check_response(result)
+            chunk, following, observed = browser_text.validate_chunk(
+                result["result"], snapshot=snapshot, document=grant["document_id"],
+                generation=generation, selector=payload["selector"], offset=offset,
+                allow_partial=args.allow_partial,
+            )
+            if metadata is not None and observed != metadata:
+                raise transport.ProtocolError("browser text metadata changed between chunks")
+            metadata = observed
+            data.extend(chunk)
+            if len(data) > metadata["total_bytes"]:
+                raise transport.ProtocolError("browser text exceeded its declared length")
+            if following is None:
+                break
+            offset = following
+        else:
+            raise transport.OversizeMessage("browser text exceeded its chunk budget")
+        _grant(args, client)
+        safety.check_abort()
+    if len(data) != metadata["total_bytes"]:
+        raise transport.ProtocolError("browser text length did not match its snapshot")
+    try:
+        artifact = browser_text.save(bytes(data))
+    except OSError as exc:
+        raise transport.HelperUnavailable("browser text artifact could not be created") from exc
+    return {
+        "schema": "cu-browser-text-artifact/1", "operation": "export-text", "mode": "readable-text",
+        "evidence_only": True, "input_authority": "none", "untrusted_page_content": True,
+        "tab_id": grant["tab_id"], "document_id": grant["document_id"], "generation": generation,
+        "snapshot": snapshot,
+        **metadata, **artifact,
+    }
 
 
 def _action(args: argparse.Namespace) -> dict[str, Any]:
@@ -741,6 +810,8 @@ def run(args: argparse.Namespace) -> int:
             result = _debug(args)
         elif args.web_command == "read":
             result = _read(args)
+        elif args.web_command == "export-text":
+            result = _export_text(args)
         elif args.web_command == "action":
             result = _action(args)
         elif args.web_command == "wait":
