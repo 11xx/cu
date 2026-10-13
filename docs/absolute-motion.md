@@ -3,7 +3,8 @@
 `cu.absolute_motion` provides pure stream plans. A `Layout` holds immutable,
 normalized logical output rectangles, including negative origins. Axis values
 use the layout's bounding rectangle and 65,536 quantization steps. Logical pixel
-centers select bins, and points outside the active output union refuse, including
+centers select bins, saturating at the upper axis bound before integer conversion.
+Points outside the active output union refuse, including
 empty regions inside the bounding rectangle. A complete straight route must be
 covered by that union; sparse samples cannot hide an intervening gap.
 
@@ -11,7 +12,8 @@ covered by that union; sparse samples cannot hide an intervening gap.
 refresh rate. It preserves deadlines for duplicate positions and keeps an exact
 terminal deadline and endpoint when the duration is not a whole event interval.
 Minimum-jerk easing changes positions at the same deadlines. Rates, duration and
-sample counts are bounded. The resulting samples contain logical and encoded
+sample counts are bounded, with at least one interval between start and endpoint.
+The resulting samples contain logical and encoded
 coordinates but carry no device, compositor or input authority.
 
 The CLI's pointer carrier uses relative events. Absolute planning is not selected

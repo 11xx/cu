@@ -68,6 +68,19 @@ def test_duplicate_positions_keep_frame_and_event_deadlines():
     assert [point.at for point in points] == [0, 1 / 300, 2 / 300, 0.01]
 
 
+def test_positive_underflow_keeps_the_start_and_terminal_samples():
+    layout = Layout((Output(0, 0, 100, 100),))
+    points = plan(layout, (1, 1), (50, 50), duration=5e-324, refresh_hz=5e-324)
+    assert len(points) == 2
+    assert (points[0].at, points[0].x, points[0].y) == (0, 1, 1)
+    assert (points[1].at, points[1].x, points[1].y) == (5e-324, 50, 50)
+
+
+def test_tiny_finite_extent_clamps_before_integer_conversion():
+    layout = Layout((Output(0, 0, 1e-320, 1e-320),))
+    assert layout.encode(0, 0) == (AXIS_STEPS - 1, AXIS_STEPS - 1)
+
+
 @pytest.mark.parametrize("overrides", [
     {"duration": 0}, {"duration": math.nan}, {"duration": 11},
     {"refresh_hz": 0}, {"refresh_hz": math.inf}, {"refresh_hz": 1001},

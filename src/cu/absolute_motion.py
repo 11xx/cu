@@ -67,7 +67,8 @@ class Layout:
         left, top, width, height = self.bounds
 
         def axis(value: float, origin: float, extent: float) -> int:
-            return min(AXIS_STEPS - 1, math.floor((value - origin + 0.5) / extent * AXIS_STEPS))
+            fraction = (value - origin + 0.5) / extent
+            return AXIS_STEPS - 1 if fraction >= 1 else math.floor(fraction * AXIS_STEPS)
 
         return axis(x, left, width), axis(y, top, height)
 
@@ -125,7 +126,7 @@ def plan(
         raise PathError("refresh multiple must be an integer from one through eight")
     if type(eased) is not bool:
         raise PathError("eased must be a boolean")
-    count = math.ceil(duration * refresh_hz * multiple)
+    count = max(1, math.ceil(duration * refresh_hz * multiple))
     if count > MAX_PATH_POINTS:
         raise PathError("stream exceeds the sample budget")
     layout.require_segment(start, end)
