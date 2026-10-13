@@ -56,9 +56,10 @@ The Chromium entry keeps grant state only in its service worker's memory, the
 same controller Firefox runs in a persistent background page. A worker the
 browser stops loses that state, and its native port closes; the host exits on
 end of input and removes its helper socket, so a stopped worker ends every grant.
-Nothing is persisted and nothing is restored: a restarted worker starts without a
-grant and does not reconnect to the host until the user grants a tab again. A
-native-port reconnect is never treated as renewed page authority. The injected
+Grant and pending-request state are not persisted. A restarted worker connects
+its native host at startup with no tab grant; a CU session must explicitly bind
+a tab before reads or interaction. A native-port reconnect is never treated as
+renewed page authority. The injected
 collector holds its own port to the worker for the life of a session and ends
 that session when the port closes, so no page-side session outlives the worker
 that granted it.
