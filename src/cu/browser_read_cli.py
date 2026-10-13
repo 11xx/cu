@@ -133,6 +133,7 @@ def configure(parser: argparse.ArgumentParser) -> None:
 
     export = commands.add_parser(
         "export-text", help="Save scoped readable text to a private runtime artifact for search",
+        description="Save scoped readable text to a private runtime artifact for search",
     )
     _common(export)
     export.add_argument("--selector", help="Exactly one readable CSS scope; defaults to document")
