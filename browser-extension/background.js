@@ -10,7 +10,7 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 11;
+  const VERSION = 12;
   const CAPABILITIES = new Set(["read", "interact"]);
   const READ_OPERATIONS = new Set([
     "observe",
@@ -80,6 +80,7 @@
     "select",
     "capture",
     "reload",
+    "navigate",
     ...TRUSTED_INPUT,
   ]);
   const OPERATIONS = new Set([...READ_OPERATIONS, ...ACTION_OPERATIONS]);
@@ -206,6 +207,23 @@
     return region;
   }
 
+  function navigationUrl(value) {
+    const raw = boundedString(value, "navigation URL", 4096);
+    const refused = () =>
+      new ValidationError("navigation requires an absolute HTTP(S) URL without credentials");
+    if (!/^https?:\/\//i.test(raw) || /[\x00-\x20\x7f\\]/.test(raw)) throw refused();
+    let url;
+    try {
+      url = new URL(raw);
+    } catch (_) {
+      throw refused();
+    }
+    const authority = raw.match(/^https?:\/\/([^/?#]*)/i)?.[1];
+    if (!authority || !url.hostname || url.username || url.password || authority.includes("@"))
+      throw refused();
+    return raw;
+  }
+
   function validatePayload(operation, payload) {
     const value = payload === undefined || payload === null ? {} : payload;
     if (!isRecord(value)) throw new ValidationError("payload must be an object");
@@ -240,6 +258,10 @@
     if (operation === "reload") {
       exactKeys(value, new Set(), new Set());
       return {};
+    }
+    if (operation === "navigate") {
+      exactKeys(value, new Set(["url"]), new Set(["url"]));
+      return { url: navigationUrl(value.url) };
     }
     if (
       operation === "click" ||
@@ -1301,41 +1323,50 @@
           revokedResponse(
             job.request.id,
             isAction(job.request.operation) ? "grant-revoked" : "cancelled",
-            "a reload revoked the grant before this request completed",
+            "a tab transition revoked the grant before this request completed",
           ),
           port,
         );
       }
     }
-    // Reload ends the grant before it reaches the tab: the old document's refs,
-    // queued actions, and waits cannot outlive it, and the new document receives
-    // nothing until a session grants it again.
-    async function reloadGrantedTab(request, grant, port, job) {
-      if (typeof api.tabs?.reload !== "function") {
+    // A tab transition ends the grant before dispatch; its destination has none.
+    async function transitionGrantedTab(request, grant, port, job) {
+      const operation = request.operation;
+      const navigating = operation === "navigate";
+      const method = navigating ? "update" : "reload";
+      if (typeof api.tabs?.[method] !== "function") {
         postNative(
-          errorResponse(request.id, "reload-unavailable", "Firefox tab reload is unavailable"),
+          errorResponse(
+            request.id, `${operation}-unavailable`, "the browser tab transition API is unavailable",
+          ),
           port,
         );
         return;
       }
-      const revoked = { ...copyGrant(grant), reason: "reload" };
-      const transition = { tabId: grant.tab_id };
+      const revoked = { ...copyGrant(grant), reason: operation };
+      const transition = {
+        tabId: grant.tab_id,
+        grant,
+        dispatched: false,
+        evidence: { url_event: false, loading: false },
+      };
       state.transition = transition;
       state.grant = null;
       state.session = null;
       refuseDetachedJobs(job, port);
       dropDebugger();
-      postNative(revokeMessage(grant, "reload"), port);
+      postNative(revokeMessage(grant, operation), port);
       await updateBadge();
       const finish = async (response) => {
         if (state.transition === transition) state.transition = null;
         if (state.nativePort === port) postNative(response, port);
         await updateBadge();
       };
-      const abandoned = () => job.cancelled || state.nativePort !== port;
+      const abandoned = () =>
+        job.cancelled || state.nativePort !== port || state.transition !== transition;
       const cancelled = () =>
         finish(
-          revokedResponse(request.id, "cancelled", "the reload was cancelled before dispatch"),
+          revokedResponse(request.id, "cancelled", "the tab transition was cancelled before dispatch"),
         );
       let collectorStopped = false;
       try {
@@ -1355,22 +1386,28 @@
           revokedResponse(
             request.id,
             "not-current-tab",
-            "the granted tab stopped being current before reload; nothing was reloaded",
+            "the granted tab stopped being current before the transition; nothing was dispatched",
           ),
         );
       }
       if (abandoned()) return cancelled();
+      transition.dispatched = true;
       try {
-        await api.tabs.reload(grant.tab_id);
+        if (navigating) await api.tabs.update(grant.tab_id, { url: request.payload.url });
+        else await api.tabs.reload(grant.tab_id);
       } catch (_) {
         return finish(
           revokedResponse(
             request.id,
-            "reload-rejected",
-            "Firefox reported a reload error; inspect the tab before granting it again",
+            navigating ? "action-uncertain" : "reload-rejected",
+            "the browser reported a transition error; inspect the tab before granting it again",
           ),
         );
       }
+      if (navigating && abandoned())
+        return finish(revokedResponse(
+          request.id, "action-uncertain", "navigation was interrupted after dispatch",
+        ));
       return finish({
         protocol: PROTOCOL,
         version: VERSION,
@@ -1382,7 +1419,7 @@
         ok: true,
         result: {
           kind: "action",
-          action: "reload",
+          action: operation,
           backend: "tabs",
           document_id: request.document_id,
           generation: request.generation,
@@ -1392,10 +1429,18 @@
           revoked_grant: revoked,
           new_document_grant: "none",
           collector_stopped: collectorStopped,
+          ...(navigating
+            ? {
+                requested_url: request.payload.url,
+                transition_evidence: { ...transition.evidence },
+              }
+            : {}),
           limitations: {
             page_load: "not-observed",
             new_document_authority: "requires-explicit-user-grant",
-            bypass_cache: "unsupported",
+            ...(navigating
+              ? { destination_authority: "none", redirects: "grant-nothing" }
+              : { bypass_cache: "unsupported" }),
           },
         },
       });
@@ -1465,8 +1510,8 @@
         await dispatchTrustedInput(request, grant, port, job);
         return;
       }
-      if (request.operation === "reload") {
-        await reloadGrantedTab(request, grant, port, job);
+      if (request.operation === "reload" || request.operation === "navigate") {
+        await transitionGrantedTab(request, grant, port, job);
         return;
       }
       let collected;
@@ -2044,7 +2089,7 @@
           );
           return;
         }
-        const bound = state.grant || state.pendingStart;
+        const bound = state.grant || state.pendingStart || state.transition?.grant;
         if (bound && bound.cu_session !== control.cu_session) {
           postNative(
             errorResponse(
@@ -2135,7 +2180,7 @@
         return;
       }
       if (control.operation === "release") {
-        const grant = state.grant;
+        const grant = state.grant || state.transition?.grant;
         if (!grant || (control.tab_id !== null && control.tab_id !== grant.tab_id)) {
           postNative(
             errorResponse(control.id, "tab-not-granted", "the tab has no active browser grant"),
@@ -2211,7 +2256,16 @@
       } catch (_) {}
     }
     async function handleTabUpdated(tabId, changeInfo) {
-      if (state.grant?.tab_id !== tabId && state.pendingStart?.tabId !== tabId) return false;
+      const transition = state.transition;
+      if (transition?.tabId === tabId && transition.dispatched) {
+        transition.evidence.url_event ||=
+          Object.prototype.hasOwnProperty.call(changeInfo || {}, "url");
+        transition.evidence.loading ||= changeInfo?.status === "loading";
+        return true;
+      }
+      if (
+        state.grant?.tab_id !== tabId && state.pendingStart?.tabId !== tabId && transition?.tabId !== tabId
+      ) return false;
       if (
         changeInfo &&
         (Object.prototype.hasOwnProperty.call(changeInfo, "url") || changeInfo.status === "loading")
@@ -2227,7 +2281,10 @@
       return true;
     }
     async function handleTabRemoved(tabId, reason = "tab-closed") {
-      if (state.grant?.tab_id !== tabId && state.pendingStart?.tabId !== tabId) return false;
+      if (
+        state.grant?.tab_id !== tabId && state.pendingStart?.tabId !== tabId &&
+        state.transition?.tabId !== tabId
+      ) return false;
       await revokeGrant(reason, true);
       return true;
     }

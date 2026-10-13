@@ -186,6 +186,7 @@ def test_select_action_requires_one_option_identity_and_forwards_value(bridge, c
                 action="select",
                 input="dom",
                 key=None,
+                url=None,
                 document="fixture-document",
                 generation=0,
                 ref="e1",
@@ -571,3 +572,52 @@ def test_debugger_input_maps_actions_and_never_falls_back(bridge):
         ("trusted-key", {"key": "Enter"}),
         ("trusted-scroll", {"dx": 0, "dy": 300}),
     ]
+
+
+def navigation_args(*extra):
+    return [
+        "web", "action", "navigate", "--document", "fixture-document",
+        "--generation", "0", *extra, "--json",
+    ]
+
+
+def test_navigation_forwards_the_authorized_url_and_omits_it_from_the_action_log(
+    bridge, capsys, monkeypatch
+):
+    records = []
+    monkeypatch.setattr(safety, "record", lambda cfg, item: records.append(item))
+    destination = "https://example.org/task?token=private#secret"
+    assert cli.main(navigation_args("--url", destination, "--tab", "1")) == 0
+    assert bridge.payloads == [("navigate", {"url": destination})]
+    assert json.loads(capsys.readouterr().out)["dispatch_completed"] is True
+    assert records[0]["action"] == "browser-navigate"
+    assert "private" not in json.dumps(records) and "secret" not in json.dumps(records)
+
+
+@pytest.mark.parametrize("extra", [
+    [], ["--url", "/relative"], ["--url", "https://user:secret@example.org"],
+    ["--url", "javascript:alert(1)"], ["--url", "https://example.org", "--ref", "e1"],
+    ["--url", "https://example.org", "--value", "x"],
+    ["--url", "https://example.org", "--key", "Enter"],
+    ["--url", "https://example.org", "--input", "debugger"],
+])
+def test_navigation_invalid_arguments_dispatch_nothing(bridge, extra):
+    assert cli.main(navigation_args(*extra)) == exits.USAGE
+    assert bridge.calls == 0
+
+
+def test_navigation_cannot_target_another_or_stale_read_only_grant(bridge):
+    args = navigation_args("--url", "https://example.org")
+    assert cli.main([*args, "--tab", "99"]) == exits.BROWSER_READ_REFUSED
+    assert cli.main([*args, "--document", "other"]) == exits.BROWSER_DOCUMENT_STALE
+    bridge.grant["capabilities"] = ["read"]
+    assert cli.main(args) == exits.BROWSER_READ_REFUSED
+    assert bridge.calls == 0
+
+
+def test_navigation_preserves_the_abort_interlock(bridge):
+    flag = config.abort_path()
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.touch()
+    assert cli.main(navigation_args("--url", "https://example.org")) == exits.ABORTED_BY_USER
+    assert bridge.calls == 0

@@ -28,11 +28,12 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Self
+from urllib.parse import urlsplit
 
 from . import png
 
 PROTOCOL = "cu-browser-read"
-VERSION = 11
+VERSION = 12
 MAX_MESSAGE_BYTES = 1 << 20
 MAX_RECV_CHUNK_BYTES = 64 << 10
 MAX_PENDING_REQUESTS = 64
@@ -92,11 +93,15 @@ TRUSTED_KEYS = frozenset(
     }
 )
 ACTION_OPERATIONS = (
-    frozenset({"click", "focus", "fill", "scroll", "hover", "select", "capture", "reload"})
+    frozenset({
+        "click", "focus", "fill", "scroll", "hover", "select", "capture", "reload", "navigate"
+    })
     | TRUSTED_INPUT
 )
 # A receipt from any other backend does not describe the operation that was sent.
-_ACTION_BACKENDS = {"reload": "tabs", **dict.fromkeys(TRUSTED_INPUT, "debugger")}
+_ACTION_BACKENDS = {
+    **dict.fromkeys({"reload", "navigate"}, "tabs"), **dict.fromkeys(TRUSTED_INPUT, "debugger")
+}
 OPERATIONS = READ_OPERATIONS | ACTION_OPERATIONS
 CONTROL_OPERATIONS = frozenset({"grant", "release", "debug-attach", "debug-detach", "tabs"})
 CAPABILITIES = frozenset({"read", "interact"})
@@ -427,6 +432,21 @@ def capture_payload(region: Mapping[str, Any] | None, full_page: bool) -> dict[s
     return {} if region is None else {"region": dict(region)}
 
 
+def _navigation_url(value: Any) -> str:
+    url = _bounded_string(value, "navigation URL", 4096)
+    if not re.match(r"https?://", url, re.IGNORECASE) or re.search(r"[\x00-\x20\x7f\\]", url):
+        raise ProtocolError("navigation requires an absolute HTTP(S) URL without credentials")
+    try:
+        parsed = urlsplit(url)
+        valid = bool(parsed.hostname) and "@" not in parsed.netloc
+        valid = valid and (parsed.port is None or 0 <= parsed.port <= 65535)
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ProtocolError("navigation requires an absolute HTTP(S) URL without credentials")
+    return url
+
+
 def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
     if not isinstance(operation, str) or operation not in OPERATIONS:
         raise ProtocolError("operation is not a supported passive read or browser action")
@@ -462,6 +482,9 @@ def validate_payload(operation: str, payload: Any) -> dict[str, Any]:
     if operation == "reload":
         _exact_fields(payload_object, set(), set())
         return {}
+    if operation == "navigate":
+        _exact_fields(payload_object, {"url"}, {"url"})
+        return {"url": _navigation_url(payload_object["url"])}
     if operation in {"click", "focus", "hover", "trusted-click", "trusted-hover"}:
         _exact_fields(payload_object, {"ref"}, {"ref"})
         return {"ref": _ref(payload_object["ref"])}
@@ -813,8 +836,8 @@ def normalize_capture_response(
     return {**response, "result": transformed}
 
 
-def _revoked_by_reload(body: Mapping[str, Any], request: Mapping[str, Any]) -> bool:
-    """A reload receipt names the grant it ended and confers none on the new document."""
+def _revoked_by_transition(body: Mapping[str, Any], request: Mapping[str, Any]) -> bool:
+    """A transition receipt names the grant it ended and confers none at its destination."""
     revoked = body.get("revoked_grant")
     return (
         isinstance(revoked, Mapping)
@@ -822,6 +845,23 @@ def _revoked_by_reload(body: Mapping[str, Any], request: Mapping[str, Any]) -> b
             revoked.get(field) == request[field] for field in ("session", "tab_id", "document_id")
         )
         and body.get("new_document_grant") == "none"
+        and (
+            request["operation"] != "navigate"
+            or (
+                body.get("requested_url") == request["payload"]["url"]
+                and revoked.get("generation") == request["generation"]
+                and body.get("dispatch") == "api-resolved"
+                and body.get("effect") == "not-observed"
+                and body.get("verification") == "unverified"
+                and isinstance(body.get("limitations"), Mapping)
+                and body.get("limitations", {}).get("page_load") == "not-observed"
+                and isinstance(body.get("transition_evidence"), Mapping)
+                and all(
+                    type(body["transition_evidence"].get(field)) is bool
+                    for field in ("url_event", "loading")
+                )
+            )
+        )
     )
 
 
@@ -1373,7 +1413,10 @@ class BrowserReadClient:
                             or body.get("document_id") != document_id
                             or body.get("verification") not in {"verified", "unverified"}
                             or result_generation < generation
-                            or (operation == "reload" and not _revoked_by_reload(body, request))
+                            or (
+                                operation in {"reload", "navigate"}
+                                and not _revoked_by_transition(body, request)
+                            )
                             or (
                                 "ref" in request["payload"]
                                 and body.get("ref") != request["payload"]["ref"]

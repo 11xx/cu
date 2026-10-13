@@ -69,7 +69,7 @@ function fakeApi() {
   const removed = [];
   const currentTab = { id: 7, windowId: 3, active: true, hidden: false };
   const port = new FakePort();
-  const calls = { query: [], execute: [], messages: [], badges: [], reloads: [], order: [] };
+  const calls = { query: [], execute: [], messages: [], badges: [], reloads: [], updates: [], order: [] };
   const api = {
     runtime: {
       id: "cu-browser-read@local",
@@ -140,6 +140,11 @@ function fakeApi() {
       reload: async (tabId) => {
         calls.order.push("reload");
         calls.reloads.push(tabId);
+      },
+      update: async (tabId, properties) => {
+        calls.order.push("navigate");
+        calls.updates.push({ tabId, ...properties });
+        return { ...currentTab, url: properties.url };
       },
       onUpdated: { addListener: (listener) => updated.push(listener) },
       onRemoved: { addListener: (listener) => removed.push(listener) },
@@ -2064,4 +2069,164 @@ test("background carries sanitized text chunks under a read grant and revokes on
   await controller.stop();
   await controller.handleNativeMessage({ ...read, id: "after-stop" }, port);
   assert.equal(port.messages.at(-1).ok, false);
+});
+
+function navigationRequest(session, overrides = {}) {
+  return request("navigate", {
+    session, generation: 0, payload: { url: "https://example.org/task?private=yes#anchor" },
+    ...overrides,
+  });
+}
+
+test("navigation revokes first, dispatches to the exact tab and grants nothing on redirects", async () => {
+  const { api, port, calls } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  const update = api.tabs.update;
+  api.tabs.update = async (...args) => {
+    assert.equal(controller.status().active, false);
+    await controller.handleTabUpdated(7, { status: "loading", url: "https://example.org/redirect" });
+    return update(...args);
+  };
+  const navigation = navigationRequest(started.grant.session);
+  await controller.handleNativeMessage(navigation, port);
+  assert.deepEqual(calls.order, ["stop", "navigate"]);
+  assert.deepEqual(calls.updates, [{ tabId: 7, url: navigation.payload.url }]);
+  const result = port.messages.at(-1).result;
+  assert.equal(result.requested_url, navigation.payload.url);
+  assert.equal(result.revoked_grant.session, started.grant.session);
+  assert.equal(result.new_document_grant, "none");
+  assert.equal(result.dispatch, "api-resolved");
+  assert.equal(result.verification, "unverified");
+  assert.equal(result.limitations.page_load, "not-observed");
+  assert.deepEqual(result.transition_evidence, { url_event: true, loading: true });
+  assert.equal(controller.status().active, false);
+  await controller.handleNativeMessage(navigation, port);
+  assert.equal(port.messages.at(-1).error.code, "tab-not-granted");
+  assert.equal(calls.updates.length, 1);
+});
+
+test("navigation rejects credentials, non-HTTP, relative and malformed URLs before revocation", async () => {
+  const { api, port, calls } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  for (const url of [
+    null, "", "/task", "//example.org/task", "http:example.org", "https:///example.org",
+    "javascript:alert(1)", "data:text/plain,test", "file:///fixture", "about:blank",
+    "chrome-extension://id/fixture", "moz-extension://id/fixture", "https://user:secret@example.org",
+    "https://@example.org", "https://example.org:99999", "https://", " https://example.org",
+    "https://example.org/\nprivate", "https://example.org\\@other.org", "https://example.org/".repeat(300),
+  ]) {
+    await controller.handleNativeMessage(navigationRequest(started.grant.session, { payload: { url } }), port);
+    assert.equal(port.messages.at(-1).error.code, "invalid-request", String(url));
+    assert.equal(controller.status().active, true);
+  }
+  assert.deepEqual(calls.updates, []);
+});
+
+test("read-only, stale, wrong-tab, inactive and unavailable navigation retain the grant", async () => {
+  for (const scenario of [
+    { capabilities: ["read"], code: "interaction-not-granted" },
+    { overrides: { generation: 9 }, code: "stale-generation" },
+    { overrides: { document_id: "other" }, code: "stale-document" },
+    { overrides: { tab_id: 99 }, code: "tab-not-granted" },
+    { inactive: true, code: "not-current-tab" },
+    { noUpdate: true, code: "navigate-unavailable" },
+  ]) {
+    const { api, currentTab, port, calls } = fakeApi();
+    const controller = createController(api);
+    const started = await controller.startCurrent(null, scenario.capabilities || ["read", "interact"]);
+    if (scenario.inactive) currentTab.active = false;
+    if (scenario.noUpdate) delete api.tabs.update;
+    await controller.handleNativeMessage(navigationRequest(started.grant.session, scenario.overrides), port);
+    assert.equal(port.messages.at(-1).error.code, scenario.code);
+    assert.equal(controller.status().active, true);
+    assert.deepEqual(calls.updates, []);
+  }
+});
+
+test("Stop, closure, competing navigation and client cancellation before dispatch cancel navigation", async () => {
+  for (const interrupt of ["stop", "closure", "navigation", "cancel"]) {
+    const { api, port, calls } = fakeApi();
+    let entered, release;
+    const barrier = new Promise((resolve) => { entered = resolve; });
+    const stopping = new Promise((resolve) => { release = resolve; });
+    const original = api.tabs.sendMessage;
+    api.tabs.sendMessage = (tab, message) => {
+      if (message.type !== "stop") return original(tab, message);
+      entered();
+      return stopping;
+    };
+    const controller = createController(api);
+    const started = await controller.startCurrent(null, ["read", "interact"], false, "owner");
+    const req = navigationRequest(started.grant.session);
+    const pending = controller.handleNativeMessage(req, port);
+    await barrier;
+    if (interrupt === "stop") {
+      await controller.handleNativeMessage(control("release", { cu_session: "foreign" }), port);
+      assert.equal(port.messages.at(-1).error.code, "session-mismatch");
+      await controller.handleNativeMessage(control("release", { cu_session: "owner" }), port);
+      assert.equal(port.messages.at(-1).ok, true);
+    } else if (interrupt === "closure") await controller.handleTabRemoved(7);
+    else if (interrupt === "navigation") await controller.handleTabUpdated(7, { status: "loading" });
+    else await controller.handleNativeMessage({
+      protocol: PROTOCOL, version: VERSION, type: "cancel", id: req.id, session: req.session,
+    }, port);
+    release({ ok: true });
+    await pending;
+    assert.deepEqual(calls.updates, [], interrupt);
+    assert.equal(controller.status().active, false, interrupt);
+    assert.equal(port.messages.at(-1).error.code, "cancelled", interrupt);
+  }
+});
+
+test("navigation revokes queued actions and waits without dispatching either", async () => {
+  const { api, port, calls } = fakeApi();
+  const controller = createController(api);
+  const started = await controller.startCurrent(null, ["read", "interact"]);
+  let waited, release;
+  const observed = new Promise((resolve) => { waited = resolve; });
+  const original = api.tabs.sendMessage;
+  api.tabs.sendMessage = (tab, message) => {
+    if (message.type !== "read-request") return original(tab, message);
+    waited();
+    return new Promise((resolve) => { release = () => original(tab, message).then(resolve); });
+  };
+  const waiting = controller.handleNativeMessage(request("wait", {
+    id: "wait-before", session: started.grant.session,
+    payload: { selector: ".pending", state: "visible" },
+  }), port);
+  await observed;
+  await Promise.all([
+    controller.handleNativeMessage(navigationRequest(started.grant.session, { id: "navigate" }), port),
+    controller.handleNativeMessage(request("click", {
+      id: "queued-click", session: started.grant.session, generation: 0, payload: { ref: "e1" },
+    }), port),
+  ]);
+  assert.equal(port.messages.find((msg) => msg.id === "wait-before").error.state, "grant-revoked");
+  assert.equal(port.messages.find((msg) => msg.id === "queued-click").error.code, "grant-revoked");
+  assert.equal(calls.updates.length, 1);
+  release();
+  await waiting;
+});
+
+test("navigation interrupted after dispatch or rejected by the API stays uncertain and revoked", async () => {
+  for (const interrupt of ["stop", "closure", "rejected"]) {
+    const { api, port, calls } = fakeApi();
+    const controller = createController(api);
+    const started = await controller.startCurrent(null, ["read", "interact"], false, "owner");
+    const update = api.tabs.update;
+    api.tabs.update = async (...args) => {
+      await update(...args);
+      if (interrupt === "stop")
+        await controller.handleNativeMessage(control("release", { cu_session: "owner" }), port);
+      else if (interrupt === "closure") await controller.handleTabRemoved(7);
+      else throw new Error("private browser error");
+    };
+    await controller.handleNativeMessage(navigationRequest(started.grant.session), port);
+    assert.equal(port.messages.at(-1).error.code, "action-uncertain", interrupt);
+    assert.equal(controller.status().active, false);
+    assert.equal(calls.updates.length, 1);
+    assert.equal(JSON.stringify(port.messages.at(-1)).includes("private browser error"), false);
+  }
 });

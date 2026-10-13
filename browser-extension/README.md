@@ -127,6 +127,7 @@ cu web action select --document DOCUMENT --generation 5 --ref e6 --value two --t
 cu web action select --document DOCUMENT --generation 6 --ref e6 --label Two --tab 12
 cu web action scroll --target document --dy 500 --document DOCUMENT --generation 5
 cu web action reload --document DOCUMENT --generation 7 --tab 12
+cu web action navigate --url https://example.org/task --document DOCUMENT --generation 7 --tab 12
 cu web wait --document DOCUMENT --selector '.result-card' --state visible
 cu web wait --document DOCUMENT --ref e4 --state text --text Ready
 ```
@@ -170,7 +171,24 @@ loading, and the reloaded document has no authority until a session binds it
 again with `cu web grant`. A tab that stops being current before dispatch, or a reload Firefox
 rejects, refuses with `state: "grant-revoked"`. A receipt lost to the
 disconnect that ends the grant is exit 58: inspect the tab, never reload again
-blindly. Cache-bypass reload, navigation, and tab transfer are unsupported.
+blindly. Cache-bypass reload and tab transfer are unsupported.
+
+Navigate takes one absolute HTTP(S) `--url` without credentials, the observed
+source document/generation, and an interaction grant on the exact active tab in
+its focused window. Relative, browser-internal, extension, file, data and
+javascript URLs refuse. The caller authorizes the destination within its task;
+CU validates the URL and binding before revoking the old grant and pending
+work. One `tabs.update(tab_id, {url})` dispatch follows revocation. Stop, closure
+or competing navigation before dispatch cancels; an interruption after dispatch
+or a lost reply is uncertain and must never be replayed.
+
+The receipt separates `requested_url`, `revoked_grant`, `dispatch` and bounded
+`transition_evidence` flags from page load/effect, which remain unobserved.
+Redirects grant nothing. Inspect the destination and handle an unexpected URL
+as an exception, then bind its document explicitly before acting. The generic
+action log omits the URL, including its private query and fragment. The
+[`tabs.update` API](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/update)
+returns updated tab information; its resolution does not verify task completion.
 
 Waits poll DOM/media conditions for at most 10 seconds; the CLI's default wait
 transport budget is 12 seconds. `playing` requires ready, unpaused media with
@@ -282,7 +300,7 @@ combined with `--region`.
 ## Transport and refusals
 
 The extension ID is `cu-browser-read@local`, the native host is `org.cu.read`, and
-the protocol is `cu-browser-read`, version **11**. Extension and host versions must
+the protocol is `cu-browser-read`, version **12**. Extension and host versions must
 match. Frames use native-endian uint32 length plus UTF-8 JSON, bounded at 1 MiB.
 Session controls that bind (`grant`) and release (`release`) a tab, and attach
 (`debug-attach`) or detach (`debug-detach`) the debugger, travel the same channel

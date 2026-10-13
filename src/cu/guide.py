@@ -646,6 +646,7 @@ OPTIONAL FIREFOX CU BROWSER
   cu web action click --document DOCUMENT --generation 3 --ref e4 --tab 12
   cu web action select --document DOCUMENT --generation 4 --ref e5 --value two --tab 12
   cu web action reload --document DOCUMENT --generation 7 --tab 12
+  cu web action navigate --url https://example.org/task --document DOCUMENT --generation 7 --tab 12
   cu web wait --document DOCUMENT --selector '.result-card' --state visible
   cu web capture --document DOCUMENT --generation 6 --tab 12 --json
   cu web capture --document DOCUMENT --generation 6 --tab 12 \
@@ -731,6 +732,19 @@ OPTIONAL FIREFOX CU BROWSER
   never re-grants; bind the reloaded page again with `cu web grant`. A tab
   lost before dispatch or a rejected reload stays revoked; exit 58 means the
   receipt was lost, so inspect the tab instead of reloading again.
+
+  Navigate takes one absolute HTTP(S) --url with no credentials and the observed
+  document/generation of the exact interaction-granted tab. Relative, internal,
+  extension, file, data and javascript URLs refuse. Validate the destination
+  against the task before requesting it. The old grant and pending work are
+  revoked before one tabs.update; redirects grant nothing. Its receipt names
+  requested_url, revoked_grant, API dispatch and transition event evidence,
+  while page load and destination effect remain unobserved. Inspect and verify
+  the destination, then bind it explicitly before acting; an unexpected
+  destination is an exception. Stop, closure or competing navigation before
+  dispatch cancels; interruption after dispatch or a lost reply is uncertain
+  (58). Never replay an uncertain navigation or restore the old grant. The
+  action log omits the URL; query and fragment may be private.
 
   Waits re-check fresh DOM or media conditions for at most 10 seconds (12-second
   default transport budget). Stop and client disconnect cancel them. Playing

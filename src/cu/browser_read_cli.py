@@ -152,7 +152,10 @@ def configure(parser: argparse.ArgumentParser) -> None:
     action.set_defaults(injects=True)
     action.add_argument(
         "action",
-        choices=("click", "fill", "focus", "hover", "key", "reload", "scroll", "select", "type"),
+        choices=(
+            "click", "fill", "focus", "hover", "key", "navigate", "reload", "scroll", "select",
+            "type",
+        ),
     )
     action.add_argument(
         "--input",
@@ -161,6 +164,9 @@ def configure(parser: argparse.ArgumentParser) -> None:
         help="dom dispatches page events; debugger sends real input through an attached debugger",
     )
     action.add_argument("--ref", help="Stable ref from a prior observation")
+    action.add_argument(
+        "--url", help="Absolute HTTP(S) destination for navigate; grants no new document"
+    )
     action.add_argument(
         "--value", help="Value for fill, text for type, or exact option value for select"
     )
@@ -483,6 +489,8 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
     safety.check_session()
     safety.check_denylist(config.load(), observe.focused())
     operation = args.action
+    if args.url is not None and operation != "navigate":
+        raise ValueError("--url is only supported by navigate")
     if args.input == "debugger":
         if args.action not in {"click", "hover", "scroll", "type", "key"}:
             raise ValueError(f"{args.action} has no debugger input; use --input dom")
@@ -519,10 +527,18 @@ def _action(args: argparse.Namespace) -> dict[str, Any]:
         if args.ref is None or args.value is None:
             raise ValueError("fill requires --ref and --value")
         payload = {"ref": args.ref, "value": args.value}
-    elif args.action == "reload":
-        if args.ref or args.value is not None or args.label is not None or args.dx or args.dy:
-            raise ValueError("reload names no element or value; it reloads the granted tab")
-        payload = {}
+    elif args.action in {"reload", "navigate"}:
+        if (
+            args.ref or args.value is not None or args.label is not None
+            or args.key is not None or args.dx or args.dy
+        ):
+            raise ValueError(f"{args.action} names no element, key or value")
+        try:
+            payload = {} if args.action == "reload" else transport.validate_payload(
+                "navigate", {"url": args.url}
+            )
+        except transport.ProtocolError as exc:
+            raise ValueError(str(exc)) from exc
     else:
         if args.target == "element" and not args.ref:
             raise ValueError("element scroll requires --ref")

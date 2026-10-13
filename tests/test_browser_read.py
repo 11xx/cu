@@ -30,7 +30,7 @@ from cu.browser_read import (
     write_frame,
 )
 
-PROTOCOL = {"protocol": "cu-browser-read", "version": 11}
+PROTOCOL = {"protocol": "cu-browser-read", "version": 12}
 
 
 def response(request: dict[str, object], *, response_id: str | None = None) -> dict[str, object]:
@@ -356,7 +356,7 @@ def reload_receipt(**changes: object) -> dict[str, object]:
     }
 
 
-def serve_reload(helper: HelperSocket, receipt: dict[str, object] | None):
+def serve_reload(helper: HelperSocket, receipt: dict[str, object] | None, operation="reload"):
     """Revoke before replying, then reply with `receipt` or drop the connection."""
     errors: list[BaseException] = []
 
@@ -366,7 +366,7 @@ def serve_reload(helper: HelperSocket, receipt: dict[str, object] | None):
             with connection:
                 write_frame(connection, {**hello(str(helper.path)), "grants": [RELOAD_GRANT]})
                 request = read_frame(connection)
-                assert request is not None and request["operation"] == "reload"
+                assert request is not None and request["operation"] == operation
                 write_frame(
                     connection,
                     {
@@ -375,7 +375,7 @@ def serve_reload(helper: HelperSocket, receipt: dict[str, object] | None):
                         "session": "session-1",
                         "tab_id": 7,
                         "document_id": "document-1",
-                        "reason": "reload",
+                        "reason": operation,
                     },
                 )
                 if receipt is not None:
@@ -559,3 +559,98 @@ def test_reload_without_a_trustworthy_receipt_is_uncertain(receipt):
         thread.join(timeout=1)
         helper.close()
     assert errors == []
+
+
+NAVIGATION_URL = "https://example.org/task?private=yes#anchor"
+
+
+def navigation_action(client):
+    return client.action(
+        "navigate", session="session-1", tab_id=7, document_id="document-1",
+        generation=2, payload={"url": NAVIGATION_URL}, timeout=0.5,
+    )
+
+
+def navigation_receipt(**changes):
+    return reload_receipt(
+        action="navigate", requested_url=NAVIGATION_URL,
+        revoked_grant={**RELOAD_GRANT, "reason": "navigate"},
+        transition_evidence={"url_event": False, "loading": False},
+        limitations={"page_load": "not-observed"}, **changes,
+    )
+
+
+@pytest.mark.parametrize("url", [
+    None, "", "/task", "//example.org/task", "http:example.org", "https:///example.org",
+    "javascript:alert(1)", "data:text/plain,test", "file:///fixture", "about:blank",
+    "chrome-extension://id/fixture", "moz-extension://id/fixture", "https://user:secret@example.org",
+    "https://@example.org", "https://example.org:99999", "https://", " https://example.org",
+    "https://example.org/\nprivate", "https://example.org\\@other.org",
+    "https://example.org/" * 300,
+])
+def test_navigation_refuses_unsafe_or_ambiguous_destinations(url):
+    with pytest.raises(ProtocolError):
+        validate_payload("navigate", {"url": url})
+
+
+@pytest.mark.parametrize("url", [
+    NAVIGATION_URL, "http://127.0.0.1:8000/redirect", "https://[::1]:443/task", "HTTPS://example.org",
+])
+def test_navigation_preserves_the_exact_http_destination(url):
+    assert validate_payload("navigate", {"url": url}) == {"url": url}
+    with pytest.raises(ProtocolError, match="passive read"):
+        make_request("navigate", session="session-1", tab_id=7, document_id="document-1",
+                     payload={"url": url})
+
+
+def test_navigation_receipt_tracks_revocation_without_claiming_a_loaded_destination():
+    helper = HelperSocket.create()
+    thread, errors = serve_reload(helper, navigation_receipt(), operation="navigate")
+    try:
+        with BrowserReadClient.connect(helper.path, timeout=0.5) as client:
+            result = navigation_action(client)
+            assert result["result"]["requested_url"] == NAVIGATION_URL
+            assert result["result"]["new_document_grant"] == "none"
+            assert client.metadata["grants"] == []
+    finally:
+        thread.join(timeout=1)
+        helper.close()
+    assert not thread.is_alive() and not errors
+
+
+@pytest.mark.parametrize("changes", [
+    {"requested_url": "https://other.example"}, {"dispatch": "not-dispatched"},
+    {"effect": "loaded"}, {"verification": "verified"}, {"limitations": None},
+    {"limitations": {"page_load": "loaded"}}, {"new_document_grant": "granted"},
+    {"revoked_grant": {**RELOAD_GRANT, "document_id": "other"}},
+    {"transition_evidence": None}, {"transition_evidence": {"url_event": "yes", "loading": True}},
+])
+def test_navigation_without_a_matching_receipt_is_uncertain(changes):
+    receipt = navigation_receipt()
+    receipt.update(changes)
+    helper = HelperSocket.create()
+    thread, errors = serve_reload(helper, receipt, operation="navigate")
+    try:
+        with (
+            BrowserReadClient.connect(helper.path, timeout=0.5) as client,
+            pytest.raises(BrowserActionUncertain),
+        ):
+            navigation_action(client)
+    finally:
+        thread.join(timeout=1)
+        helper.close()
+    assert not thread.is_alive() and not errors
+
+
+def test_lost_navigation_response_is_uncertain_and_never_replayed():
+    helper = HelperSocket.create()
+    thread, errors = serve_reload(helper, None, operation="navigate")
+    try:
+        with BrowserReadClient.connect(helper.path, timeout=0.5) as client:
+            with pytest.raises(BrowserActionUncertain):
+                navigation_action(client)
+            assert client.metadata["grants"] == []
+    finally:
+        thread.join(timeout=1)
+        helper.close()
+    assert not thread.is_alive() and not errors
