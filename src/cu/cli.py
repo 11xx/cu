@@ -1590,7 +1590,11 @@ def cmd_know(args: argparse.Namespace) -> int:
                 )
             for note in r.get("notes", []):
                 scope = f"[{note['context']}] " if note.get("context") else ""
-                print(f"  note: {scope}{note['text']}")
+                provenance = note["provenance"]
+                run = provenance.get("cu_session", "untracked")
+                interference = provenance["human_interference"]
+                print(f"  {note['id']} [{note['status']}]: {scope}{note['text']}")
+                print(f"    run: {run}; human interference: {interference}")
 
         _emit(record, args.json, render)
         return exits.OK
@@ -1616,7 +1620,9 @@ def cmd_know(args: argparse.Namespace) -> int:
 
     if args.subcommand == "note":
         entry = knowledge.add_note(args.app, args.text, context=args.context)
-        _emit(entry, args.json, lambda e: print(f"noted for {args.app}: {e['text']}"))
+        _emit(entry, args.json, lambda e: print(
+            f"{args.app}/{e['id']} [{e['status']}]: {e['text']}"
+        ))
         return exits.OK
 
     if args.subcommand in {"confirm", "miss"}:
@@ -1629,6 +1635,7 @@ def cmd_know(args: argparse.Namespace) -> int:
             lambda m: print(
                 f"{args.app}/{args.name}: {m.get('confirmed', 0)} confirmed, "
                 f"{m.get('missed', 0)} missed"
+                + (f" [{m['status']}]" if "status" in m else "")
             ),
         )
         return exits.OK
@@ -2501,10 +2508,10 @@ def build_parser() -> argparse.ArgumentParser:
         ("list", "Applications with stored knowledge"),
         ("show", "Landmarks and notes for one application"),
         ("set", "Record where something is, as a fraction of the window"),
-        ("note", "Record a fact that has no coordinate"),
-        ("confirm", "The landmark pointed at the right thing"),
-        ("miss", "It did not"),
-        ("forget", "Drop a landmark, or everything for an application"),
+        ("note", "Record a provisional application fact with observation provenance"),
+        ("confirm", "Confirm a landmark, or a note from another CU session"),
+        ("miss", "Record a failed landmark or contradict a note"),
+        ("forget", "Drop one landmark or note, or everything for an application"),
         ("host", "What runs learned about this machine, not about an application"),
     ):
         kp = ksub.add_parser(name, help=help_text, description=help_text)
@@ -2512,9 +2519,9 @@ def build_parser() -> argparse.ArgumentParser:
         if name not in {"list", "host"}:
             kp.add_argument("app", help="Window class, or any name you key it by")
         if name in {"set", "confirm", "miss"}:
-            kp.add_argument("name", help="What the landmark is called")
+            kp.add_argument("name", help="Landmark name or, for confirm/miss, note ID")
         if name == "forget":
-            kp.add_argument("name", nargs="?", help="Omit to forget the application")
+            kp.add_argument("name", nargs="?", help="Landmark name or note ID; omit for all")
         if name == "set":
             kp.add_argument("--rect", required=True, metavar="X,Y[,W,H]",
                             help="Fractions of the window")
@@ -2530,7 +2537,7 @@ def build_parser() -> argparse.ArgumentParser:
             kp.add_argument("--anchor-y", choices=knowledge.ANCHORS["y"],
                             default="auto", help="How it follows a height change")
         if name == "note":
-            kp.add_argument("text", help="The fact worth keeping")
+            kp.add_argument("text", help="Application interface fact; exclude task data and timing")
         if name == "host":
             # Host facts are notes only, and are addressed by the position the
             # listing prints: a machine has no name to key a fact by. Adding and
@@ -2914,6 +2921,12 @@ def _safe_call(call, *, as_json: bool = False) -> int:
         print(f"cu: refused: {exc.reason}", file=sys.stderr)
         print(f"cu: {exits.RESPONSE[exc.code]}", file=sys.stderr)
         return exc.code
+    except knowledge.NoteEvidenceError as exc:
+        code = exits.NOTE_CONFIRMATION_REFUSED
+        _emit_error(code, str(exc), as_json=as_json)
+        print(f"cu: {exc}", file=sys.stderr)
+        print(f"cu: {exits.RESPONSE[code]}", file=sys.stderr)
+        return code
     except (KnowledgeError, SandboxError) as exc:
         print(f"cu: {exc}", file=sys.stderr)
         return exits.TARGET_NOT_FOUND

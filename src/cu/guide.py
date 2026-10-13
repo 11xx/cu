@@ -322,6 +322,7 @@ EXIT CODES ARE THE CONTRACT
   44  Another agent reserved desktop    Wait for its session to end, then retry
   45  Reservation state unavailable     Stop; repair the registry before injecting
   50  No known binding for that action  Do not guess a chord; say so
+  61  Note confirmation lacks a run     Observe again in another named CU session
 
   Code 40 is not a transient failure. It means the person at the desk pressed
   their abort key. Stop, and tell them. Retrying past it or trying to clear the
@@ -749,8 +750,11 @@ WHAT EARLIER RUNS LEARNED
   cu know show zen               Landmarks and notes for an application.
   cu shot --landmark zen/urlbar  Aim a capture from a remembered position.
   cu know set zen urlbar --rect 0.1,0.02,0.6,0.04 --note 'the address field'
-  cu know note zen 'dismiss the cookie banner before anything else responds'
+  cu know note zen 'the tools menu opens developer tools'
   cu know confirm zen urlbar     Or `miss`, when it pointed at the wrong thing.
+  cu know confirm zen NOTE_ID    Confirm a note in a different CU session.
+  cu know miss zen NOTE_ID       Record contrary evidence.
+  cu know forget zen NOTE_ID     Drop only that note; show prints its stable ID.
 
   A landmark says where to **look**, never where to click. It aims a capture,
   derived from the window's geometry now; read those pixels and act through the
@@ -766,6 +770,20 @@ WHAT EARLIER RUNS LEARNED
 
   Record what you learn as you go, and score a landmark after using it. That is
   what makes the next run cheaper.
+
+  Notes keep application interface facts: controls, menu paths and shortcuts.
+  Keep task or site data, timing workarounds, transient notifications and run
+  conditions in the caller's task context. A note starts `observed-once`; treat
+  it as a hypothesis until `confirmed` by distinct CU sessions. Repeating a
+  confirmation in the same run refuses. A miss withdraws guidance and requires
+  fresh evidence from two distinct runs.
+
+  Provenance records the invocation, CU session and supplied CU_HARNESS and
+  CU_HARNESS_SESSION identifiers. Human-movement refusals mark that CU session
+  in the knowledge store as interfered with; its observations cannot establish
+  guidance, including after runtime expiry. `not-detected`
+  means no recorded detection, not proof that nobody interfered. Untracked or
+  unavailable provenance cannot establish guidance. Host notes remain separate.
 
   Some of what you learn is not about any application — that keystrokes pass
   through a remapping layer here, that one output reports a scale the others do

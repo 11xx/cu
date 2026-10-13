@@ -47,8 +47,12 @@ import json
 import os
 import re
 import time
+import uuid
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
+
+from . import context as invocation_context
 
 KEY_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._@-]*$")
 
@@ -77,6 +81,10 @@ USELESS_SHARE = 0.5
 
 class KnowledgeError(RuntimeError):
     pass
+
+
+class NoteEvidenceError(KnowledgeError):
+    """A note confirmation lacks a distinct named run."""
 
 
 def store_dir() -> Path:
@@ -164,9 +172,15 @@ def load(app: str) -> dict[str, Any]:
     if not path.is_file():
         return {"app": app, "landmarks": {}, "notes": []}
     try:
-        return json.loads(path.read_text())
+        record = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         raise KnowledgeError(f"{path}: {exc}") from exc
+    for index, note in enumerate(record.get("notes", [])):
+        if "id" not in note:
+            source = json.dumps([app, index, note], sort_keys=True).encode()
+            note["id"] = "note:" + sha256(source).hexdigest()[:24]
+        _note_evidence(note)
+    return record
 
 
 def save(record: dict[str, Any]) -> Path:
@@ -255,8 +269,23 @@ def get_landmark(app: str, name: str, context: str | None = None) -> dict[str, A
 
 
 def score(app: str, name: str, hit: bool, context: str | None = None) -> dict[str, Any]:
-    """Record whether a landmark actually pointed at the right thing."""
+    """Record a landmark hit or miss, or evidence for a note's stable ID."""
     record = load(app)
+    if name.startswith("note:"):
+        note = _find_note(record, name, context)
+        provenance = invocation_context.provenance()
+        run = provenance.get("cu_session")
+        if hit:
+            if not run:
+                raise NoteEvidenceError("confirm a note inside a named CU session")
+            if any(o["provenance"].get("cu_session") == run for o in note["observations"]):
+                raise NoteEvidenceError("confirm a note from another CU session, not the same run")
+        note["observations"].append(
+            {"hit": hit, "at": time.time(), "provenance": provenance}
+        )
+        _note_evidence(note)
+        save(record)
+        return note
     key = _scoped(name, context)
     if key not in record["landmarks"]:
         raise KnowledgeError(f"{app} has no landmark {key!r}")
@@ -267,15 +296,52 @@ def score(app: str, name: str, hit: bool, context: str | None = None) -> dict[st
     return record["landmarks"][key]
 
 
-def add_note(app: str, text: str, context: str | None = None) -> dict[str, Any]:
-    """Keep a fact that has no coordinate.
+def _note_evidence(note: dict[str, Any]) -> None:
+    """Only distinct runs without detected interference establish guidance."""
+    note.setdefault("provenance", {"human_interference": "untracked"})
+    if invocation_context.human_interference(note["provenance"].get("cu_session")) == "detected":
+        note["provenance"]["human_interference"] = "detected"
+    observations = note.setdefault("observations", [])
+    runs: set[str] = set()
+    missed = False
+    for observation in observations:
+        provenance = observation["provenance"]
+        run = provenance.get("cu_session")
+        if invocation_context.human_interference(run) == "detected":
+            provenance["human_interference"] = "detected"
+        if not observation["hit"]:
+            runs.clear()
+            missed = True
+        elif run and provenance.get("human_interference") == "not-detected":
+            runs.add(run)
+    note["confirmed"] = max(0, len(runs) - 1)
+    note["missed"] = sum(not o["hit"] for o in observations)
+    note["status"] = (
+        "confirmed" if len(runs) >= 2 else "needs-confirmation" if missed else "observed-once"
+    )
 
-    Most of what is learned about an application is not a position — that a
-    dialog must be dismissed before anything else responds, that a field
-    rejects pasted text. These cost as much to rediscover as a landmark does.
-    """
+
+def _find_note(record: dict[str, Any], name: str, context: str | None) -> dict[str, Any]:
+    for note in record.get("notes", []):
+        if note["id"] == name and (context is None or note.get("context") == context):
+            return note
+    raise KnowledgeError(f"{record['app']} has no note {name!r}")
+
+
+def add_note(app: str, text: str, context: str | None = None) -> dict[str, Any]:
+    """Keep one provisional application fact, with its observation provenance."""
     record = load(app)
-    entry = {"text": text, "context": context, "at": time.time()}
+    provenance = invocation_context.provenance()
+    at = time.time()
+    entry = {
+        "id": "note:" + uuid.uuid4().hex[:24],
+        "text": text,
+        "context": context,
+        "at": at,
+        "provenance": provenance,
+        "observations": [{"hit": True, "at": at, "provenance": dict(provenance)}],
+    }
+    _note_evidence(entry)
     record.setdefault("notes", []).append(entry)
     save(record)
     return entry
@@ -286,6 +352,11 @@ def forget(app: str, name: str | None = None, context: str | None = None) -> str
     if name is None:
         path_for(app).unlink(missing_ok=True)
         return f"forgot everything about {app}"
+    if name.startswith("note:"):
+        note = _find_note(record, name, context)
+        record["notes"].remove(note)
+        save(record)
+        return f"forgot {app}/{name}: {note['text']}"
     key = _scoped(name, context)
     if key not in record["landmarks"]:
         raise KnowledgeError(f"{app} has no landmark {key!r}")

@@ -7,6 +7,8 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
 
@@ -58,6 +60,48 @@ def metadata() -> dict[str, Any]:
         item = getattr(value, name)
         if item is not None:
             fields[name] = item
+    return fields
+
+
+def _interference_path(run: str | None) -> Path | None:
+    if not run:
+        return None
+    data = Path(os.environ.get("XDG_DATA_HOME") or "~/.local/share").expanduser()
+    key = sha256(run.encode()).hexdigest()
+    return data / "ai-computer-use" / "knowledge" / "_runs" / key
+
+
+def human_interference(run: str | None) -> str:
+    """Report detection evidence, never assert that a run had no human input."""
+    path = _interference_path(run)
+    if path is None:
+        return "untracked"
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return "not-detected"
+    except OSError:
+        return "unavailable"
+    return "detected"
+
+
+def record_human_interference() -> None:
+    """Keep positive run evidence with knowledge, including after runtime expiry."""
+    path = _interference_path(session())
+    if path is not None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path.touch(mode=0o600, exist_ok=True)
+        except OSError:
+            pass
+
+
+def provenance() -> dict[str, Any]:
+    fields = metadata()
+    run = session()
+    if run is not None:
+        fields["cu_session"] = run
+    fields["human_interference"] = human_interference(run)
     return fields
 
 

@@ -49,6 +49,7 @@ BROWSER_READ_BUDGET = 57
 BROWSER_ACTION_UNCERTAIN = 58
 BROWSER_SESSION_REQUIRED = 59
 BROWSER_SESSION_FOREIGN = 60
+NOTE_CONFIRMATION_REFUSED = 61
 
 #: What a caller should do on each code. Shipped in `cu doctor --json` and
 #: summarized in the bare-`cu` guide, so the contract has exactly one source.
@@ -174,6 +175,9 @@ RESPONSE = {
     ),
     NOT_MAPPED: (
         "No known binding for this action in this application. Do not guess a default chord."
+    ),
+    NOTE_CONFIRMATION_REFUSED: (
+        "Observe the application fact in another named CU session before confirming the note."
     ),
 }
 

@@ -15,6 +15,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def isolated_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     (tmp_path / "runtime").mkdir(parents=True, exist_ok=True)
     # A session the developer happens to have open would otherwise adopt every
     # entry the suite publishes, so the tests would agree with each other while

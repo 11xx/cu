@@ -30,6 +30,8 @@ class Refused(RuntimeError):
         self.code = code
         self.reason = reason
         self.details = details or {}
+        if code == exits.HUMAN_ACTIVE:
+            context.record_human_interference()
 
 
 def _matches(value: str, needles: list[str]) -> str | None:
