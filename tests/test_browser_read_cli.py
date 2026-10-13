@@ -13,6 +13,11 @@ from cu import browser_read as wire
 from cu import browser_read_cli, cli, exits
 
 
+@pytest.fixture(autouse=True)
+def browser_session(monkeypatch):
+    monkeypatch.setenv("CU_SESSION", "fixture-driver")
+
+
 def test_cli_absence_is_optional(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     assert cli.main(["web", "hosts", "--json"]) == 0
@@ -112,6 +117,7 @@ def test_native_roundtrip(tmp_path, monkeypatch):
             "generation": 0,
             "active": True,
             "hidden": False,
+            "cu_session": "fixture-driver",
         }
         wire.write_frame(
             process.stdin,
@@ -182,6 +188,7 @@ def test_native_host_forwards_a_session_control_before_any_grant(tmp_path, monke
             "generation": 0,
             "active": True,
             "hidden": False,
+            "cu_session": "fixture-driver",
             "capabilities": ["read", "interact"],
         }
         errors = []
@@ -209,7 +216,9 @@ def test_native_host_forwards_a_session_control_before_any_grant(tmp_path, monke
         thread.start()
         with wire.BrowserReadClient.connect(ready["socket"]) as client:
             assert client.metadata["grants"] == []
-            result = client.control("grant", capabilities=["read", "interact"])
+            result = client.control(
+                "grant", cu_session="fixture-driver", capabilities=["read", "interact"]
+            )
             assert result["result"]["grant"] == grant
             assert client.metadata["grants"] == [grant]
         thread.join(2)
@@ -278,6 +287,39 @@ def test_native_host_returns_a_tab_listing_that_names_no_grant(tmp_path, monkeyp
         process.communicate(timeout=2)
 
 
+@pytest.mark.parametrize("operation", ["grant", "release", "debug-attach", "debug-detach"])
+@pytest.mark.parametrize("owner", [None, "other"])
+def test_native_host_keeps_foreign_controls_away_from_the_browser(tmp_path, operation, owner):
+    process = subprocess.Popen(
+        [sys.executable, "-m", "cu.browser_read", "host"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    grant = {
+        "session": "browser-session", "cu_session": "owner", "tab_id": 1,
+        "window_id": 1, "document_id": "document", "generation": 0,
+        "active": True, "hidden": False, "capabilities": ["read", "interact"],
+    }
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            assert selector.select(2), "native host did not send ready"
+            ready = wire.read_frame(process.stdout)
+            wire.write_frame(process.stdin, {
+                "protocol": wire.PROTOCOL, "version": wire.VERSION,
+                "type": "hello", "grants": [grant],
+            })
+            with wire.BrowserReadClient.connect(ready["socket"]) as client:
+                response = client.control(operation, cu_session=owner)
+                expected = "session-required" if owner is None else "session-mismatch"
+                assert response["error"]["code"] == expected
+                assert client.metadata["grants"] == [grant]
+            assert not selector.select(0), "refused control reached the native browser channel"
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=2)
+
+
 def test_native_host_refuses_a_page_response_that_names_no_grant(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     process = subprocess.Popen(
@@ -300,6 +342,7 @@ def test_native_host_refuses_a_page_response_that_names_no_grant(tmp_path, monke
             "generation": 0,
             "active": True,
             "hidden": False,
+            "cu_session": "fixture-driver",
         }
         wire.write_frame(process.stdin, {**envelope, "type": "hello", "grants": [grant]})
 
@@ -348,6 +391,7 @@ def test_native_host_cancels_a_disconnected_waiter(tmp_path, monkeypatch):
             "generation": 0,
             "active": True,
             "hidden": False,
+            "cu_session": "fixture-driver",
             "capabilities": ["read"],
         }
         wire.write_frame(
@@ -411,6 +455,7 @@ def test_native_host_delivers_a_reload_receipt_before_the_browser_disconnects(
             "generation": 3,
             "active": True,
             "hidden": False,
+            "cu_session": "fixture-driver",
             "capabilities": ["read", "interact"],
         }
         envelope = {"protocol": wire.PROTOCOL, "version": wire.VERSION}

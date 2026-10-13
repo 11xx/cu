@@ -30,7 +30,7 @@ from cu.browser_read import (
     write_frame,
 )
 
-PROTOCOL = {"protocol": "cu-browser-read", "version": 9}
+PROTOCOL = {"protocol": "cu-browser-read", "version": 10}
 
 
 def response(request: dict[str, object], *, response_id: str | None = None) -> dict[str, object]:
@@ -335,6 +335,7 @@ RELOAD_GRANT = {
     "generation": 2,
     "active": True,
     "hidden": False,
+        "cu_session": "fixture-driver",
     "capabilities": ["read", "interact"],
 }
 
@@ -424,6 +425,12 @@ def test_session_controls_bind_or_release_without_page_identity():
         make_control("grant", tab_id=0)
 
 
+@pytest.mark.parametrize("owner", ["", "x" * 129, 7, True])
+def test_session_control_owner_is_a_bounded_identity(owner):
+    with pytest.raises(ProtocolError):
+        make_control("release", cu_session=owner)
+
+
 def test_client_control_tracks_the_grant_the_helper_announces():
     helper = HelperSocket.create()
     grant = {
@@ -434,6 +441,7 @@ def test_client_control_tracks_the_grant_the_helper_announces():
         "generation": 0,
         "active": False,
         "hidden": False,
+        "cu_session": "fixture-driver",
         "capabilities": ["read", "interact"],
     }
     errors: list[BaseException] = []

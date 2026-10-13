@@ -47,6 +47,8 @@ BROWSER_READ_AMBIGUOUS = 55
 BROWSER_READ_REFUSED = 56
 BROWSER_READ_BUDGET = 57
 BROWSER_ACTION_UNCERTAIN = 58
+BROWSER_SESSION_REQUIRED = 59
+BROWSER_SESSION_FOREIGN = 60
 
 #: What a caller should do on each code. Shipped in `cu doctor --json` and
 #: summarized in the bare-`cu` guide, so the contract has exactly one source.
@@ -163,6 +165,13 @@ RESPONSE = {
         "Fix what the refusal names; do not bypass it."
     ),
     BROWSER_READ_BUDGET: "Evidence exceeds its bound. Narrow the query or reduce the limit.",
+    BROWSER_SESSION_REQUIRED: (
+        "Name the CU driving session with CU_SESSION or --session from cu session begin."
+    ),
+    BROWSER_SESSION_FOREIGN: (
+        "Another CU session owns this browser grant. Leave it intact; use your own helper "
+        "or wait for its owner to release it."
+    ),
     NOT_MAPPED: (
         "No known binding for this action in this application. Do not guess a default chord."
     ),

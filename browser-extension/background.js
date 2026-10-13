@@ -10,7 +10,7 @@
   "use strict";
 
   const PROTOCOL = "cu-browser-read";
-  const VERSION = 9;
+  const VERSION = 10;
   const CAPABILITIES = new Set(["read", "interact"]);
   const READ_OPERATIONS = new Set(["observe", "query", "wait", "ax-query", "console", "network"]);
   // Evidence the worker reads through an attached debugger; collectors never see it.
@@ -486,6 +486,7 @@
         "capabilities",
         "cursor",
         "include_titles",
+        "cu_session",
       ]),
     );
     if (message.protocol !== PROTOCOL || message.version !== VERSION || message.type !== "control")
@@ -496,6 +497,14 @@
       if (typeof message.include_titles !== "boolean")
         throw new ValidationError("include_titles must be a boolean");
     }
+    if (message.operation === "tabs" && message.cu_session !== undefined)
+      throw new ValidationError("tabs takes no cu_session");
+    if (message.operation !== "tabs" && message.cu_session === undefined)
+      throw new ValidationError("session control requires cu_session");
+    const cuSession =
+      message.operation === "tabs" || message.cu_session === null
+        ? null
+        : boundedString(message.cu_session, "cu_session", MAX_SESSION_CHARS);
     if (message.operation === "tabs" && message.tab_id !== null)
       throw new ValidationError("tabs lists every tab and takes no tab_id");
     if (!validRequestId(message.id)) throw new ValidationError("control id is invalid");
@@ -513,6 +522,7 @@
     return {
       id: message.id,
       operation: message.operation,
+      cu_session: cuSession,
       tab_id: message.tab_id,
       capabilities: validateCapabilities(message.capabilities),
       cursor: message.cursor,
@@ -623,9 +633,10 @@
     }
     return message;
   }
-  function grantFor(tab, session, info, grantedCapabilities) {
+  function grantFor(tab, session, info, grantedCapabilities, cuSession) {
     return {
       session,
+      cu_session: cuSession,
       tab_id: tab.id,
       window_id: tab.windowId,
       document_id: info.document_id,
@@ -970,7 +981,7 @@
       await updateBadge();
       return { ...status(), reason };
     }
-    async function start(tab, requestedCapabilities = ["read"], cursor = false) {
+    async function start(tab, requestedCapabilities = ["read"], cursor = false, cuSession = null) {
       if (!tab || !Number.isSafeInteger(tab.id) || tab.id < 1)
         return errorResponse(null, "tab-unavailable", "the browser tab could not be identified");
       if (state.grant || state.pendingStart || state.transition)
@@ -988,7 +999,7 @@
         return errorResponse(null, "invalid-ui-message", "the requested capability was refused");
       }
       const session = secureId("session");
-      const attempt = { tabId: tab.id };
+      const attempt = { tabId: tab.id, cu_session: cuSession };
       state.pendingStart = attempt;
       let info;
       try {
@@ -1022,7 +1033,7 @@
       }
       state.pendingStart = null;
       state.session = session;
-      state.grant = grantFor(tab, session, info, grantedCapabilities);
+      state.grant = grantFor(tab, session, info, grantedCapabilities, cuSession);
       await updateBadge();
       if (state.nativeReady) postNative(grantMessage(), state.nativePort);
       else connectNative();
@@ -1040,14 +1051,19 @@
       state.captureEpoch += 1;
     });
 
-    async function startCurrent(tab, requestedCapabilities = ["read"], cursor = false) {
-      if (tab) return start(tab, requestedCapabilities, cursor);
+    async function startCurrent(
+      tab,
+      requestedCapabilities = ["read"],
+      cursor = false,
+      cuSession = null,
+    ) {
+      if (tab) return start(tab, requestedCapabilities, cursor, cuSession);
       try {
         const tabs = await api.tabs.query({
           active: true,
           currentWindow: true,
         });
-        return start(tabs[0], requestedCapabilities, cursor);
+        return start(tabs[0], requestedCapabilities, cursor, cuSession);
       } catch (_) {
         return errorResponse(null, "not-current-tab", "the current tab could not be identified");
       }
@@ -1986,6 +2002,27 @@
           },
           port,
         );
+      if (control.operation !== "tabs") {
+        if (control.cu_session === null) {
+          postNative(
+            errorResponse(control.id, "session-required", "name the owning CU session"),
+            port,
+          );
+          return;
+        }
+        const bound = state.grant || state.pendingStart;
+        if (bound && bound.cu_session !== control.cu_session) {
+          postNative(
+            errorResponse(
+              control.id,
+              "session-mismatch",
+              "another CU session owns the browser grant",
+            ),
+            port,
+          );
+          return;
+        }
+      }
       if (control.operation === "debug-attach") {
         const refused = await attachDebugger(control);
         if (refused) postNative(refused, port);
@@ -2071,10 +2108,11 @@
       }
       const cursor = control.cursor ?? (await storedCursor());
       let started;
-      if (control.tab_id === null) started = await startCurrent(null, control.capabilities, cursor);
+      if (control.tab_id === null)
+        started = await startCurrent(null, control.capabilities, cursor, control.cu_session);
       else {
         const tab = await api.tabs.get(control.tab_id).catch(() => null);
-        started = await start(tab, control.capabilities, cursor);
+        started = await start(tab, control.capabilities, cursor, control.cu_session);
       }
       if (!started.ok) {
         postNative(errorResponse(control.id, started.error.code, started.error.message), port);

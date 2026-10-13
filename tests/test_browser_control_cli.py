@@ -13,8 +13,10 @@ from cu import cli, config, desktop, exits, png, safety, status
 
 @pytest.fixture
 def bridge(monkeypatch):
+    monkeypatch.setenv("CU_SESSION", "fixture-driver")
     grant = {
         "session": "fixture-session",
+        "cu_session": "fixture-driver",
         "tab_id": 1,
         "window_id": 1,
         "document_id": "fixture-document",
@@ -55,6 +57,9 @@ def bridge(monkeypatch):
             return state.wait_result
 
         def control(self, operation, **kwargs):
+            if operation != "tabs":
+                with desktop.lock_path().open("a") as lock, pytest.raises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             state.controls.append((operation, kwargs))
             if operation == "tabs":
                 listed = {"tab_id": 4, "window_id": 1, "index": 0, "active": True}
@@ -92,6 +97,43 @@ def action_args():
     ]
 
 
+def test_foreign_session_cannot_use_a_browser_grant(bridge, monkeypatch):
+    bridge.grant["cu_session"] = "owner"
+    monkeypatch.setenv("CU_SESSION", "other")
+    assert cli.main(action_args()) == exits.BROWSER_SESSION_FOREIGN
+    assert bridge.calls == 0
+
+
+@pytest.mark.parametrize("command", [
+    ["grant"], ["stop"], ["debug", "attach"], ["debug", "detach"],
+])
+def test_browser_lifecycle_requires_a_cu_session(bridge, monkeypatch, command):
+    monkeypatch.delenv("CU_SESSION")
+    assert cli.main(["web", *command, "--json"]) == exits.BROWSER_SESSION_REQUIRED
+    assert bridge.controls == []
+
+
+@pytest.mark.parametrize("command", [
+    ["grant"], ["stop"], ["debug", "attach"], ["debug", "detach"],
+])
+def test_browser_lifecycle_respects_an_exclusive_reservation(bridge, command):
+    status.begin("other", exclusive=True)
+    assert cli.main(["web", *command, "--json"]) == exits.DESKTOP_RESERVED
+    assert bridge.controls == []
+
+
+@pytest.mark.parametrize("command", [
+    ["read"], ["debug", "console"],
+    ["wait", "--selector", "#ready", "--state", "visible",
+     "--document", "fixture-document"],
+    ["capture", "--document", "fixture-document", "--generation", "0"],
+])
+def test_browser_evidence_is_scoped_to_its_owner(bridge, monkeypatch, command):
+    monkeypatch.setenv("CU_SESSION", "other")
+    assert cli.main(["web", *command, "--json"]) == exits.BROWSER_SESSION_FOREIGN
+    assert bridge.requests == []
+
+
 def test_action_holds_desktop_and_does_not_invent_verified_effect(bridge, capsys):
     assert cli.main(action_args()) == 0
     receipt = json.loads(capsys.readouterr().out)
@@ -102,6 +144,7 @@ def test_action_holds_desktop_and_does_not_invent_verified_effect(bridge, capsys
 
 
 def test_web_subcommands_accept_session_and_intent_flags(bridge):
+    bridge.grant["cu_session"] = "fixture-driver"
     assert cli.main([*action_args(), "--session", "fixture-driver", "--why", "check delivery"]) == 0
     assert bridge.calls == 1
 
@@ -460,9 +503,11 @@ def test_grant_binds_through_the_interlocks_and_stop_releases(bridge, capsys):
     interact = ["read", "interact"]
     timeout = wire.DEFAULT_TIMEOUT
     assert bridge.controls == [
-        ("grant", {"tab_id": 1, "capabilities": interact, "cursor": False, "timeout": timeout}),
-        ("grant", {"tab_id": None, "capabilities": ["read"], "cursor": None, "timeout": timeout}),
-        ("release", {"tab_id": None, "timeout": timeout}),
+        ("grant", {"cu_session": "fixture-driver", "tab_id": 1, "capabilities": interact,
+                   "cursor": False, "timeout": timeout}),
+        ("grant", {"cu_session": "fixture-driver", "tab_id": None, "capabilities": ["read"],
+                   "cursor": None, "timeout": timeout}),
+        ("release", {"cu_session": "fixture-driver", "tab_id": None, "timeout": timeout}),
     ]
 
 

@@ -1222,6 +1222,7 @@ function control(operation, overrides = {}) {
     protocol: PROTOCOL,
     version: VERSION,
     type: "control",
+    ...(operation === "tabs" ? {} : { cu_session: overrides.cu_session ?? "fixture-driver" }),
     id: overrides.id || "control-1",
     operation,
     tab_id: overrides.tab_id === undefined ? null : overrides.tab_id,
@@ -1229,6 +1230,43 @@ function control(operation, overrides = {}) {
     ...(overrides.cursor === undefined ? {} : { cursor: overrides.cursor }),
   };
 }
+
+test("foreign lifecycle controls preserve the owning session's grant", async () => {
+  const { api, port } = fakeApi();
+  debuggerFake(api);
+  const controller = createController(api);
+  controller.connectNative();
+  await controller.handleNativeMessage(
+    { ...control("grant", { capabilities: ["read", "interact"] }), cu_session: "owner" },
+    port,
+  );
+  assert.equal(port.messages.at(-1).ok, true);
+  await controller.handleNativeMessage({ ...control("debug-attach"), cu_session: "owner" }, port);
+  assert.equal(port.messages.at(-1).ok, true);
+  const grant = port.messages.at(-1).result.grant;
+  for (const operation of ["grant", "release", "debug-attach", "debug-detach"]) {
+    await controller.handleNativeMessage({ ...control(operation), cu_session: "other" }, port);
+    assert.equal(port.messages.at(-1).error.code, "session-mismatch", operation);
+    assert.deepEqual(controller.status().grant, grant);
+  }
+  await controller.handleNativeMessage({ ...control("debug-detach"), cu_session: "owner" }, port);
+  assert.equal(port.messages.at(-1).ok, true);
+  await controller.handleNativeMessage({ ...control("release"), cu_session: "owner" }, port);
+  assert.equal(port.messages.at(-1).ok, true);
+  assert.equal(controller.status().active, false);
+});
+
+test("unsessioned lifecycle controls cannot acquire or end a grant", async () => {
+  const { api, port, calls } = fakeApi();
+  const controller = createController(api);
+  controller.connectNative();
+  for (const operation of ["grant", "release", "debug-attach", "debug-detach"]) {
+    await controller.handleNativeMessage({ ...control(operation), cu_session: null }, port);
+    assert.equal(port.messages.at(-1).error.code, "session-required");
+  }
+  assert.equal(controller.status().active, false);
+  assert.deepEqual(calls.execute, []);
+});
 
 test("a session control binds a named background tab and announces the grant first", async () => {
   const { api, currentTab, port, calls } = fakeApi();

@@ -32,7 +32,7 @@ from typing import Any, BinaryIO, Self
 from . import png
 
 PROTOCOL = "cu-browser-read"
-VERSION = 9
+VERSION = 10
 MAX_MESSAGE_BYTES = 1 << 20
 MAX_RECV_CHUNK_BYTES = 64 << 10
 MAX_PENDING_REQUESTS = 64
@@ -907,6 +907,7 @@ def validate_control(message: Mapping[str, Any]) -> dict[str, Any]:
             "capabilities",
             "cursor",
             "include_titles",
+            "cu_session",
         },
     )
     _validate_envelope(control, "control")
@@ -925,10 +926,19 @@ def validate_control(message: Mapping[str, Any]) -> dict[str, Any]:
     if operation != "tabs" and "include_titles" in control:
         raise ProtocolError(f"{operation} takes no include_titles")
     if operation == "tabs":
+        if "cu_session" in control:
+            raise ProtocolError("tabs takes no cu_session")
         if result["tab_id"] is not None:
             raise ProtocolError("tabs lists every tab and takes no tab_id")
         result["include_titles"] = _bounded_bool(
             control.get("include_titles", False), "include_titles"
+        )
+    else:
+        if "cu_session" not in control:
+            raise ProtocolError("session control requires cu_session")
+        owner = control["cu_session"]
+        result["cu_session"] = (
+            None if owner is None else _bounded_string(owner, "cu_session", MAX_SESSION_CHARS)
         )
     if operation != "grant":
         if "capabilities" in control or "cursor" in control:
@@ -947,6 +957,7 @@ def make_control(
     capabilities: list[str] | None = None,
     cursor: bool | None = None,
     include_titles: bool | None = None,
+    cu_session: str | None = None,
 ) -> dict[str, Any]:
     """Build a session control after applying the same allowlist used by the host."""
     control: dict[str, Any] = {
@@ -963,6 +974,8 @@ def make_control(
         control["cursor"] = cursor
     if include_titles is not None:
         control["include_titles"] = include_titles
+    if operation != "tabs" or cu_session is not None:
+        control["cu_session"] = cu_session
     return validate_control(control)
 
 
@@ -970,6 +983,7 @@ def _validate_grant(grant: Mapping[str, Any]) -> dict[str, Any]:
     value = _object(grant, "grant")
     allowed = {
         "session",
+        "cu_session",
         "tab_id",
         "window_id",
         "document_id",
@@ -981,10 +995,15 @@ def _validate_grant(grant: Mapping[str, Any]) -> dict[str, Any]:
     }
     _exact_fields(
         value,
-        {"session", "tab_id", "window_id", "document_id", "generation", "active", "hidden"},
+        {"session", "cu_session", "tab_id", "window_id", "document_id",
+         "generation", "active", "hidden"},
         allowed,
     )
     session = _bounded_string(value["session"], "grant session", MAX_SESSION_CHARS)
+    owner = value["cu_session"]
+    cu_session = (
+        None if owner is None else _bounded_string(owner, "grant cu_session", MAX_SESSION_CHARS)
+    )
     tab_id = _bounded_int(value["tab_id"], "grant tab_id", 2**31 - 1, minimum=1)
     window_id = _bounded_int(value["window_id"], "grant window_id", 2**31 - 1, minimum=1)
     document_id = _bounded_string(value["document_id"], "grant document_id", MAX_DOCUMENT_ID_CHARS)
@@ -994,6 +1013,7 @@ def _validate_grant(grant: Mapping[str, Any]) -> dict[str, Any]:
     hidden = _bounded_bool(value["hidden"], "grant hidden")
     return {
         "session": session,
+        "cu_session": cu_session,
         "tab_id": tab_id,
         "window_id": window_id,
         "document_id": document_id,
@@ -1372,6 +1392,7 @@ class BrowserReadClient:
         capabilities: list[str] | None = None,
         cursor: bool | None = None,
         include_titles: bool | None = None,
+        cu_session: str | None = None,
         timeout: float | None = None,
     ) -> dict[str, Any]:
         """Send one session control: bind, release, attach, detach, or list tabs."""
@@ -1381,6 +1402,7 @@ class BrowserReadClient:
             capabilities=capabilities,
             cursor=cursor,
             include_titles=include_titles,
+            cu_session=cu_session,
         )
         wait = self._timeout if timeout is None else timeout
         deadline = _deadline(wait)
@@ -1740,6 +1762,18 @@ class NativeMessagingHost:
             )
         return None
 
+    def _control_refusal(self, request: Mapping[str, Any]) -> dict[str, Any] | None:
+        if request["operation"] == "tabs":
+            return None
+        owner = request["cu_session"]
+        if owner is None:
+            return _error_response(request["id"], "session-required", "name the owning CU session")
+        if any(grant["cu_session"] != owner for grant in self.grants.values()):
+            return _error_response(
+                request["id"], "session-mismatch", "another CU session owns the browser grant"
+            )
+        return None
+
     def _handle_local(self, peer: _Peer, message: Mapping[str, Any]) -> None:
         control = isinstance(message, Mapping) and message.get("type") == "control"
         try:
@@ -1756,7 +1790,7 @@ class NativeMessagingHost:
             return
 
         request_id = request["id"]
-        response = None if control else self._grant_refusal(request)
+        response = self._control_refusal(request) if control else self._grant_refusal(request)
         if response is None and request_id in self.pending:
             response = _error_response(
                 request_id, "duplicate-request-id", "request id is already pending"

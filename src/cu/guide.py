@@ -655,8 +655,13 @@ OPTIONAL FIREFOX CU BROWSER
   host access, scripting, nativeMessaging, and storage, connects its native host,
   and reads nothing until a session binds a tab. `cu web grant` binds the active
   tab, or `--tab ID` even in the background, for reads and interaction
-  (`--read-only` for reads only) under the abort and locked-session interlocks;
-  `cu web stop` releases it, even after an abort. No browser click is involved.
+  (`--read-only` for reads only) under the abort and locked-session interlocks.
+  Grants belong to the named CU_SESSION or --session: only that owner may read,
+  act, capture, wait, release or control the debugger. Unsessioned callers may
+  list hosts and tabs but cannot control a binding. Ownership lasts until
+  revocation, including after session expiry. Grant, stop and debugger attach/detach
+  hold the desktop lock and respect exclusive reservations; stop and debug detach
+  work after an abort. No browser click is involved.
   `cu web tabs` lists tab and window ids, which tab is active in its window and
   which is bound, so `--tab` has an id to name; it needs no grant. `--titles`
   adds each title and URL without query or fragment, as untrusted page text.

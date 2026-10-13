@@ -2856,7 +2856,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _dispatch(args: argparse.Namespace, why: str, session: str | None) -> int:
     # One hold spans every step that touches shared desktop state.
-    injecting = getattr(args, "injects", False)
+    injecting = getattr(args, "injects", False) or (
+        args.command == "web" and args.web_command == "debug"
+        and args.debug_command in {"attach", "detach"}
+    )
     exclusive_begin = (
         args.command == "session" and args.subcommand == "begin" and args.exclusive
     )

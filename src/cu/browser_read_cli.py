@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import browser, config, exits, observe, png, safety
+from . import browser, config, exits, observe, png, safety, status
 from . import browser_read as transport
 from .safety import Refused
 
@@ -86,6 +86,7 @@ def configure(parser: argparse.ArgumentParser) -> None:
     )
     grant.add_argument("--timeout", type=float, default=transport.DEFAULT_TIMEOUT)
     grant.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    grant.set_defaults(injects=True)
 
     stop = commands.add_parser(
         "stop",
@@ -96,6 +97,7 @@ def configure(parser: argparse.ArgumentParser) -> None:
     stop.add_argument("--tab", type=int, help="Bound tab ID; defaults to the current binding")
     stop.add_argument("--timeout", type=float, default=transport.DEFAULT_TIMEOUT)
     stop.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    stop.set_defaults(injects=True)
 
     tabs = commands.add_parser(
         "tabs",
@@ -313,9 +315,23 @@ def _grant(args: argparse.Namespace, client: transport.BrowserReadClient) -> dic
     if len(grants) != 1:
         raise Refused(exits.BROWSER_READ_AMBIGUOUS, "select one granted --tab")
     grant = grants[0]
+    if grant["cu_session"] != _cu_session():
+        raise Refused(
+            exits.BROWSER_SESSION_FOREIGN, "the browser grant belongs to another CU session"
+        )
     if args.document is not None and args.document != grant["document_id"]:
         raise Refused(exits.BROWSER_DOCUMENT_STALE, "the granted document changed")
     return grant
+
+
+def _cu_session() -> str:
+    session = status.current_session()
+    if not session:
+        raise Refused(
+            exits.BROWSER_SESSION_REQUIRED,
+            "browser grants require CU_SESSION or --session from cu session begin",
+        )
+    return session
 
 
 def _identity(grant: dict[str, Any]) -> dict[str, Any]:
@@ -327,7 +343,11 @@ def _check_response(result: dict[str, Any]) -> dict[str, Any]:
         return result
     reason = result["error"]["code"]
     code = (
-        exits.BROWSER_DOCUMENT_STALE
+        exits.BROWSER_SESSION_REQUIRED
+        if reason == "session-required"
+        else exits.BROWSER_SESSION_FOREIGN
+        if reason == "session-mismatch"
+        else exits.BROWSER_DOCUMENT_STALE
         if reason in {"stale-document", "stale-generation", "stale-element"}
         else exits.BROWSER_ACTION_UNCERTAIN
         if reason == "action-uncertain"
@@ -480,6 +500,7 @@ def _bind(args: argparse.Namespace) -> dict[str, Any]:
     with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
         result = client.control(
             "grant",
+            cu_session=_cu_session(),
             tab_id=args.tab,
             capabilities=capabilities,
             cursor=args.cursor,
@@ -501,7 +522,9 @@ def _bind(args: argparse.Namespace) -> dict[str, Any]:
 
 def _release(args: argparse.Namespace) -> dict[str, Any]:
     with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
-        result = client.control("release", tab_id=args.tab, timeout=args.timeout)
+        result = client.control(
+            "release", cu_session=_cu_session(), tab_id=args.tab, timeout=args.timeout
+        )
     _check_response(result)
     revoked = result["result"]["revoked_grant"]
     safety.record(
@@ -529,7 +552,8 @@ def _debug(args: argparse.Namespace) -> dict[str, Any]:
             safety.check_session()
         with transport.BrowserReadClient.connect(_paths(args)[0], args.timeout) as client:
             result = client.control(
-                f"debug-{args.debug_command}", tab_id=args.tab, timeout=args.timeout
+                f"debug-{args.debug_command}", cu_session=_cu_session(),
+                tab_id=args.tab, timeout=args.timeout
             )
         _check_response(result)
         grant = result["result"]["grant"]
