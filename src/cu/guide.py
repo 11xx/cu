@@ -21,6 +21,14 @@ CU does not own task state between calls except frame ids and, if you open one,
 a session id — both live on disk. A caller may keep a bounded task context in
 its own storage, but CU never loads it implicitly. Every command takes --json.
 
+PREFLIGHT THE CALLER'S OBSERVATION CHANNEL
+  Before a pixel-dependent step, confirm the caller can open and inspect the
+  PNG returned by `cu shot`. `cu doctor` checks host prerequisites and
+  `cu profiles` describes capture budgets; neither establishes caller vision.
+  If images are unavailable, choose a compositor fact, a granted browser read,
+  or a resulting file/receipt that can establish the intended postcondition.
+  If no available channel can establish it, stop before sending input.
+
 EXPLICIT PRACTICE AND BENCHMARKS
   cu playground                 Serve a disposable local page; print its URL.
   cu playground --port 8765      Choose a loopback port; Ctrl-C stops serving.
@@ -125,6 +133,9 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   A capture prints a frame id and a path. Read the PNG at that path, along
   with what the image will cost whoever reads it. --if-changed prints the id it
   is reusing and nothing else, because no new image was written.
+  Keep a region only while it establishes the needed context; widen it when it
+  cannot. Capture reuse, image ingestion, and model round trips are separate
+  costs: reusing a frame does not decide whether the caller reads it again.
 
   After reloading a bar or other rendered content, use --after instead of a
   guessed sleep. The watch box is in the reference frame's image pixels and is
@@ -175,6 +186,10 @@ CAPTURE ONLY WHAT YOU NEED TO READ
   preflight, device setup/teardown, delivery, convergence, and bounded operation
   counts. Other work is reported separately. Interpreter startup, the metrics
   line itself, harness transport and model time are excluded.
+  When diagnosing slowness, collect --timings and measure those excluded
+  boundaries separately. Follow docs/benchmark.md for equivalent verified
+  outcomes, failed/interrupted attempts, and explicit measurement coverage;
+  sampled command timings cannot establish whole-task time or savings.
   wait.elapsed_seconds retains its narrower meaning: time after baseline decode.
   Summaries contain frame IDs, dimensions, encoded bytes and the cu-patches-v1
   estimator parameters, not pixels, titles, URLs or typed text. They are not billing.
@@ -287,6 +302,8 @@ WAIT ON COMPOSITOR EVENTS, WATCH PIXELS FOR REPAINTS
 
   `cu wait` handles focus, title, window, and workspace events. Those events do
   not prove rendered pixels have changed; use `cu shot --after` for a repaint.
+  A title event does not prove a loaded page or settled repaint. Use a granted
+  page-state wait/read or inspect fresh page pixels for that postcondition.
 
 EXIT CODES ARE THE CONTRACT
   Read them. They say what to do next, and the right response differs per code.
@@ -590,6 +607,15 @@ CHOOSE THE POSTCONDITION BEFORE INPUT
   inventory cannot establish unchanged page content. Inspect a surprising
   result before repeating an action: a modal or asynchronous operation may
   already be waiting for its next step.
+
+  For a page change, check the intended page state through granted semantics or
+  fresh pixels. For a native save dialog or file chooser, retain the relevant
+  window inventory, including same-class browser windows, then inspect its
+  controls. For a download, verify the intended file or completion receipt and
+  its content; a toast or opened menu establishes only an intermediate state.
+  A no-op or interrupted action uses the same planned postcondition. Preserve
+  the completed-prefix receipt and inspect the uncertain step before choosing
+  what remains to do; navigation requires fresh targets and coordinates.
 
   Before an N-item workflow, inspect one representative item for hover-only
   menus, checkboxes, and group controls. If a bulk control exists, select a
