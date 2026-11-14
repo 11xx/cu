@@ -7,21 +7,25 @@ the contract is asserted directly rather than inferred from the guide printing.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
 from cu import cli, exits, guide
 
+#: The map and every topic: what a reader who follows every route has read.
+EVERYTHING = guide.MAP + guide.full()
 
-def test_a_bare_invocation_prints_the_guide(capsys):
+
+def test_a_bare_invocation_prints_the_map(capsys):
     assert cli.main([]) == exits.OK
-    assert capsys.readouterr().out == guide.GUIDE
+    assert capsys.readouterr().out == guide.MAP
 
 
-def test_flags_without_a_command_are_still_a_guide_request(capsys):
-    # The guide is prose, so --json has nothing to change about it.
+def test_flags_without_a_command_are_still_a_map_request(capsys):
+    # The map is prose, so --json has nothing to change about it.
     assert cli.main(["--json"]) == exits.OK
-    assert capsys.readouterr().out == guide.GUIDE
+    assert capsys.readouterr().out == guide.MAP
 
 
 @pytest.mark.parametrize(
@@ -93,11 +97,11 @@ def test_the_guide_states_the_codes_whose_response_is_not_retry():
     # These three are the ones a caller gets wrong at real cost: 40 must not be
     # retried at all, 25 must not be retyped blindly, and 50 must not be guessed.
     for code in (exits.ABORTED_BY_USER, exits.VERIFY_FAILED, exits.NOT_MAPPED):
-        assert f"\n  {code}  " in guide.GUIDE
+        assert f"\n  {code}  " in EVERYTHING
 
 
-def test_the_guide_points_at_per_command_help():
-    assert "cu <command> --help" in guide.GUIDE
+def test_the_map_points_at_per_command_help():
+    assert "cu <command> --help" in guide.MAP
 
 
 def test_practice_guidance_labels_worker_comparisons_as_experimental():
@@ -112,7 +116,8 @@ def test_practice_guidance_labels_worker_comparisons_as_experimental():
 
 def _section(title):
     """One guide section, up to the next unindented heading."""
-    rest = guide.GUIDE[guide.GUIDE.index(title) + len(title):]
+    topics = guide.full()
+    rest = topics[topics.index(title) + len(title):]
     lines = []
     for line in rest.splitlines():
         if line and not line.startswith(" "):
@@ -232,10 +237,101 @@ def test_every_command_the_tactic_names_exists(command):
     name = command.split()[1]
     subparsers = [a for a in parser._actions if hasattr(a, "choices") and a.choices]
     assert any(name in (a.choices or {}) for a in subparsers)
-    assert command in guide.GUIDE
+    assert command in EVERYTHING
 
 
 def test_guide_bounds_automatic_arrangement_and_keeps_capture_observational():
-    assert "Capture does not arrange a window" in guide.GUIDE
-    assert "Without a session nothing is arranged" in guide.GUIDE
-    assert "--no-maximize" in guide.GUIDE
+    assert "Capture does not arrange a window" in EVERYTHING
+    assert "Without a session nothing is arranged" in EVERYTHING
+    assert "--no-maximize" in EVERYTHING
+
+
+# --- the map and the topics ----------------------------------------------
+
+def _guide(capsys, *argv):
+    assert cli.main(["guide", *argv]) == exits.OK
+    return capsys.readouterr().out
+
+
+def test_the_map_fits_one_reading_and_opens_with_where_the_depth_is():
+    """A reader gets the whole map in one modest read and knows it is whole.
+
+    Rejects a guide so long that a reader cuts it with `head` and never learns
+    what the rest held.
+    """
+    assert len(guide.MAP.splitlines()) <= guide.MAP_MAX_LINES
+    assert len(guide.MAP.encode()) <= guide.MAP_MAX_BYTES
+    opening = "\n".join(guide.MAP.splitlines()[:8])
+    assert "read all of it" in opening
+    assert "`cu guide`" in opening
+    assert "--help" in opening
+
+
+def test_every_topic_prints_within_its_bound(capsys):
+    """One topic is one bounded read; rejects a topic grown into its own manual."""
+    for name in guide.TOPICS:
+        body = _guide(capsys, name)
+        assert body and body.endswith("\n")
+        assert len(body.encode()) <= guide.TOPIC_MAX_BYTES, name
+
+
+def test_the_map_and_the_index_name_every_topic_and_only_topics(capsys):
+    """Rejects a topic no reader can discover, and a route naming no topic."""
+    named = set()
+    for line in guide.MAP.splitlines():
+        if line.strip().startswith("Topics:"):
+            named.update(line.split(":", 1)[1].split())
+    assert named == set(guide.TOPICS)
+    indexed = {
+        line.split()[2] for line in _guide(capsys).splitlines()
+        if line.startswith("  cu guide ") and not line.split()[2].startswith("-")
+    }
+    assert indexed == set(guide.TOPICS)
+
+
+def test_every_cross_reference_names_a_topic():
+    """Rejects a reference left pointing at a renamed or removed topic."""
+    for text in (guide.MAP, guide.full()):
+        for name in re.findall(r"`cu guide ([a-z][a-z-]*)`", text):
+            assert name in guide.TOPICS, name
+
+
+def test_the_whole_guide_holds_every_topic_unaltered(capsys):
+    whole = _guide(capsys, "--all")
+    for topic in guide.TOPICS.values():
+        assert topic.body in whole, topic.name
+
+
+def test_an_unknown_topic_is_a_usage_error_that_lists_the_topics(capsys):
+    """Rejects a silent empty answer, and a dump of the whole guide."""
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["guide", "no-such-topic"])
+    assert exit_info.value.code == exits.USAGE
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "postcondition" in captured.err
+
+
+@pytest.mark.parametrize("argv", [["guide", "exits", "--all"],
+                                  ["guide", "exits", "--search", "abort"],
+                                  ["guide", "--all", "--search", "abort"],
+                                  ["guide", "--why", "reading"]])
+def test_guide_refuses_combined_selections_and_activity_options(argv):
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(argv)
+    assert exit_info.value.code == exits.USAGE
+
+
+def test_search_lists_routes_without_printing_them_whole(capsys):
+    """Finds text in any case, in topics and in command help.
+
+    Rejects a search that misses a command's help, and one that answers with a
+    matching topic printed whole.
+    """
+    found = _guide(capsys, "--search", "ABORT")
+    assert "\ncu guide exits\n" in found
+    assert "\ncu abort --help\n" in found
+    assert "more matching lines" in found
+    assert guide.TOPICS["exits"].body not in found
+    nothing = _guide(capsys, "--search", "zzz-no-such-text-zzz")
+    assert "`cu guide` lists the topics" in nothing

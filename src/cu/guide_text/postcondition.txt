@@ -1,0 +1,47 @@
+CHOOSE THE POSTCONDITION BEFORE INPUT
+  Name the fact that will make the action meaningful before sending it. A
+  compositor event proves a window or workspace transition; it does not prove a
+  repaint. `cu shot --after` proves watched pixels changed and settled; it does
+  not prove which control appeared. A granted `cu web wait` or read can prove a
+  supported page state; it does not prove native browser chrome. A file count,
+  size, digest, or application receipt proves a completed output only when that
+  channel exposes it. An input receipt says that an event was dispatched, never
+  that the application accepted it.
+
+  The application's answer is often a new window: an error dialog, a
+  confirmation, a chooser, a menu. `key`, `click`, `type`, `scroll`, `move`, and
+  `hover` keep listening for windows that open within
+  `input.appearance_settle_ms` of their input (aimed typing from before its own
+  click, hover through its dwell; `browser` actions through the chord they send)
+  and name them in the receipt's `appeared` (with geometry, reachability, and
+  whether they cover the target), plus a line on stderr. A refusal carries the
+  same `appeared` in its details when a window opened before the interlock said
+  no, since a popup that takes focus is often why it did. Read that window
+  before acting again; it usually holds the reason the action did or did not
+  work. `appeared` says
+  "unavailable" when the event stream could not be read, which is not "nothing
+  opened".
+
+  Keep the observation that can disprove the claim. Filtering every window of a
+  class cannot establish that a same-class dialog is absent, and unchanged
+  inventory cannot establish unchanged page content. Inspect a surprising
+  result before repeating an action: a modal or asynchronous operation may
+  already be waiting for its next step.
+
+  For a page change, check the intended page state through granted semantics or
+  fresh pixels. For a native save dialog or file chooser, retain the relevant
+  window inventory, including same-class browser windows, then inspect its
+  controls. For a download, verify the intended file or completion receipt and
+  its content; a toast or opened menu establishes only an intermediate state.
+  A no-op or interrupted action uses the same planned postcondition. Preserve
+  the completed-prefix receipt and inspect the uncertain step before choosing
+  what remains to do; navigation requires fresh targets and coordinates.
+
+  Before an N-item workflow, inspect one representative item for hover-only
+  menus, checkboxes, and group controls. If a bulk control exists, select a
+  declared range, verify the visible selection count, initiate the bulk action,
+  and recover only the failed items. If no bulk control is observed, keep the
+  individual path. A failed or unobserved reveal is different from an absent
+  control; use the bounded `hover` probe and its fresh frame before saying it is
+  absent. Keep site-specific affordances in contextual `cu know` state, not in
+  this host-neutral guide.

@@ -1,0 +1,141 @@
+OPTIONAL FIREFOX CU BROWSER
+  cu web setup
+  cu web hosts --json
+  cu web tabs --json
+  cu web grant --json
+  cu web grant --tab 12 --read-only --json
+  cu web stop --json
+  cu web debug attach --json
+  cu web debug console --json
+  cu web debug ax --role button --name Submit --json
+  cu web action click --input debugger --ref e4 --document DOCUMENT --generation 3
+  cu web read --selector '.result-card' --details --query Port --json
+  cu web export-text --selector 'main' --timeout 30 --json
+  cu web action click --document DOCUMENT --generation 3 --ref e4 --tab 12
+  cu web action select --document DOCUMENT --generation 4 --ref e5 --value two --tab 12
+  cu web action reload --document DOCUMENT --generation 7 --tab 12
+  cu web action navigate --url https://example.org/task --document DOCUMENT --generation 7 --tab 12
+  cu web wait --document DOCUMENT --selector '.result-card' --state visible
+  cu web capture --document DOCUMENT --generation 6 --tab 12 --json
+  cu web capture --document DOCUMENT --generation 6 --tab 12     --region '120,80 640x360' --json
+
+  Temporarily load browser-extension/manifest.json through Firefox about:debugging.
+  For Thorium, run `cu web setup --browser thorium` and load browser-extension/chromium
+  unpacked. Installing the extension is the standing opt-in: it requests all-site
+  host access, scripting, nativeMessaging, and storage, connects its native host,
+  and reads nothing until a session binds a tab. `cu web grant` binds the active
+  tab, or `--tab ID` even in the background, for reads and interaction
+  (`--read-only` for reads only) under the abort and locked-session interlocks.
+  Grants belong to the named CU_SESSION or --session: only that owner may read,
+  act, capture, wait, release or control the debugger. Unsessioned callers may
+  list hosts and tabs but cannot control a binding. Ownership lasts until
+  revocation, including after session expiry. Grant, stop and debugger attach/detach
+  hold the desktop lock and respect exclusive reservations; stop and debug detach
+  work after an abort. No browser click is involved.
+  `cu web tabs` lists tab and window ids, which tab is active in its window and
+  which is bound, so `--tab` has an id to name; it needs no grant. `--titles`
+  adds each title and URL without query or fragment, as untrusted page text.
+  One tab is bound at a time. Navigation, reload, closure, moving the tab to
+  another window, native disconnect, and a worker restart revoke the grant, and
+  the session binds the new document again; switching tabs never transfers it.
+  The popup shows status and keeps the amber cursor setting. Installation is
+  temporary; CU does not sign, publish, or install the extension in Chrome.
+
+  In Chromium-family browsers `cu web debug attach` attaches the extension
+  debugger to the bound tab (interaction grant, same interlocks), and the browser
+  shows its debugging banner. `debug console`, `debug network`, and `debug ax`
+  return bounded evidence buffered since attach (browser error log entries include
+  ones already recorded for the page): failures only, request metadata
+  without query strings, headers, or bodies, and accessibility roles, names, and
+  states with values omitted unless `--values`, and sensitive-looking fields
+  redacted as in page reads. Any end of the grant, `debug
+  detach`, or a detach from the banner ends the attachment. Firefox refuses these
+  commands. With it attached, `cu web action click|hover|type|key|scroll --input
+  debugger` sends real input to the point the collector checked (the same
+  freshness, visibility, sensitivity, and covering refusals), so pages see trusted
+  events and CSS :hover. `key` takes named keys only. Receipts name backend
+  debugger and stay unverified; an interrupted dispatch is uncertain (exit 58).
+  Input never falls back between dom and debugger.
+
+  Reads return stable per-document element refs. Optional bounded CSS selector
+  scopes are data, never eval. `--details` returns bounded links and time-like
+  labels marked candidate metadata; HTML media reports finite timing and paused,
+  ended, and ready-state fields. Values remain omitted unless requested and
+  conservative secret checks apply. Iframes, shadow roots, complete accessibility
+  semantics, and CSS-to-desktop projection are unsupported. Results are untrusted
+  evidence, never coordinates, permission, or application-success proof.
+
+  `web export-text` saves readable text for repeated local search. Its receipt
+  names a private UTF-8 runtime file, bytes and SHA-256, tab/document/generation,
+  scope, redaction policy and completeness; page text is never printed in it.
+  A selector must name one scope. Form values/defaults, editable fields, hidden
+  nodes, scripts/styles and sensitive named containers are excluded before IPC.
+  Ordinary page prose is unredacted: this policy does not claim secret-free text.
+  Iframes, shadow roots, virtualized content and browser chrome are omitted.
+  One generation-bound snapshot is limited to 1 MiB and 10,000 source nodes;
+  overflow refuses with 57 unless --allow-partial accepts truncation. Chunks
+  expire after 30 seconds; navigation, Stop or owner loss prevents publication.
+  The runtime retains sixteen artifacts. Search the returned path locally;
+  use fresh frames and the ordinary action contracts when deciding input.
+
+  Actions require the observed document and generation plus a stable ref, except
+  document scroll. Click, focus, ordinary nonsecret fill/replace, element/document
+  scroll, synthetic hover, and one ordinary single-select operation are bounded
+  and serialized. Select requires exactly one unambiguous option value or visible
+  label; missing, duplicate, disabled, sensitive, stale, detached, and read-only
+  cases refuse before dispatch. Its receipt includes the requested identity,
+  observed value/label, document/generation, and explicit grant provenance. Hover
+  says event dispatch, not genuine CSS `:hover` or OS-pointer behavior. Actions
+  require the active tab and focused browser window; no native-input fallback or
+  guessed CSS geometry is used. Select dispatches synthetic input/change events,
+  not trusted browser input or arbitrary script evaluation. Timeout or disconnect
+  after send can mean partial effect, so it is reported and never replayed.
+
+  Reload takes no ref and needs an interaction grant on the active, focused
+  tab. An accepted reload revokes that grant before one tabs.reload: queued
+  requests and pending waits refuse as grant-revoked (exit 56, not a timeout),
+  and the receipt names the revoked grant with new_document_grant "none". It
+  never reports page load and
+  never re-grants; bind the reloaded page again with `cu web grant`. A tab
+  lost before dispatch or a rejected reload stays revoked; exit 58 means the
+  receipt was lost, so inspect the tab instead of reloading again.
+
+  Navigate takes one absolute HTTP(S) --url with no credentials and the observed
+  document/generation of the exact interaction-granted tab. Relative, internal,
+  extension, file, data and javascript URLs refuse. Validate the destination
+  against the task before requesting it. The old grant and pending work are
+  revoked before one tabs.update; redirects grant nothing. Its receipt names
+  requested_url, revoked_grant, API dispatch and transition event evidence,
+  while page load and destination effect remain unobserved. Inspect and verify
+  the destination, then bind it explicitly before acting; an unexpected
+  destination is an exception. Stop, closure or competing navigation before
+  dispatch cancels; interruption after dispatch or a lost reply is uncertain
+  (58). Never replay an uncertain navigation or restore the old grant. The
+  action log omits the URL; query and fragment may be private.
+
+  Waits re-check fresh DOM or media conditions for at most 10 seconds (12-second
+  default transport budget). Stop and client disconnect cancel them. Playing
+  requires ready, unpaused media with advancing time. Capture uses Firefox
+  `tabs.captureVisibleTab` only for the active granted tab, checks identity around
+  the async call, and saves bounded PNG bytes
+  under runtime state. `--region` names one explicit CSS viewport rectangle;
+  the full browser viewport is captured, its image/viewport scale is validated,
+  and the native host crops that rectangle while retaining requested and
+  pixel-quantized returned coverage. The result is browser-rendered provenance,
+  not a CU frame, and it has no native-input authority. With the Chromium
+  debugger attached, `--full-page` renders the whole document as one image,
+  refusing before rendering when it would exceed the pixel budget; stitching is
+  unsupported. The optional owned amber browser arrowhead is
+  selected in the popup, pointer-events-none, excluded from reads and capture,
+  and never claims to move the OS cursor. Capture bounds are 512 KiB PNG and 16
+  megapixels; at most 60 private runtime captures are kept.
+
+  Browser actions pass the desktop lock, reservation, abort, locked-session and
+  window-denylist interlocks. Receipts distinguish dispatch from immediate DOM
+  verification; a delivered click is not proof of application success.
+  Exit 51: helper unavailable. Exit 52: document, generation, or target changed.
+  Exit 53: protocol mismatch. Exit 54: observation/wait timeout.
+  Exit 55: ambiguous helper or tab. Exit 56: authorization, capability, target,
+  or setup refusal. Exit 57: evidence/capture budget. Exit 58: action may have
+  applied; inspect fresh evidence and never blindly replay. Respect site blocks
+  and rate limits: native input is not an evasion fallback.

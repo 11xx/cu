@@ -36,11 +36,15 @@ An explicitly granted Firefox page may own a non-interactive browser-local indic
 
 ## Working here
 
-- **The CLI is the only workflow surface.** Bare `cu` teaches the loop and the
-  judgment around it (`src/cu/guide.py`); `--help` carries each command's
-  contract. There is no external skill or `AGENTS.md` fragment to fall back on,
-  which means a behavior change updates the guide in the same commit — nothing
-  else will catch the drift.
+- **The CLI is the only workflow surface.** Bare `cu` prints a map of at most
+  80 lines and 6,144 bytes: the loop and the judgment around it. `cu guide
+  <topic>` carries the depth, one topic of at most 16,384 bytes at a time, and
+  `--help` carries each command's contract. The text is in
+  `src/cu/guide_text/`; tests hold the bounds, and a topic that outgrows its
+  bound is split, never trimmed. There is no external skill or `AGENTS.md`
+  fragment to fall back on, which means a behavior change updates the topic or
+  `--help` that owns the rule in the same commit, and the map only when a route
+  or a rule every reader needs changes — nothing else will catch the drift.
 - **Every claim in the guide must be traceable to code.** A guide that promises
   more than the tool does is worse than none, because it is believed. Check the
   claim against the source before writing it, and cut what cannot be traced

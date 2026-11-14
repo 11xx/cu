@@ -1,0 +1,49 @@
+EXIT CODES ARE THE CONTRACT
+  Read them. They say what to do next, and the right response differs per code.
+  `cu doctor --json` carries the full table, so it never has to be remembered.
+
+   0  Fine                              Continue
+   2  Malformed command                 Fix the arguments
+  10  Environment unusable              Run `cu doctor`; retrying will not help
+  20  Frame no longer describes screen  Capture a new one, retry
+  21  Focus or target changed           Re-observe, then decide again
+  22  Named target is gone              Re-observe or check the stored name
+  23  Region crosses/is off an output   Aim wholly within one output
+  24  Awaited event never arrived       Re-observe; it may have happened first
+  25  Verification did not match state  Read actual state; do NOT blindly retry
+  26  Same window, different content    Re-observe; the plan was about something else
+  27  Hidden or obstructed capture      Arrange target explicitly, or capture an output
+  28  Batch read-back unavailable       Inspect before continuing; never replay the prefix
+  29  Encoded image exceeds budget      Capture a smaller region or lower-resolution profile
+  30  Denylist, lock, unreviewed recipe Do not retry; tell the user
+  31  Intended recipient is ambiguous   Re-observe and arrange the target or choose another point
+  32  Native movement did not converge  Inspect the pointer/device before trying again
+  33  Native route leaves safe frame    Capture wider or place the pointer inside first
+  34  Point is outside active outputs   Choose a reachable point or change the layout explicitly
+  35  Presentation was refused          Inspect actual state before trying again
+  36  Presentation was partial          Inspect actual state; do NOT replay blindly
+  37  Window changed after presentation Restoration refused; current state was preserved
+  38  Presentation identity is stale     Re-observe and present again
+  39  Presentation token is invalid     Re-observe and present again
+  40  The user aborted                  Stop. Do not retry. Do not clear it.
+  41  The user is moving the mouse      Yield; wait before retrying
+  42  Another agent is driving          Wait for it to finish, then retry
+  43  An agent tried to change abort    Ask the user to set or clear it
+  44  Another agent reserved desktop    Wait for its session to end, then retry
+  45  Reservation state unavailable     Stop; repair the registry before injecting
+  50  No known binding for that action  Do not guess a chord; say so
+  61  Note confirmation lacks a run     Observe again in another named CU session
+
+  Code 40 is not a transient failure. It means the person at the desk pressed
+  their abort key. Stop, and tell them. Retrying past it or trying to clear the
+  flag defeats the only interlock they hold and you cannot.
+
+THE USER'S ABORT
+  cu abort                            Report whether the abort is set.
+  cu abort --set                      Set it and stop every agent at its next action.
+  cu abort --clear                    Release it.
+
+  The abort flag is host-wide and belongs to the user. An agent-marked caller
+  (`CU_SESSION` or `--session`) gets exit 43 for either mutation and asks the
+  user instead. This prevents normal agent paths from changing it by accident;
+  it cannot stop a determined agent from bypassing the command.

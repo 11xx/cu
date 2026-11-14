@@ -52,7 +52,7 @@ BROWSER_SESSION_FOREIGN = 60
 NOTE_CONFIRMATION_REFUSED = 61
 
 #: What a caller should do on each code. Shipped in `cu doctor --json` and
-#: summarized in the bare-`cu` guide, so the contract has exactly one source.
+#: tabled in `cu guide exits`, so the contract has exactly one source.
 RESPONSE = {
     OK: "Proceed.",
     ERROR: "Unexpected failure. Read stderr; do not blindly retry.",

@@ -1,0 +1,15 @@
+THE INTERLOCKS, AND WHAT TO TELL THE USER
+  `cu` refuses to type into password managers, lock screens, and windows whose
+  title reads like a credential prompt. The list is a default the user's config
+  can change. If it refuses, do not work around it.
+
+  Recipes do not execute until a human has read and approved them. An unapproved
+  recipe may be replayed only with --dry-run, which injects nothing. Key repeats
+  survive promotion; typing with a mismatched read-back is not promoted. Show the
+  steps and ask; never approve on the user's behalf. A pointer recipe also
+  refuses when its window was materially resized — re-record and review it,
+  because a stored fraction cannot reveal how a control followed a resize.
+
+  `cu sandbox create` makes a headless output for working where nobody can see.
+  That should be a deliberate choice you mention, not a default, and you should
+  remove it when you are done.

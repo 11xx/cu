@@ -128,7 +128,9 @@ MAX_HOVER_WAIT = 10.0
 
 # These commands do not make the desktop look agent-driven. Their parsers also
 # refuse the activity-only options whose values would otherwise be ignored.
-NON_PUBLISHING_COMMANDS = frozenset({"status", "session", "abort", "export", "playground"})
+NON_PUBLISHING_COMMANDS = frozenset(
+    {"status", "session", "abort", "export", "playground", "guide"}
+)
 
 
 def _num(value: float) -> str:
@@ -2265,7 +2267,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog="cu",
         description="Computer use for Hyprland.",
-        epilog="Run `cu` with no arguments for the workflow guide.",
+        epilog=(
+            "Run `cu` with no arguments for the map of what it does, "
+            "and `cu guide` for the topics behind it."
+        ),
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON on stdout")
     parser.add_argument("--why", metavar="TEXT", default="", help="What this is for")
@@ -2375,6 +2380,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     lab.add_argument("--port", type=int, default=0,
                      help="Loopback port; 0 selects a free port (default)")
+    topics = add(
+        "guide",
+        "The guide's topic index, or one topic; bare `cu` prints the map that names them",
+        None,
+    )
+    topics.add_argument("topic", nargs="?", choices=list(guide.TOPICS), metavar="TOPIC",
+                        help="The topic to print: " + ", ".join(guide.TOPICS))
+    selection = topics.add_mutually_exclusive_group()
+    selection.add_argument("--all", action="store_true",
+                           help="Every topic at once; long, so ask only when one "
+                                "topic at a time will not do")
+    selection.add_argument("--search", metavar="TEXT",
+                           help="List the topics and command helps that mention TEXT, "
+                                "literally and ignoring case; write --search=TEXT when "
+                                "TEXT starts with a dash")
     add("doctor", "Verify every environment precondition", cmd_doctor)
     add("profiles", "What a capture costs each configured consumer", cmd_profiles)
     add("observe", "Monitors, windows, focus, cursor", cmd_observe)
@@ -2839,6 +2859,12 @@ def main(argv: list[str] | None = None) -> int:
         # this returns before anything is published and before dispatch, which
         # has no command to dispatch to.
         print(guide.render(), end="")
+        return exits.OK
+    if args.command == "guide":
+        # Reading the guide touches neither the desktop nor any stored state.
+        if args.topic is not None and (args.all or args.search is not None):
+            parser.error("cu guide takes a topic, --all or --search, not two of them")
+        print(guide.answer(parser, args), end="")
         return exits.OK
     if args.command in NON_PUBLISHING_COMMANDS and getattr(args, "why", ""):
         parser.error(f"cu {args.command} does not accept --why")

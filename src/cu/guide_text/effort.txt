@@ -1,0 +1,19 @@
+HOW HARD TO THINK
+  Reasoning effort and capture size are separate costs. Lower effort shortens
+  the pause between receiving a frame and choosing the next action; it does not
+  make the screenshot itself faster. Image size is the other knob, and --for
+  sets it.
+
+  Medium effort is the default. Low is for a known interface with one obvious
+  target, a reversible action, evidence from `cu observe` rather than pixels,
+  an approved recipe, and verification straight after. Higher effort is for
+  genuinely hard visual diagnosis — never as a substitute for asking the user
+  before submitting, deleting, paying, or touching credentials.
+
+  Escalate out of low on a signal rather than a feeling: a frame that surprises
+  you, a landmark that resolved `widened` or `stale`, a modal that appeared
+  unasked, an action that failed for a reason you cannot name, several controls
+  that plausibly match, or a next step that is hard to reverse.
+
+  The cheapest turn is no model turn. An approved `cu recipe replay` keeps every
+  runtime interlock without spending a visual decision at all.

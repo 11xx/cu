@@ -1,0 +1,127 @@
+CAPTURE ONLY WHAT YOU NEED TO READ
+  cu shot --window active        The usual first call.
+  cu shot --output OUTPUT-A      A whole monitor.
+  cu shot --region '100,100 400x200'
+  cu shot --output OUTPUT-A --region '0,0 900x26'
+  cu shot --output OUTPUT-A --target-window SELECTOR
+                                 Bind later aimed input to one exact window.
+  cu shot --if-changed           Reuse the last frame when the pixels match.
+  cu shot --timings --json       Cost/timing report on stderr; descriptor on stdout.
+  cu shot --after f3 --watch '0,0 200x26'
+                                 Recapture after those pixels change and settle.
+
+  A window or landmark capture refuses with 27 if the target is off-workspace,
+  hidden, or overlaps another visible window or a top/overlay layer. Focus
+  history cannot prove stacking, so even a possibly-behind window is ambiguous,
+  except where the compositor's stacking rules decide it: a floating window (a
+  dialog, a chooser) over tiled windows on its workspace, or over a maximized
+  one while the compositor allows it over fullscreen, is captured. Two
+  overlapping floating windows still refuse.
+  Capture never focuses or switches workspaces. Explicitly arrange the target,
+  or use --output/--region for pixels that assert no particular window identity.
+  An output or region can carry an explicit recipient assertion with
+  --target-window SELECTOR. The selector resolves to one address at capture
+  time while the frame keeps `window: null`, so an obstructed dialog can remain
+  observable. A later aimed move, click, scroll, or type refuses if another
+  window, a top or overlay layer, or ambiguous overlap covers the point. Omit the
+  option when the capture is observation only; its descriptor and action
+  receipt say that no recipient was asserted.
+
+  A region is desktop-absolute by itself. With --output, its x,y are relative
+  to that output; the returned logical_rect is always desktop-absolute.
+  `cu observe` reports each window's outer-bounds extent separately from active
+  output reachability. Reachability includes per-output scale/intersections,
+  reachable and unreachable area, and bounded interior gaps; a desktop
+  bounding rectangle includes monitor gaps, so a point in one is not reachable.
+  The extent record reports clipping and edge excess without turning the outer
+  box into a reachability claim. Window-capture exit 27 exposes bounded other-
+  window/layer details in JSON and text, including intersection, containment,
+  and transient ownership when the compositor supplies it; unsupported facts
+  stay explicitly unsupported.
+
+  A JSON refusal keeps its exit code, response and message alongside the
+  bounded diagnostic. Text refusals render the same entries and truncation
+  counts. Geometry does not establish stacking, parenthood, layer event
+  routing, or input authority.
+
+  A capture prints a frame id and a path. Read the PNG at that path, along
+  with what the image will cost whoever reads it. --if-changed prints the id it
+  is reusing and nothing else, because no new image was written.
+  Keep a region only while it establishes the needed context; widen it when it
+  cannot. Capture reuse, image ingestion, and model round trips are separate
+  costs: reusing a frame does not decide whether the caller reads it again.
+
+  After reloading a bar or other rendered content, use --after instead of a
+  guessed sleep. The watch box is in the reference frame's image pixels and is
+  required so an unrelated animation or ticking clock cannot satisfy the wait.
+  The returned frame is the settled probe itself, with the elapsed time and
+  probe count in its descriptor. Geometry and visibility are checked around
+  every probe; moved, closed or hidden targets cannot inherit the old label.
+  A wait costs captures; a tighter watch box is
+  cheaper to compare. PNG decoding reconstructs pixels in native code; the
+  entire image is decoded even when the watched box is small. Supported inputs
+  are 8-bit non-interlaced grayscale, RGB, grayscale-alpha and RGBA PNGs, up to
+  64 megapixels, with validated chunk CRCs and scanlines.
+
+  Before paying for another capture, ask the frame already on disk:
+
+  cu pixel --frame f3 --at 412,300       Exact r,g,b,a and #RRGGBBAA.
+  cu pixel --frame f3 --at 412,300 --radius 2
+                                          Median colour in the local box.
+  cu magnify --frame f3 --scale 3         Nearest-neighbour derived frame.
+  cu export --frame f3 --json             Versioned evidence envelope, read-only.
+
+  `pixel` reads image coordinates without producing an image. Its default is
+  one exact pixel; --radius is an explicit hedge against antialiasing.
+  `magnify` writes a new frame with more image pixels but the original capture
+  time, monitor geometry, and logical rectangle. It makes small text readable without pretending
+  the desktop was captured again, and reports the derived image's token cost.
+  `export` validates a stored frame's identity, dimensions, coordinate spaces,
+  digest, and bounded byte size, reports exact coverage and runtime-byte
+  availability, and does not take the desktop lock. `--compare` requires matching
+  source identity and coverage, then scores decoded-pixel equality while naming
+  encoded-byte hash equality separately. `--retain PATH` copies validated bytes
+  once to an explicitly new path, only after compare validation. Missing runtime
+  bytes are unavailable, not proof of a collection time. An export is evidence
+  and never grants action authority.
+
+  cu profiles                    What a capture costs each configured consumer.
+
+  Image size is one of the two things you control that changes cost and
+  latency, and consumers do not price it alike — they bill in patches, and the
+  patch is not the same size everywhere. --for names the consumer, and a new
+  one is a stanza under [capture.profiles] rather than a change to cu. Encoded
+  images beyond that profile's max_bytes refuse with 29, including magnification.
+
+  `shot --timings`, `move --timings`, and `hover --timings` emit one `cu metrics:`
+  JSON report on stderr after dispatch, including timeout/refusal. Capture
+  timing includes baseline decoding, acquisition, probe decoding, crop/compare,
+  intentional waits, frame-store and stdout publication. Native timing includes
+  preflight, device setup/teardown, delivery, convergence, and bounded operation
+  counts. Other work is reported separately. Interpreter startup, the metrics
+  line itself, harness transport and model time are excluded.
+  When diagnosing slowness, collect --timings and measure those excluded
+  boundaries separately. Follow docs/benchmark.md for equivalent verified
+  outcomes, failed/interrupted attempts, and explicit measurement coverage;
+  sampled command timings cannot establish whole-task time or savings.
+  wait.elapsed_seconds retains its narrower meaning: time after baseline decode.
+  Summaries contain frame IDs, dimensions, encoded bytes and the cu-patches-v1
+  estimator parameters, not pixels, titles, URLs or typed text. They are not billing.
+  No telemetry is persisted. The reference is decoded once per wait invocation.
+  Capture-tool calls have a 10-second timeout; a hung tool refuses with 10.
+  A sleeping physical output may stop producing frames even while doctor and
+  observe succeed. Check DPMS state; waking a display or choosing a headless
+  sandbox is explicit, never a capture fallback.
+  Pixel-wait timing arguments must be finite; the quiet interval is not shortened.
+  Each command receipt, action log entry, fresh capture, and opt-in timing report
+  carries a generated invocation_id. An explicit `--session` wins over
+  `CU_SESSION`; optional `CU_HARNESS` and `CU_HARNESS_SESSION` values are copied
+  as opaque join keys. Batch children carry the parent invocation_id and their
+  one-based batch_step. No identifier is inferred from process ancestry.
+
+WHEN A CAPTURE SURPRISES YOU, WIDEN
+  A narrow crop aimed at the wrong place returns a perfectly sharp image of
+  something irrelevant, and nothing in the picture says so. Wide captures fail
+  loudly; narrow ones fail quietly. On the first surprise go to --window, then
+  --output, rather than re-aiming repeatedly — two aimed captures that disagree
+  with expectation cost more than one full-output capture.

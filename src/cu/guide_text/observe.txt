@@ -1,0 +1,24 @@
+PREFLIGHT THE CALLER'S OBSERVATION CHANNEL
+  Before a pixel-dependent step, confirm the caller can open and inspect the
+  PNG returned by `cu shot`. `cu doctor` checks host prerequisites and
+  `cu profiles` describes capture budgets; neither establishes caller vision.
+  If images are unavailable, choose a compositor fact, a granted browser read,
+  or a resulting file/receipt that can establish the intended postcondition.
+  If no available channel can establish it, stop before sending input.
+
+OBSERVE BEFORE YOU LOOK
+  cu observe --json              Monitors, windows, layer surfaces, geometry, focus, cursor.
+
+  The compositor already knows which window is focused and where it sits, so
+  this answers most of what a screenshot gets asked — which window is focused,
+  whether the dialog opened, where the terminal is — exactly, and for a few
+  hundred tokens. A bar is a layer surface, not a window, and `observe` reports
+  it too. A click that lands on one reports that its geometry covers the point,
+  not that it received the click: layer input regions may pass events through.
+  A screenshot is for reading *content*, not for locating windows.
+
+  `primary_output` names the output computer use works on: the enabled output
+  the compositor numbered first, which does not follow the pointer or focus.
+  Launch and present task windows there (`cu doctor` reports it too), and keep
+  them there: moving a window to another output is not something presentation
+  can do.

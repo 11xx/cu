@@ -39,7 +39,8 @@ same command.
 ## Driving the desktop
 
 ```sh
-cu                                   # the workflow guide
+cu                                   # a one-screen map of the loop and the rules
+cu guide exits                       # one topic of the guide in depth
 cu observe                           # monitors, windows, focus, cursor
 cu shot                              # capture the focused window; prints a frame id
 cu click --frame f3 --at 412,300     # aim with coordinates read from that frame
@@ -91,8 +92,8 @@ it.
 
 ## More
 
-Run `cu` with no arguments for the workflow guide and `cu <command> --help` for
-each command's reference. [docs/design.md](docs/design.md) covers the design
+Run `cu` with no arguments for the map, `cu guide <topic>` for one subject in
+depth, and `cu <command> --help` for each command's reference. [docs/design.md](docs/design.md) covers the design
 and [docs/environment.md](docs/environment.md) the compositor behaviour it
 depends on.
 

@@ -1,0 +1,45 @@
+SAY WHAT YOU ARE DOING
+  export CU_SESSION=$(cu session begin --why 'booking a flight')
+  cu click --frame f3 --at 412,300 --why 'accepting the fare'
+  cu session end
+
+  The user's status bar reads this, and it is how they decide whether to
+  interrupt you or leave you alone. A session's --why is its standing purpose;
+  an acting command's --why is one short phrase about that action's intent, not
+  a restatement of the command: "accepting the fare", not "click at 412,300".
+  status, session, and abort take no --why: they report or operate cu itself
+  rather than doing something to the desktop, so there is no intent to show.
+  Open a session for anything spanning more than a couple of commands —
+  without one the indicator clears while you are thinking, which reads to the
+  user as "it finished". Ending a session restores each browser it maximized
+  on focus, only while that window is unchanged; the result lists every
+  restore, and a refused one leaves the window as it is.
+
+  `session begin` prints an id, and every command inside the session should say
+  it belongs there: through CU_SESSION as above, or --session ID if you cannot
+  set an environment variable between commands. It is never inferred, because
+  you may not be the only agent on this desktop and guessing would file your
+  actions under someone else's intent. An unnamed command still runs, filed as
+  its own loose entry — except under a reservation, where an unnamed injecting
+  command is refused with exit 44.
+
+YOU MAY NOT BE ALONE HERE
+  The desktop is one pointer, one keyboard focus, and one clipboard. `cu`
+  serializes the commands that touch them, so only one agent injects at a time
+  and the rest wait briefly. Past that wait you get exit 42 naming who holds
+  it: that is another agent working, not a fault. Wait and retry.
+
+  For a stretch of work that must not be changed between commands, start it
+  with `cu session begin --exclusive --why 'purpose'`. Until that session ends,
+  an injecting command must name its id through CU_SESSION or --session;
+  another agent gets retryable exit 44 naming the reservation. A dead watched
+  --pid or the normal session expiry also releases it. Ordinary sessions do
+  not reserve anything.
+
+  Reading is never serialized — observe, shot, pixel, magnify, wait, status,
+  and doctor answer while someone else is driving, which is how you find out
+  what is going on.
+  `cu status` lists every agent currently driving, not just you.
+  A status bar listens with `cu status --follow --json`: it receives one compact
+  JSON object immediately and then only when that object changes. The feed
+  checks the derived state every 250 ms, so that is its worst-case staleness.

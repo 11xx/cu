@@ -1,0 +1,99 @@
+ACT THROUGH THE FRAME YOU READ
+  cu focus zen
+  cu present zen --why 'make the target readable'
+  cu present zen --output OUTPUT-A --why 'move the target to this output'
+  cu restore TOKEN --why 'return the target after reading it'
+  cu warp --frame f3 --at 412,300
+  cu move --frame f3 --at 412,300 --duration 0.25 --hz 60
+  cu move --frame f3 --at 412,300 --timings --json
+  cu hover --frame f3 --at 412,300 --dwell 0.2 --watch full
+  cu click --frame f3 --at 412,300
+  cu scroll --frame f3 --at 412,300 --dy -3
+
+  Coordinates are image pixels of a specific frame, always paired with its id.
+  Never compute a screen coordinate yourself. `cu` owns every transform between
+  image pixels, the compositor's logical space, and physical pixels — that
+  arithmetic is the largest single source of confidently-wrong clicks, and it
+  is already done for you.
+
+  Keyboard commands require a focused window and recheck its live denylist
+  state before sending keys. Aimed pointer events recheck frame geometry,
+  monitor scale, recipient and covering layers after device settlement; aimed
+  typing repeats that recipient check before each chord. Safety timing and
+  drift limits must be finite and nonnegative.
+
+  `focus` redirects keyboard actions without moving the pointer. `warp` places
+  the compositor pointer exactly; it emits no native movement. `move` sends
+  bounded native relative samples over a finite duration (0.08 s by default),
+  eased from rest into the endpoint and sampled at the refresh rate of the
+  output it is on unless --hz says otherwise, with feedback toward the endpoint
+  and no hidden final warp. Its complete sampled route is checked
+  before injection, and live safety is rechecked at each injection boundary;
+  the declared timeout includes that preflight. Each submitted event gets a
+  bounded delivery-settle read before another correction. Use --duration, --hz,
+  and --timeout to state the finite motion bound. `--timings` adds native
+  preflight, device, delivery, convergence, and operation-count evidence on
+  stderr. `scroll` may aim through a frame first, or omit --frame and --at to
+  send wheel events where the pointer already sits.
+
+  `hover` composes one native entry with a finite stationary dwell and a fresh
+  observation. Its receipt separates placement, native delivery, and application
+  effect; effect remains unknown until a caller observes it. Add --watch to wait
+  for a watched image box to change and settle; that reports pixel evidence only.
+  A dwell-only result, or a changed-pixel result, never claims that the
+  application revealed a particular control. Read the returned frame, then aim
+  the first click or wheel through that frame.
+  Native movement yields with 41 for unexplained movement between settled
+  samples. Pending-event readback allows acceleration overshoot and bounded
+  rounding relative to the submitted delta; it cannot identify a coincident
+  human movement consistent with that event. An event too small to show is
+  followed by a larger one; once a bounded amount of submitted travel has left
+  the cursor unmoved, movement stops with 32. A watched hover
+  rechecks abort, focus, and pointer ownership and is bounded to ten seconds;
+  it yields instead of completing after an interruption.
+
+  Native pointer, keyboard, focus, and presentation commands take --dry-run:
+  each interlock runs and the log is written without changing the desktop.
+
+  `focus` is the explicit operation that can bring a named window's workspace
+  into view. Capture does not arrange a window. Focusing an installed browser
+  inside a session also maximizes it, since a task inside a browser works in
+  one window: the receipt's `presentation` names the outcome, ending the
+  session restores the window while it is unchanged, and `--no-maximize` or
+  `presentation.maximize_on_focus = "never"` leaves the arrangement alone.
+  Without a session nothing is arranged, because nothing would restore it.
+  Every other arrangement is a separate explicit request.
+  `present WINDOW` is the separate, explicit arrangement request: it requires
+  a visible window, uses its active output unless `--output NAME` selects
+  another active output, makes a tiled target floating when needed, and moves
+  its rectangle to the selected output's center. A floating window larger than
+  the output (such as a chooser that opened partly offscreen) is first shrunk
+  to fit inside a small margin, so all of it is reachable; nothing is ever
+  enlarged. `--maximize` instead puts the window in the compositor's maximized
+  state on its own output, which is the working state for a browser or any
+  single application a task is inside; an already maximized window, or another
+  output, refuses. Each compositor step is read back, and the
+  result carries the actual before and after state plus an opaque runtime token.
+  A window the compositor leaves on another output than the one requested
+  refuses as partial (36), with its actual state attached.
+  `restore TOKEN` changes the window only while its identity and presented
+  geometry, floating, workspace, output, and visibility state still match the
+  token. A mismatch invalidates the token and refuses without overwriting the
+  current arrangement; a compositor refusal or partial read-back is an error
+  with the actual state attached. The token is volatile and is not application
+  knowledge. These presentation claims describe the implemented Hyprland seam,
+  not universal compositor support.
+
+  A frame is bound to what it depicted, not only to where. A window that keeps
+  its place while its content changes — a tab that navigated, a view that was
+  replaced — refuses with 26 rather than clicking the old picture's coordinate
+  on the new page. Capture again and decide again; the plan itself may no
+  longer apply.
+
+WAIT ON COMPOSITOR EVENTS, WATCH PIXELS FOR REPAINTS
+  cu wait window-open --class zen --timeout 20
+
+  `cu wait` handles focus, title, window, and workspace events. Those events do
+  not prove rendered pixels have changed; use `cu shot --after` for a repaint.
+  A title event does not prove a loaded page or settled repaint. Use a granted
+  page-state wait/read or inspect fresh page pixels for that postcondition.

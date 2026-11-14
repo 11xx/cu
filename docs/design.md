@@ -21,9 +21,10 @@ device lifecycle, capture with a token budget, structured observation, and the
 safety interlocks. No daemon. Subcommands, JSON on stdout, stable exit codes,
 never interactive.
 
-**The guide, carried by the same executable.** A bare `cu` prints the loop, the
-exit-code contract, and the judgment around them; `--help` carries each
-command's flags. There is no external skill or prompt fragment, because a
+**The guide, carried by the same executable.** A bare `cu` prints a map short
+enough to be read whole: the loop, the exit codes that change what to do next,
+and the judgment around them. `cu guide <topic>` carries the depth one bounded
+topic at a time, and `--help` carries each command's flags. There is no external skill or prompt fragment, because a
 briefing that lives outside the tool is one a session reaching straight for
 `cu click` never reads — and one that drifts from the behavior it describes
 with nothing to catch it. If the guide starts accumulating rules like "remember
